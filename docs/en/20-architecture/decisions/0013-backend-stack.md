@@ -32,7 +32,9 @@ build is broken against current cffi. The project therefore targets Python 3.13.
   SQLite/PostgreSQL/MySQL (exactly the plan of
   [ADR-0006](0006-storage-abstraction.md), whose open library question this closes);
   Alembic handles migrations, including the loop over N user databases. Core, not ORM:
-  explicit queries, no object-mapping magic.
+  explicit queries, no object-mapping magic. Async SQLite access uses the **aiosqlite**
+  driver (a thin MIT wrapper over the standard library's sqlite3); asyncpg will play the
+  same role when PostgreSQL support arrives.
 - **httpx** — async HTTP client to chain data providers. Provider REST APIs are called
   directly behind our own chain abstraction; wrapper libraries (e.g. tronpy) are not used.
 - **bip-utils** — BIP39/BIP32/BIP44 and address encoding for TRON/EVM. The version is
@@ -62,11 +64,11 @@ build is broken against current cffi. The project therefore targets Python 3.13.
 
 ## Consequences
 
-- Seven runtime dependencies for the whole backend: fastapi, uvicorn, sqlalchemy, alembic,
-  httpx, bip-utils, argon2-cffi (pytest in the dev group).
+- Eight runtime dependencies for the whole backend: fastapi, uvicorn, sqlalchemy, alembic,
+  httpx, bip-utils, argon2-cffi, aiosqlite (pytest in the dev group).
 - Versions pinned at environment creation (2026-08-29): fastapi 0.141.1, uvicorn 0.52.4,
-  SQLAlchemy 2.0.52, alembic 1.19.1, httpx 0.28.1, bip-utils 2.12.2, argon2-cffi 25.1.0;
-  pytest 9.1.1 (dev).
+  SQLAlchemy 2.0.52, alembic 1.19.1, httpx 0.28.1, bip-utils 2.12.2, argon2-cffi 25.1.0,
+  aiosqlite 0.22.1; pytest 9.1.1 (dev).
 - The single-maintainer risk of bip-utils is mitigated by version pinning and standard test
   vectors.
 - The backend code is async throughout (FastAPI + httpx + watcher tasks).
