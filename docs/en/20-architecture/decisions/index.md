@@ -22,6 +22,7 @@ considered, the choice made and its consequences.
 | [ADR-0011](0011-application-api-principles.md) | Application API Principles | accepted |
 | [ADR-0012](0012-frontend-stack.md) | Frontend Stack — No-Build Static Files with Vendored Libraries | accepted |
 | [ADR-0013](0013-backend-stack.md) | Backend Stack | accepted |
+| [ADR-0014](0014-key-standards.md) | Key Generation and Derivation Standards | accepted |
 
 ## Related
 

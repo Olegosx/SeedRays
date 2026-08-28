@@ -28,7 +28,11 @@ See [ADR-0002](../decisions/0002-watch-only-online-part.md).
 
 ## Interfaces
 
-_To be defined._
+- Module: mnemonic generation (12 or 24 words — the user's explicit choice), BIP39
+  validation, account-level xpub per family, optionally with a BIP39 passphrase.
+- Console command `seedrays keygen --words 12|24 [--passphrase] [--family …]` — prints the
+  phrase (shown once, stored nowhere) and the account xpubs; writes nothing to disk or
+  logs. Standards are fixed in [ADR-0014](../decisions/0014-key-standards.md).
 
 ## Related
 
@@ -36,3 +40,4 @@ _To be defined._
 - [Derivation Module](derivation.md)
 - [Key Management](../../30-security/key-management.md)
 - [Threat Model](../../30-security/threat-model.md)
+- [ADR-0014: Key Generation and Derivation Standards](../decisions/0014-key-standards.md)
