@@ -1,0 +1,74 @@
+[Index](../../index.md) · [Architecture Overview](../overview.md) · [Русская версия](../../../ru/20-architecture/components/http-api.md)
+
+# HTTP API
+
+Thin adapter over the [Orchestrator](orchestrator.md): routes, input validation, response
+codes. No business logic of its own.
+
+## Route Groups
+
+Three groups over the same core, one per access role
+(see [ADR-0004](../decisions/0004-two-api-groups.md) and
+[ADR-0005](../decisions/0005-multi-user-model.md)):
+
+- **Application API** — for a user's external applications, authenticated by an application
+  key (API key). Provides reading data and requesting persistent address bindings for
+  application users (see below) — scoped to the wallets of the user who owns the key. No
+  configuration or command routes exist in this group.
+- **User API (cabinet)** — for the wallet owner, with user authentication. Provides managing
+  the user's own wallets (handing over an xpub or in-gateway key generation), the user's
+  applications and their keys, the per-application "network → wallet" mapping, and viewing
+  the user's own data.
+- **Operator API** — for the gateway operator (superadmin), with full operator
+  authentication. Provides managing users and gateway-wide settings, including watcher
+  control. Can be bound to a separate port or to the local interface only, hiding it from
+  the outside.
+
+In every group the boundary is structural: routes of another role's operations do not exist
+in the group — they are absent as routes, not merely forbidden by a permission check.
+
+## Application API Operations
+
+Semantic composition (see [ADR-0011](../decisions/0011-application-api-principles.md)):
+
+- **Create address** for an application user — in one network, several networks or all
+  networks available to the application. Idempotent: an existing binding is returned as is.
+  The first request for an unknown application user creates its record implicitly.
+- **Get address(es)** of an application user — read-only; creates nothing.
+- **Get balances** of an application user — rows "network + asset", filterable by network
+  and asset; each row: total received (confirmed) and the pending amount. The current
+  address balance is not exposed: sweeping funds is the owner's technical procedure and
+  does not concern the application.
+- **Get incoming transaction history** — the same filters plus a status filter (default:
+  confirmed; pending and failed on explicit request); paginated.
+- **List application users** — paginated.
+
+Applications operate in terms of networks only: the owner configures the application's
+"network → wallet" mapping in the cabinet; "all networks" means all networks so configured.
+
+Pagination: a row-count limit parameter, default 10, 0 = everything.
+
+## Conventions
+
+- API version in the path (`/v1/…`).
+- JSON everywhere; amounts are strings, never floating-point numbers.
+- The API key travels in a request header, never in the URL.
+- Unified error format: machine code + human-readable message.
+
+## Planned Extensions
+
+- **Webhook notifications**: the application registers a URL and the gateway calls it on new
+  deposits — instead of constant polling. Not in the first version; the API design must not
+  preclude it.
+
+## Detailed Specifications
+
+_Request and response formats — to be defined._
+
+## Related
+
+- [Architecture Overview](../overview.md)
+- [Orchestrator](orchestrator.md)
+- [Data Model](../data-model.md)
+- [Functional Requirements](../../10-requirements/functional.md)
+- [ADR-0011: Application API Principles](../decisions/0011-application-api-principles.md)

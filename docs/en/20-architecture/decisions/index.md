@@ -1,0 +1,27 @@
+[Index](../../index.md) · [Architecture Overview](../overview.md) · [Русская версия](../../../ru/20-architecture/decisions/index.md)
+
+# Architecture Decision Records
+
+Log of architecture decisions. Each record captures one decision: its context, the options
+considered, the choice made and its consequences.
+
+## Log
+
+| ID | Title | Status |
+|----|-------|--------|
+| [ADR-0001](0001-library-first-core.md) | Library-First Core with Thin Adapters | accepted |
+| [ADR-0002](0002-watch-only-online-part.md) | Watch-Only Online Part; Key Generation Paths | accepted |
+| [ADR-0003](0003-single-process-supervised.md) | Single Backend Process with a Supervising Orchestrator | accepted |
+| [ADR-0004](0004-two-api-groups.md) | Two API Route Groups with Different Access Rights | accepted, extended by ADR-0005 |
+| [ADR-0005](0005-multi-user-model.md) | Multi-User Model — Per-User Database and Directory, Three Roles | accepted, extended by ADR-0008 |
+| [ADR-0006](0006-storage-abstraction.md) | Storage Abstraction at the Domain-Operation Level | accepted |
+| [ADR-0007](0007-address-centric-watcher.md) | Address-Centric Watcher Pass | accepted |
+| [ADR-0008](0008-shared-registry-db.md) | Shared Registry Database | accepted, extended by ADR-0010 |
+| [ADR-0009](0009-address-bindings-primary-mode.md) | Persistent Address Bindings as the Primary Mode | accepted, refined by ADR-0010 |
+| [ADR-0010](0010-networks-assets-financial-data.md) | Networks, Assets and Financial Data Structures | accepted |
+| [ADR-0011](0011-application-api-principles.md) | Application API Principles | accepted |
+| [ADR-0012](0012-frontend-stack.md) | Frontend Stack — No-Build Static Files with Vendored Libraries | accepted |
+
+## Related
+
+- [Architecture Overview](../overview.md)
