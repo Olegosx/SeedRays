@@ -34,6 +34,9 @@ Python-модули:
 Весь доступ к блокчейну идёт через слой [абстракции блокчейна](components/chain-abstraction.md).
 Внешний интерфейс — [HTTP API](components/http-api.md).
 
+Стек бэкенда — Python 3.14, FastAPI + uvicorn, SQLAlchemy Core + Alembic, httpx, bip-utils,
+argon2-cffi — зафиксирован в [ADR-0013](decisions/0013-backend-stack.md).
+
 ### Модель процессов
 
 Бэкенд работает одним процессом. При старте оркестратор запускает HTTP API-сервер и watcher

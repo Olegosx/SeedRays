@@ -34,6 +34,9 @@ but cannot sign anything. See [ADR-0002](decisions/0002-watch-only-online-part.m
 All blockchain access goes through the [Chain Abstraction](components/chain-abstraction.md)
 layer. The external interface is the [HTTP API](components/http-api.md).
 
+The backend stack — Python 3.14, FastAPI + uvicorn, SQLAlchemy Core + Alembic, httpx,
+bip-utils, argon2-cffi — is fixed in [ADR-0013](decisions/0013-backend-stack.md).
+
 ### Process Model
 
 The backend runs as a single process. On startup the orchestrator launches the HTTP API server

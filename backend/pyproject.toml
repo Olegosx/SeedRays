@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "seedrays"
+version = "0.1.0"
+description = "Lightweight payment gateway for accepting cryptocurrency payments into an HD wallet"
+requires-python = ">=3.14"
+# Versions are pinned at environment creation (see docs/en/20-architecture/decisions/0013-backend-stack.md)
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+    "alembic",
+    "httpx",
+    "bip-utils",
+    "argon2-cffi",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+]
+
+[tool.setuptools.packages.find]
+include = ["seedrays*"]

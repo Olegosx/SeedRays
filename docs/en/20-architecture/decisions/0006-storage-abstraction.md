@@ -2,7 +2,8 @@
 
 # ADR-0006: Storage Abstraction at the Domain-Operation Level
 
-**Status:** accepted
+**Status:** accepted; the open library question is closed by
+[ADR-0013](0013-backend-stack.md) — SQLAlchemy Core + Alembic
 
 ## Context
 

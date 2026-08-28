@@ -34,6 +34,7 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0010: Networks, Assets and Financial Data Structures](20-architecture/decisions/0010-networks-assets-financial-data.md)
     - [ADR-0011: Application API Principles](20-architecture/decisions/0011-application-api-principles.md)
     - [ADR-0012: Frontend Stack — No-Build Static Files with Vendored Libraries](20-architecture/decisions/0012-frontend-stack.md)
+    - [ADR-0013: Backend Stack](20-architecture/decisions/0013-backend-stack.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)

@@ -34,6 +34,7 @@
     - [ADR-0010: Сети, активы и структуры финансовых данных](20-architecture/decisions/0010-networks-assets-financial-data.md)
     - [ADR-0011: Принципы API приложений](20-architecture/decisions/0011-application-api-principles.md)
     - [ADR-0012: Стек фронтенда — статика без сборки с завендоренными библиотеками](20-architecture/decisions/0012-frontend-stack.md)
+    - [ADR-0013: Стек бэкенда](20-architecture/decisions/0013-backend-stack.md)
 - Безопасность
   - [Управление ключами](30-security/key-management.md)
   - [Модель угроз](30-security/threat-model.md)
