@@ -13,12 +13,16 @@ libraries are the most consequential choice of the project. Facts verified again
 addresses for 100+ coins including TRON and Ethereum); coincurve 21.0.0 (binding to
 libsecp256k1, the audited Bitcoin Core C library; used by Ethereum and libp2p); mnemonic
 0.21 (Trezor's reference BIP39 implementation). Target machine: Ubuntu 26.04 LTS, system
-Python 3.14.4.
+Python 3.14.4 — however, installation on 3.14 failed in practice: coincurve (the secp256k1
+engine bip-utils depends on) ships no prebuilt wheels for CPython 3.14, and its source
+build is broken against current cffi. The project therefore targets Python 3.13.
 
 ## Decision
 
-- **Python 3.14** — the system interpreter of the current Ubuntu LTS; the project runs in a
-  virtual environment, nothing is installed system-wide.
+- **Python 3.13** (installed from the deadsnakes PPA) — the newest version fully supported
+  by the dependency chain: coincurve provides prebuilt wheels for 3.9–3.13 only, and 3.13
+  is the latest version bip-utils declares. The project runs in a virtual environment.
+  Moving to 3.14 once coincurve ships cp314 wheels is a one-line change.
 - **FastAPI + uvicorn** — the web framework: declarative pydantic validation of every input
   field before it reaches the logic (for a financial API this is protection, not
   convenience); automatic OpenAPI specification — free, always-current API documentation
@@ -33,9 +37,8 @@ Python 3.14.4.
   directly behind our own chain abstraction; wrapper libraries (e.g. tronpy) are not used.
 - **bip-utils** — BIP39/BIP32/BIP44 and address encoding for TRON/EVM. The version is
   pinned; the official BIP39/BIP32/BIP44 test vectors are part of our test suite as a
-  safety net — any breakage or substitution fails the tests immediately. Note: as of
-  2.12.2 the author declares Python up to 3.13 in classifiers; correctness on 3.14 is
-  verified by the same vectors.
+  safety net — any breakage or substitution fails the tests immediately. As of 2.12.2 the
+  author declares Python up to 3.13 in classifiers, which matches the chosen interpreter.
 - **argon2-cffi** — password hashing for cabinet/operator sign-in (Argon2, the Password
   Hashing Competition winner and current recommendation for new systems).
 - **argparse** (standard library) — console commands; zero dependencies at our CLI scale.
@@ -61,6 +64,9 @@ Python 3.14.4.
 
 - Seven runtime dependencies for the whole backend: fastapi, uvicorn, sqlalchemy, alembic,
   httpx, bip-utils, argon2-cffi (pytest in the dev group).
+- Versions pinned at environment creation (2026-08-29): fastapi 0.141.1, uvicorn 0.52.4,
+  SQLAlchemy 2.0.52, alembic 1.19.1, httpx 0.28.1, bip-utils 2.12.2, argon2-cffi 25.1.0;
+  pytest 9.1.1 (dev).
 - The single-maintainer risk of bip-utils is mitigated by version pinning and standard test
   vectors.
 - The backend code is async throughout (FastAPI + httpx + watcher tasks).
