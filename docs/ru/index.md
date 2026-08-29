@@ -36,6 +36,8 @@
     - [ADR-0012: Стек фронтенда — статика без сборки с завендоренными библиотеками](20-architecture/decisions/0012-frontend-stack.md)
     - [ADR-0013: Стек бэкенда](20-architecture/decisions/0013-backend-stack.md)
     - [ADR-0014: Стандарты генерации ключей и деривации](20-architecture/decisions/0014-key-standards.md)
+    - [ADR-0015: Провайдер данных TRON — TronGrid; интерфейс источника цепочки](20-architecture/decisions/0015-tron-provider.md)
+    - [ADR-0016: Уровни конфигурации](20-architecture/decisions/0016-config-layers.md)
 - Безопасность
   - [Управление ключами](30-security/key-management.md)
   - [Модель угроз](30-security/threat-model.md)

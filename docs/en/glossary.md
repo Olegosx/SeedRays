@@ -23,6 +23,7 @@ Terms used across the project documentation.
 | RPC | The remote-call interface of a blockchain node, used to query chain data directly from a self-hosted node. |
 | Schema migration | A controlled change of the database structure (tables, columns) applied when the gateway is upgraded; runs across all user databases. |
 | Seed phrase | A human-readable encoding of the wallet seed; whoever knows it controls the funds. |
+| Solidification | TRON finality: a block built upon by 19 of the 27 super representatives is final and cannot be replaced; the solidified head lags the chain head by about a minute. |
 | Vendoring | Keeping a third-party library as a reviewed, version-pinned file inside the project repository instead of pulling it from a package registry. |
 | WAL | Write-ahead logging — an SQLite journal mode in which readers are not blocked by the writer. |
 | Watch-only | An operating mode with access to public keys and addresses only: deriving and observing is possible, signing is not. |

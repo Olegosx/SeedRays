@@ -23,6 +23,8 @@ considered, the choice made and its consequences.
 | [ADR-0012](0012-frontend-stack.md) | Frontend Stack — No-Build Static Files with Vendored Libraries | accepted |
 | [ADR-0013](0013-backend-stack.md) | Backend Stack | accepted |
 | [ADR-0014](0014-key-standards.md) | Key Generation and Derivation Standards | accepted |
+| [ADR-0015](0015-tron-provider.md) | TRON Data Provider — TronGrid; Chain Source Interface | accepted |
+| [ADR-0016](0016-config-layers.md) | Configuration Layers | accepted |
 
 ## Related
 

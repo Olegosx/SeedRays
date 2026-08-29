@@ -36,6 +36,8 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0012: Frontend Stack — No-Build Static Files with Vendored Libraries](20-architecture/decisions/0012-frontend-stack.md)
     - [ADR-0013: Backend Stack](20-architecture/decisions/0013-backend-stack.md)
     - [ADR-0014: Key Generation and Derivation Standards](20-architecture/decisions/0014-key-standards.md)
+    - [ADR-0015: TRON Data Provider — TronGrid; Chain Source Interface](20-architecture/decisions/0015-tron-provider.md)
+    - [ADR-0016: Configuration Layers](20-architecture/decisions/0016-config-layers.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)
