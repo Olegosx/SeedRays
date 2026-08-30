@@ -1,13 +1,17 @@
-"""TRON data source over the official TronGrid service (see ADR-0015).
+"""TRON data source over the official TronGrid service (see ADR-0015, ADR-0018).
 
 Endpoints used (developers.tron.network reference):
 - ``POST /wallet/getnowblock`` — current height;
-- ``GET /v1/accounts/{address}/transactions/trc20`` — TRC-20 transfers;
-- ``GET /v1/accounts/{address}/transactions`` — native TRX transactions.
+- ``POST /walletsolidity/getnowblock`` — the finality boundary (solidified head);
+- ``GET /v1/contracts/{contract}/events`` — token Transfer events over a range;
+- ``POST /wallet/getblockbylimitnext`` — native transfers of a block range;
+- ``GET /v1/accounts/{address}/transactions[/trc20]`` — per-address history
+  (targeted tasks only).
 """
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
@@ -19,6 +23,8 @@ from seedrays.chains.base import (
 	ChainDataSource,
 	ChainDataSourceError,
 	Direction,
+	FinalityBoundary,
+	RangeTransfer,
 	RateLimitedError,
 	TransferEvent,
 	TransferStatus,
@@ -27,11 +33,23 @@ from seedrays.chains.base import (
 _API_KEY_HEADER = "TRON-PRO-API-KEY"
 _NATIVE_SYMBOL = "TRX"
 _NATIVE_DECIMALS = 6
+# Потолок диапазона одного запроса getblockbylimitnext (ограничение java-tron).
+_BLOCK_CHUNK = 100
 
 
 def _hex_to_base58(hex_address: str) -> str:
 	"""Convert a raw TRON hex address (41…) to the canonical base58 form."""
 	return Base58Encoder.CheckEncode(bytes.fromhex(hex_address))
+
+
+def _normalize_address(raw: str) -> str:
+	"""Normalize an address from any provider form (base58, 41-hex, 0x-hex)."""
+	if raw.startswith("T"):
+		return raw
+	hex_part = raw[2:] if raw.startswith("0x") else raw
+	if len(hex_part) == 40:
+		hex_part = "41" + hex_part
+	return _hex_to_base58(hex_part)
 
 
 class TronGridSource(ChainDataSource):
@@ -44,6 +62,7 @@ class TronGridSource(ChainDataSource):
 		api_key: str | None = None,
 		client: httpx.AsyncClient | None = None,
 		page_limit: int = 200,
+		request_interval: float = 0.0,
 	) -> None:
 		"""Configure the source.
 
@@ -53,23 +72,35 @@ class TronGridSource(ChainDataSource):
 			api_key: TronGrid API key, sent in the ``TRON-PRO-API-KEY`` header.
 			client: Optional preconfigured HTTP client (tests supply a mock one).
 			page_limit: Page size for paginated endpoints.
+			request_interval: Minimum seconds between provider requests
+				(pacing per ADR-0015/ADR-0018; 0 — no pacing).
 		"""
 		self.network = network
 		self._base_url = base_url.rstrip("/")
 		self._page_limit = page_limit
 		self._headers = {_API_KEY_HEADER: api_key} if api_key else {}
 		self._client = client if client is not None else httpx.AsyncClient()
+		self._request_interval = request_interval
+		self._last_request_at = 0.0
 
 	async def aclose(self) -> None:
 		"""Close the underlying HTTP client."""
 		await self._client.aclose()
 
-	async def _request(self, method: str, path: str, params: dict | None = None) -> Any:
-		"""One provider call with unified error classification."""
+	async def _request(
+		self, method: str, path: str, params: dict | None = None, json: Any = None
+	) -> Any:
+		"""One provider call with pacing and unified error classification."""
+		if self._request_interval > 0:
+			loop_time = asyncio.get_running_loop().time()
+			wait = self._last_request_at + self._request_interval - loop_time
+			if wait > 0:
+				await asyncio.sleep(wait)
+			self._last_request_at = asyncio.get_running_loop().time()
 		url = f"{self._base_url}{path}"
 		try:
 			response = await self._client.request(
-				method, url, params=params, headers=self._headers
+				method, url, params=params, json=json, headers=self._headers
 			)
 		except httpx.HTTPError as exc:
 			raise ChainDataSourceError(f"trongrid request failed: {path}: {exc}") from exc
@@ -223,8 +254,125 @@ class TronGridSource(ChainDataSource):
 		return events
 
 
+	async def finality_boundary(self) -> FinalityBoundary:
+		"""Return the solidified head of the chain (ADR-0018)."""
+		data = await self._request("POST", "/walletsolidity/getnowblock")
+		try:
+			raw = data["block_header"]["raw_data"]
+			return FinalityBoundary(
+				block_number=int(raw["number"]),
+				timestamp=_ms_to_utc(int(raw["timestamp"])),
+			)
+		except (KeyError, TypeError, ValueError) as exc:
+			raise ChainDataSourceError(
+				f"unexpected walletsolidity/getnowblock response: {exc!r}"
+			) from exc
+
+	async def token_transfers(
+		self, contract: str, symbol: str, decimals: int, since: datetime
+	) -> list[RangeTransfer]:
+		"""All Transfer events of one token contract since a moment (range scan)."""
+		path = f"/v1/contracts/{contract}/events"
+		params: dict[str, Any] = {
+			"event_name": "Transfer",
+			"limit": self._page_limit,
+			"min_block_timestamp": int(since.timestamp() * 1000),
+			"order_by": "block_timestamp,asc",
+		}
+		transfers = []
+		for item in await self._paginate(path, params):
+			if item.get("event_name") != "Transfer":
+				continue
+			result = item.get("result") or {}
+			try:
+				transfers.append(
+					RangeTransfer(
+						network=self.network,
+						txid=item["transaction_id"],
+						from_address=_normalize_address(str(result["from"])),
+						to_address=_normalize_address(str(result["to"])),
+						asset=AssetInfo(
+							network=self.network,
+							contract_address=contract,
+							symbol=symbol,
+							decimals=decimals,
+						),
+						amount=int(result["value"]),
+						block_number=int(item["block_number"]),
+						timestamp=_ms_to_utc(item.get("block_timestamp")),
+						# События порождаются только успешным исполнением.
+						status=TransferStatus.SUCCESS,
+					)
+				)
+			except (KeyError, TypeError, ValueError) as exc:
+				raise ChainDataSourceError(f"unexpected contract event item: {exc!r}") from exc
+		return transfers
+
+	async def native_transfers(self, start_block: int, end_block: int) -> list[RangeTransfer]:
+		"""Native TRX transfers of a block range, bounds inclusive (range scan)."""
+		transfers: list[RangeTransfer] = []
+		start = start_block
+		while start <= end_block:
+			chunk_end = min(start + _BLOCK_CHUNK - 1, end_block)
+			# endNum у провайдера исключающий.
+			data = await self._request(
+				"POST",
+				"/wallet/getblockbylimitnext",
+				json={"startNum": start, "endNum": chunk_end + 1},
+			)
+			for block in data.get("block") or []:
+				transfers.extend(self._parse_block_transfers(block))
+			start = chunk_end + 1
+		return transfers
+
+	def _parse_block_transfers(self, block: dict) -> list[RangeTransfer]:
+		"""Extract native TransferContract operations from one raw block."""
+		try:
+			header = block["block_header"]["raw_data"]
+			block_number = int(header["number"])
+			block_time = _ms_to_utc(header.get("timestamp"))
+		except (KeyError, TypeError, ValueError) as exc:
+			raise ChainDataSourceError(f"unexpected block item: {exc!r}") from exc
+		transfers = []
+		for tx in block.get("transactions") or []:
+			contracts = (tx.get("raw_data") or {}).get("contract") or []
+			if not contracts or contracts[0].get("type") != "TransferContract":
+				continue
+			value = contracts[0].get("parameter", {}).get("value", {})
+			try:
+				sender = _hex_to_base58(value["owner_address"])
+				recipient = _hex_to_base58(value["to_address"])
+				amount = int(value["amount"])
+				txid = tx["txID"]
+			except (KeyError, TypeError, ValueError) as exc:
+				raise ChainDataSourceError(f"unexpected block transaction: {exc!r}") from exc
+			ret = (tx.get("ret") or [{}])[0].get("contractRet", "SUCCESS")
+			transfers.append(
+				RangeTransfer(
+					network=self.network,
+					txid=txid,
+					from_address=sender,
+					to_address=recipient,
+					asset=AssetInfo(
+						network=self.network,
+						contract_address="",
+						symbol=_NATIVE_SYMBOL,
+						decimals=_NATIVE_DECIMALS,
+					),
+					amount=amount,
+					block_number=block_number,
+					timestamp=block_time,
+					status=TransferStatus.SUCCESS
+					if ret == "SUCCESS"
+					else TransferStatus.FAILED,
+				)
+			)
+		return transfers
+
+
 def _ms_to_utc(timestamp_ms: int | None) -> datetime | None:
 	"""Convert provider milliseconds to an aware UTC datetime."""
 	if timestamp_ms is None:
 		return None
 	return datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc)
+

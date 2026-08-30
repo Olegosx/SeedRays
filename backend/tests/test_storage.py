@@ -1,6 +1,7 @@
 """Storage layer tests: migrations, constraints and the first registry operations."""
 
 import asyncio
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -142,6 +143,43 @@ def test_binding_constraints(tmp_path: Path) -> None:
 				await conn.execute(
 					insert(schema_user.bindings).values(_binding_values(1, 2, "Taddr3"))
 				)
+		await engine.dispose()
+
+	asyncio.run(scenario())
+
+
+def test_registry_settings_assets_and_watcher_state(tmp_path: Path) -> None:
+	"""Settings roundtrip, asset auto-catalog idempotency and the 0002 cursor column."""
+
+	async def scenario() -> None:
+		upgrade_registry(tmp_path)
+		engine = create_sqlite_engine(registry_db_path(tmp_path))
+
+		# настройки: чтение пустого, запись, перезапись
+		assert await registry_ops.get_setting(engine, "k") is None
+		await registry_ops.set_setting(engine, "k", "v1")
+		await registry_ops.set_setting(engine, "k", "v2")
+		assert await registry_ops.get_setting(engine, "k") == "v2"
+
+		# активы: найти-или-создать не плодит дублей
+		first = await registry_ops.get_or_create_asset(
+			engine, network="tron", kind="token", contract_address="C1", symbol="USDT", decimals=6
+		)
+		second = await registry_ops.get_or_create_asset(
+			engine, network="tron", kind="token", contract_address="C1", symbol="USDT", decimals=6
+		)
+		assert first.id == second.id
+		assert len(await registry_ops.list_assets(engine, "tron")) == 1
+
+		# состояние watcher: миграция 0002 добавила курсор времени
+		assert await registry_ops.get_watcher_state(engine, "tron") is None
+		moment = datetime(2026, 8, 29, 12, 0)
+		await registry_ops.set_watcher_state(engine, "tron", last_block=10, last_scan_at=moment)
+		await registry_ops.set_watcher_state(engine, "tron", last_block=20, last_scan_at=moment)
+		state = await registry_ops.get_watcher_state(engine, "tron")
+		assert state is not None
+		assert state.last_block == 20
+		assert state.last_scan_at == moment
 		await engine.dispose()
 
 	asyncio.run(scenario())

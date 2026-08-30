@@ -103,3 +103,61 @@ class ChainDataSource(ABC):
 			ChainDataSourceError: On request failure or unusable response.
 			RateLimitedError: When the provider asks to slow down.
 		"""
+
+	@abstractmethod
+	async def finality_boundary(self) -> "FinalityBoundary":
+		"""Return the network's finality boundary (ADR-0018).
+
+		Raises:
+			ChainDataSourceError: On request failure or unusable response.
+			RateLimitedError: When the provider asks to slow down.
+		"""
+
+	@abstractmethod
+	async def token_transfers(
+		self, contract: str, symbol: str, decimals: int, since: datetime
+	) -> "list[RangeTransfer]":
+		"""Return all transfers of one token contract since a moment (range scan).
+
+		Args:
+			contract: Token contract address.
+			symbol: Display symbol for the asset info (events carry none).
+			decimals: Decimals for the asset info.
+			since: Lower time bound of the range.
+
+		Raises:
+			ChainDataSourceError: On request failure or unusable response.
+			RateLimitedError: When the provider asks to slow down.
+		"""
+
+	@abstractmethod
+	async def native_transfers(self, start_block: int, end_block: int) -> "list[RangeTransfer]":
+		"""Return native-coin transfers of a block range, bounds inclusive.
+
+		Raises:
+			ChainDataSourceError: On request failure or unusable response.
+			RateLimitedError: When the provider asks to slow down.
+		"""
+
+
+@dataclass(frozen=True)
+class FinalityBoundary:
+	"""The network's finality boundary: the last irreversible block and its time."""
+
+	block_number: int
+	timestamp: datetime
+
+
+@dataclass(frozen=True)
+class RangeTransfer:
+	"""One transfer observed by range scanning (ADR-0018); not tied to our addresses."""
+
+	network: str
+	txid: str
+	from_address: str
+	to_address: str
+	asset: AssetInfo
+	amount: int
+	block_number: int
+	timestamp: datetime | None
+	status: TransferStatus

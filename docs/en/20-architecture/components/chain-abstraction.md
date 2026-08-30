@@ -28,8 +28,7 @@ The "chain data source" interface exposes:
   success/failure. Used for targeted tasks: initial binding history, spot reconciliation.
 - **Range operations** — the primary acquisition of
   [ADR-0018](../decisions/0018-range-scanning.md): the finality boundary, token Transfer
-  events over a time/block range, native transfers of a block range. Implemented with the
-  watcher block.
+  events over a time/block range, native transfers of a block range.
 
 Provider "slow down" responses (HTTP 429/403) surface as a dedicated rate-limit error,
 distinct from data errors; the waiting policy belongs to the [Watcher](watcher.md).

@@ -78,5 +78,7 @@ watcher_state = Table(
 	metadata,
 	Column("network", String(32), primary_key=True),
 	Column("last_block", Integer, nullable=False),
+	# Курсор сканирования: провайдеры фильтруют по времени, не по высоте (ADR-0018).
+	Column("last_scan_at", DateTime),
 	Column("updated_at", DateTime, nullable=False, server_default=func.now()),
 )

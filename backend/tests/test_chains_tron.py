@@ -220,3 +220,123 @@ def test_live_nile_latest_block_and_transfers() -> None:
 	# У эталонного адреса в Nile истории может не быть — важно, что запрос
 	# проходит аутентификацию и разбор, а результат имеет правильный тип.
 	assert isinstance(events, list)
+
+
+def test_finality_boundary() -> None:
+	"""The solidified head is read from walletsolidity/getnowblock."""
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		assert request.url.path == "/walletsolidity/getnowblock"
+		return httpx.Response(
+			200,
+			json={"block_header": {"raw_data": {"number": 55123400, "timestamp": 1700000000000}}},
+		)
+
+	boundary = asyncio.run(_make_source(handler).finality_boundary())
+	assert boundary.block_number == 55123400
+	assert boundary.timestamp == datetime.fromtimestamp(1700000000, tz=timezone.utc)
+
+
+def test_token_transfers_range() -> None:
+	"""Contract events are ranged, paginated and address-normalized."""
+	seen_params: list[dict] = []
+	address_hex = "0x" + ADDRESS_HEX[2:]  # форма 0x + 20 байт, как в событиях
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		assert request.url.path == f"/v1/contracts/{USDT_CONTRACT}/events"
+		seen_params.append(dict(request.url.params))
+		if request.url.params.get("fingerprint") is None:
+			return httpx.Response(
+				200,
+				json={
+					"data": [
+						{
+							"transaction_id": "ev-1",
+							"event_name": "Transfer",
+							"block_number": 55000001,
+							"block_timestamp": 1700000000000,
+							"result": {"from": OTHER_HEX, "to": address_hex, "value": "123"},
+						},
+						{
+							"transaction_id": "ev-approve",
+							"event_name": "Approval",
+							"block_number": 55000001,
+							"result": {},
+						},
+					],
+					"meta": {"fingerprint": "next"},
+				},
+			)
+		return httpx.Response(
+			200,
+			json={
+				"data": [
+					{
+						"transaction_id": "ev-2",
+						"event_name": "Transfer",
+						"block_number": 55000002,
+						"block_timestamp": 1700000003000,
+						"result": {"from": address_hex, "to": OTHER_HEX, "value": "7"},
+					}
+				],
+				"meta": {},
+			},
+		)
+
+	since = datetime.fromtimestamp(1699999000, tz=timezone.utc)
+	transfers = asyncio.run(
+		_make_source(handler).token_transfers(USDT_CONTRACT, "USDT", 6, since)
+	)
+	assert [t.txid for t in transfers] == ["ev-1", "ev-2"]
+	assert transfers[0].to_address == ADDRESS
+	assert transfers[0].from_address == OTHER
+	assert transfers[0].amount == 123
+	assert transfers[0].block_number == 55000001
+	assert transfers[0].asset.contract_address == USDT_CONTRACT
+	first = seen_params[0]
+	assert first["event_name"] == "Transfer"
+	assert first["min_block_timestamp"] == "1699999000000"
+	assert first["order_by"] == "block_timestamp,asc"
+
+
+def test_native_transfers_range_chunks() -> None:
+	"""Block ranges above the provider cap are fetched in chunks of 100."""
+	requested: list[tuple[int, int]] = []
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		assert request.url.path == "/wallet/getblockbylimitnext"
+		body = json.loads(request.content)
+		requested.append((body["startNum"], body["endNum"]))
+		block = {
+			"block_header": {"raw_data": {"number": body["startNum"], "timestamp": 1700000000000}},
+			"transactions": [
+				{
+					"txID": f"tx-{body['startNum']}",
+					"ret": [{"contractRet": "SUCCESS" if body["startNum"] == 1 else "REVERT"}],
+					"raw_data": {
+						"contract": [
+							{
+								"type": "TransferContract",
+								"parameter": {
+									"value": {
+										"owner_address": OTHER_HEX,
+										"to_address": ADDRESS_HEX,
+										"amount": 5,
+									}
+								},
+							}
+						]
+					},
+				},
+				{"txID": "skip", "raw_data": {"contract": [{"type": "TriggerSmartContract"}]}},
+			],
+		}
+		return httpx.Response(200, json={"block": [block]})
+
+	transfers = asyncio.run(_make_source(handler).native_transfers(1, 150))
+	assert requested == [(1, 101), (101, 151)]
+	assert [t.txid for t in transfers] == ["tx-1", "tx-101"]
+	assert transfers[0].to_address == ADDRESS
+	assert transfers[0].status == TransferStatus.SUCCESS
+	assert transfers[1].status == TransferStatus.FAILED
+	assert transfers[0].block_number == 1

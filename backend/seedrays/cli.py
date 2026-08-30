@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import getpass
+import logging
+import os
 import sys
+from pathlib import Path
 
 from seedrays.derivation.derive import derive_address
 from seedrays.families import Family
@@ -55,7 +59,9 @@ def build_parser() -> argparse.ArgumentParser:
 	derive.add_argument("--index", type=int, default=0, help="first address index (default 0)")
 	derive.add_argument("--count", type=int, default=1, help="how many addresses (default 1)")
 
-	subparsers.add_parser("watch", help="run a watcher pass")
+	subparsers.add_parser(
+		"watch", help="run one watcher pass (data dir from SEEDRAYS_DATA_DIR)"
+	)
 	return parser
 
 
@@ -91,6 +97,27 @@ def _cmd_derive(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _cmd_watch() -> int:
+	"""Run one watcher pass over the gateway data directory."""
+	from seedrays.watcher.single_pass import run_pass
+
+	data_dir = os.environ.get("SEEDRAYS_DATA_DIR")
+	if not data_dir:
+		print("error: SEEDRAYS_DATA_DIR is not set (see ADR-0016)", file=sys.stderr)
+		return 2
+	logging.basicConfig(
+		level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+	)
+	stats = asyncio.run(run_pass(Path(data_dir)))
+	print(
+		f"pass done: networks={stats.networks_scanned}"
+		f" matched={stats.transfers_matched} recorded={stats.rows_recorded}"
+		f" applied={stats.rows_applied}"
+		f" rate_limited={','.join(stats.networks_rate_limited) or '-'}"
+	)
+	return 0
+
+
 def main(argv: list[str] | None = None) -> int:
 	"""Run the CLI.
 
@@ -105,6 +132,8 @@ def main(argv: list[str] | None = None) -> int:
 		return _cmd_keygen(args)
 	if args.command == "derive":
 		return _cmd_derive(args)
+	if args.command == "watch":
+		return _cmd_watch()
 	print(f"seedrays {args.command}: not implemented yet", file=sys.stderr)
 	return 1
 

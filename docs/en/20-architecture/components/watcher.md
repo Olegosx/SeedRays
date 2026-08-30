@@ -48,7 +48,17 @@ height from which confirmation counts are computed
 
 ## Interfaces
 
-_To be defined._
+- Module: the single pass (`run_pass`) and the continuous loop over it; the loop is started
+  and supervised by the orchestrator.
+- Console command `seedrays watch` — one pass; the data directory comes from the
+  `SEEDRAYS_DATA_DIR` environment variable (the bootstrap layer of
+  [ADR-0016](../decisions/0016-config-layers.md)).
+- Settings (registry): the provider API key and request rate, the pass interval, the
+  cursor overlap, the scan start moment, and the watched token contracts per network
+  (`watcher.contracts.<network>` — a JSON list of contract/symbol/decimals entries).
+- The first pass of a network scans from the gateway's first launch — operations that
+  happened before the gateway existed are of no interest to it; the `watcher.scan_start`
+  setting overrides this explicitly.
 
 ## Related
 

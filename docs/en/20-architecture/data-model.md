@@ -92,9 +92,10 @@ assets — it honestly records everything that arrives, filtering is the consume
 
 ### Watcher Service State
 
-Per network: the height of the last processed block. Serves both as the scan resume point
-after a stop and as the height from which confirmation counts are computed. Not financial
-data.
+Per network: the height of the last processed block and the time of the last scan — the
+range cursor of [ADR-0018](decisions/0018-range-scanning.md); scanning resumes from it
+with an overlap, and duplicates are extinguished by the transactions unique key. Not
+financial data.
 
 ## Related
 
