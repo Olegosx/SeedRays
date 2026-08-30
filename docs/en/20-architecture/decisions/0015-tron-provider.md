@@ -2,7 +2,8 @@
 
 # ADR-0015: TRON Data Provider — TronGrid; Chain Source Interface
 
-**Status:** accepted
+**Status:** accepted; extended by [ADR-0018](0018-range-scanning.md) — range scanning via
+the contract-events and block-range endpoints becomes the primary acquisition
 
 ## Context
 

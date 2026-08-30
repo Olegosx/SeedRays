@@ -19,13 +19,17 @@ configuration) — see [ADR-0015](../decisions/0015-tron-provider.md).
 
 ## Interfaces
 
-The "chain data source" interface exposes two operations:
+The "chain data source" interface exposes:
 
 - `latest_block()` — the current height of the network;
-- `transfers(address, since, only_confirmed)` — normalized transfer events on an address:
+- `transfers(address, since, only_confirmed)` — normalized transfer events on one address:
   txid, direction, the network-specific asset (symbol, decimals — feeding the asset
   catalog), the amount in minimal units, the block number when reported, time and
-  success/failure.
+  success/failure. Used for targeted tasks: initial binding history, spot reconciliation.
+- **Range operations** — the primary acquisition of
+  [ADR-0018](../decisions/0018-range-scanning.md): the finality boundary, token Transfer
+  events over a time/block range, native transfers of a block range. Implemented with the
+  watcher block.
 
 Provider "slow down" responses (HTTP 429/403) surface as a dedicated rate-limit error,
 distinct from data errors; the waiting policy belongs to the [Watcher](watcher.md).

@@ -2,7 +2,8 @@
 
 # ADR-0007: Address-Centric Watcher Pass
 
-**Status:** accepted
+**Status:** accepted; refined by [ADR-0018](0018-range-scanning.md) — the work list stays
+as the local match filter, data acquisition is range-based
 
 ## Context
 

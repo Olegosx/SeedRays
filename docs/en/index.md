@@ -38,6 +38,8 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0014: Key Generation and Derivation Standards](20-architecture/decisions/0014-key-standards.md)
     - [ADR-0015: TRON Data Provider — TronGrid; Chain Source Interface](20-architecture/decisions/0015-tron-provider.md)
     - [ADR-0016: Configuration Layers](20-architecture/decisions/0016-config-layers.md)
+    - [ADR-0017: Universal Transaction Model — Two Tables by Physical Location](20-architecture/decisions/0017-universal-tx-model.md)
+    - [ADR-0018: Range Scanning as the Watcher's Primary Acquisition](20-architecture/decisions/0018-range-scanning.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)

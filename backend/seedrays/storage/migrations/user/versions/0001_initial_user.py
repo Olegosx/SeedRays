@@ -77,23 +77,7 @@ def upgrade() -> None:
 		sa.Column("last_deposit_at", sa.DateTime),
 	)
 	op.create_table(
-		"tx_pending",
-		sa.Column("id", sa.Integer, primary_key=True),
-		sa.Column("address", sa.String(128), nullable=False),
-		sa.Column("txid", sa.String(128), nullable=False),
-		sa.Column("asset_id", sa.Integer, nullable=False),
-		sa.Column("direction", sa.String(3), nullable=False),
-		sa.Column("amount", sa.Text, nullable=False),
-		sa.Column("block_number", sa.Integer),
-		sa.Column("tx_time", sa.DateTime),
-		sa.Column("status", sa.String(16), nullable=False),
-		sa.Column("first_seen_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
-		sa.Column("updated_at", sa.DateTime),
-		sa.UniqueConstraint("txid", "address", "asset_id", name="uq_tx_pending_key"),
-		sa.CheckConstraint("direction IN ('in', 'out')", name="ck_tx_pending_direction"),
-	)
-	op.create_table(
-		"tx_confirmed",
+		"transactions",
 		sa.Column("id", sa.Integer, primary_key=True),
 		sa.Column("address", sa.String(128), nullable=False),
 		sa.Column("txid", sa.String(128), nullable=False),
@@ -102,31 +86,31 @@ def upgrade() -> None:
 		sa.Column("amount", sa.Text, nullable=False),
 		sa.Column("block_number", sa.Integer, nullable=False),
 		sa.Column("tx_time", sa.DateTime),
-		sa.Column("recorded_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
-		sa.UniqueConstraint("txid", "address", "asset_id", name="uq_tx_confirmed_key"),
-		sa.CheckConstraint("direction IN ('in', 'out')", name="ck_tx_confirmed_direction"),
+		sa.Column("status", sa.String(8), nullable=False),
+		sa.Column("first_seen_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
+		sa.Column("balance_applied_at", sa.DateTime),
+		sa.UniqueConstraint("txid", "address", "asset_id", name="uq_transactions_key"),
+		sa.CheckConstraint("direction IN ('in', 'out')", name="ck_transactions_direction"),
+		sa.CheckConstraint("status IN ('success', 'failed')", name="ck_transactions_status"),
 	)
 	op.create_table(
-		"tx_failed",
+		"mempool_queue",
 		sa.Column("id", sa.Integer, primary_key=True),
 		sa.Column("address", sa.String(128), nullable=False),
 		sa.Column("txid", sa.String(128), nullable=False),
 		sa.Column("asset_id", sa.Integer, nullable=False),
 		sa.Column("direction", sa.String(3), nullable=False),
 		sa.Column("amount", sa.Text, nullable=False),
-		sa.Column("block_number", sa.Integer),
-		sa.Column("tx_time", sa.DateTime),
-		sa.Column("reason", sa.Text, nullable=False, server_default=""),
-		sa.Column("recorded_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
-		sa.UniqueConstraint("txid", "address", "asset_id", name="uq_tx_failed_key"),
-		sa.CheckConstraint("direction IN ('in', 'out')", name="ck_tx_failed_direction"),
+		sa.Column("first_seen_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
+		sa.Column("last_seen_at", sa.DateTime),
+		sa.UniqueConstraint("txid", "address", "asset_id", name="uq_mempool_key"),
+		sa.CheckConstraint("direction IN ('in', 'out')", name="ck_mempool_direction"),
 	)
 
 
 def downgrade() -> None:
-	op.drop_table("tx_failed")
-	op.drop_table("tx_confirmed")
-	op.drop_table("tx_pending")
+	op.drop_table("mempool_queue")
+	op.drop_table("transactions")
 	op.drop_table("balances")
 	op.drop_table("bindings")
 	op.drop_table("app_users")

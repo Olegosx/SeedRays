@@ -19,16 +19,21 @@ Built library-first (see [ADR-0001](../decisions/0001-library-first-core.md)):
 ## Multi-User Pass
 
 The watcher thinks in addresses, not in users
-(see [ADR-0007](../decisions/0007-address-centric-watcher.md)):
+(see [ADR-0007](../decisions/0007-address-centric-watcher.md)), and acquires data by
+ranges, not by addresses (see [ADR-0018](../decisions/0018-range-scanning.md)):
 
-- Before a pass it collects a single work list of tracked addresses from all users, each
-  tagged with its owner (user, wallet) and its chain.
-- The pass processes the list grouped by chain and data provider: provider rate limits are
-  global for the gateway, so request pacing is centralized, and batch endpoints can be used
-  where a provider offers them.
-- Fair ordering: a user with many addresses must not starve users with few.
-- Failures are isolated per address/user within the pass: they are logged and do not
-  interrupt the pass for everyone else.
+- Before a pass it collects the binding set of all users, each entry tagged with its owner
+  (user, wallet) and network. This set is the **local match filter**.
+- Per network the pass fetches the head and the finality boundary once, then all token
+  Transfer events of the active contracts and the native-transfer block range since the
+  cursor — a cost independent of the number of addresses — and matches transfers against
+  the binding set locally. The provider never learns the gateway's address set.
+- Matched rows land in the transactions table; a success row crossing the finality
+  boundary is applied to the balance in one database transaction with its marker.
+- Per-address indexed queries remain for targeted tasks: the initial history of a new
+  binding, spot reconciliation.
+- Failures are isolated within the pass and logged; a provider "slow down" answer pauses
+  that network's scan until the next pass.
 - Results are written to each owner's database via the [Storage Layer](storage.md).
 
 ## Data Access

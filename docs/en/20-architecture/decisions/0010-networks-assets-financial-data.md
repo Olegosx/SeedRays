@@ -2,7 +2,9 @@
 
 # ADR-0010: Networks, Assets and Financial Data Structures
 
-**Status:** accepted
+**Status:** accepted; the three-table transaction part is superseded by
+[ADR-0017](0017-universal-tx-model.md) — a universal two-table model (on-chain + mempool
+queue); networks, assets, computed confirmations and derived balances remain in force
 
 ## Context
 

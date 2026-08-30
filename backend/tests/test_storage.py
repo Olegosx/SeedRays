@@ -21,9 +21,8 @@ USER_TABLES = {
 	"app_users",
 	"bindings",
 	"balances",
-	"tx_pending",
-	"tx_confirmed",
-	"tx_failed",
+	"transactions",
+	"mempool_queue",
 }
 
 

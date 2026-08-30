@@ -44,30 +44,38 @@ application, opaque to the gateway. Unique within the application.
 One row per "address + asset": current balance, total received, date/time of the last
 deposit.
 
-- Derived data: updated in the same database transaction as the confirmed-transaction
-  insert, and recomputable from the confirmed-transactions table at any moment.
-- Counts confirmed transactions only; what is still pending is visible in the pending
-  table.
+- Derived data: updated in the same database transaction that marks a transaction row as
+  applied, and recomputable from the transactions table at any moment.
+- Counts finalized successful transactions only; what still awaits finality is a
+  computation over the transactions table, and queued payments are visible in the mempool
+  queue.
 
-### Transactions
+### Transactions (on-chain)
 
-Three tables with a shared core of fields: address, transaction id, asset, direction,
-amount, block number (the block the transaction was included in — written once, never
-updated), date/time.
+One table for transactions that made it into the chain
+(see [ADR-0017](decisions/0017-universal-tx-model.md)): address, transaction id, asset,
+direction, amount, **block number (required — on-chain means in a block)**, time,
+**execution status (success / failed)**, first-seen time, and a service marker
+**"applied to balance"** — set exactly once, in the same database transaction as the
+balance update. Rows are otherwise append-only.
 
-- **Pending** — transactions in flight; the only mutable table, always small. Extra field:
-  status. Confirmation counts are not stored — they are computed as "current network
-  height − transaction's block number".
-- **Confirmed** — final successes; an append-only ledger, rows are never updated.
-- **Failed** — final failures; append-only, kept for diagnostics, never affects balances.
-
-Rules:
-
-- A transaction leaves Pending atomically: one database transaction removes it from the hot
-  table, inserts it into Confirmed or Failed and (for Confirmed) updates the balance row.
-- Idempotency: re-scanning the same blocks must not duplicate rows — unique key
+- Confirmed / awaiting finality is **computed** against the network's finality boundary
+  (TRON: solidification) — never stored.
+- Failed rows (in a block, execution failed — e.g. REVERT / out of energy) never affect
+  balances; kept for dispute diagnostics.
+- Idempotency: re-scanning the same ranges must not duplicate rows — unique key
   "transaction id + address + asset" (to be refined at implementation if one transaction
   can carry several transfers of the same asset to the same address).
+- Provisional rows that never reach finality (chain reorganizations) are cleaned by a
+  policy defined at watcher implementation.
+
+### Mempool Queue
+
+Observations of queued transactions — broadcast but not included in any block
+(see [ADR-0017](decisions/0017-universal-tx-model.md)): no block number; rows may linger
+(EVM low-fee transactions) or vanish. A universal entity of the model: populated only when
+the network's data source can see the queue (TRON's indexed providers cannot; EVM sources
+and self-hosted nodes can).
 
 ## Shared Registry Database
 

@@ -1,7 +1,8 @@
-"""Per-user database schema (see ADR-0005, ADR-0009, ADR-0010).
+"""Per-user database schema (see ADR-0005, ADR-0009, ADR-0010, ADR-0017).
 
 All financial and mapping data of one user: wallets, applications and
-their users, bindings, balances and the three transaction tables.
+their users, bindings, balances, on-chain transactions and the mempool
+queue.
 
 Amounts are stored as TEXT: an integer in the asset's minimal units.
 64-bit database integers overflow on 18-decimals tokens; Python ints do
@@ -101,26 +102,11 @@ balances = Table(
 	Column("last_deposit_at", DateTime),
 )
 
-tx_pending = Table(
-	"tx_pending",
-	metadata,
-	Column("id", Integer, primary_key=True),
-	Column("address", String(128), nullable=False),
-	Column("txid", String(128), nullable=False),
-	Column("asset_id", Integer, nullable=False),
-	Column("direction", String(3), nullable=False),
-	Column("amount", Text, nullable=False),
-	Column("block_number", Integer),
-	Column("tx_time", DateTime),
-	Column("status", String(16), nullable=False),
-	Column("first_seen_at", DateTime, nullable=False, server_default=func.now()),
-	Column("updated_at", DateTime),
-	UniqueConstraint("txid", "address", "asset_id", name="uq_tx_pending_key"),
-	CheckConstraint("direction IN ('in', 'out')", name="ck_tx_pending_direction"),
-)
-
-tx_confirmed = Table(
-	"tx_confirmed",
+# Транзакции в блокчейне (ADR-0017): номер блока обязателен, провал исполнения —
+# атрибут, финальность вычисляется от границы сети и не хранится. Строки после
+# вставки меняются один раз — простановкой отметки «учтена в балансе».
+transactions = Table(
+	"transactions",
 	metadata,
 	Column("id", Integer, primary_key=True),
 	Column("address", String(128), nullable=False),
@@ -130,13 +116,18 @@ tx_confirmed = Table(
 	Column("amount", Text, nullable=False),
 	Column("block_number", Integer, nullable=False),
 	Column("tx_time", DateTime),
-	Column("recorded_at", DateTime, nullable=False, server_default=func.now()),
-	UniqueConstraint("txid", "address", "asset_id", name="uq_tx_confirmed_key"),
-	CheckConstraint("direction IN ('in', 'out')", name="ck_tx_confirmed_direction"),
+	Column("status", String(8), nullable=False),
+	Column("first_seen_at", DateTime, nullable=False, server_default=func.now()),
+	Column("balance_applied_at", DateTime),
+	UniqueConstraint("txid", "address", "asset_id", name="uq_transactions_key"),
+	CheckConstraint("direction IN ('in', 'out')", name="ck_transactions_direction"),
+	CheckConstraint("status IN ('success', 'failed')", name="ck_transactions_status"),
 )
 
-tx_failed = Table(
-	"tx_failed",
+# Наблюдения очереди (мемпула): без номера блока; наполняется только там, где
+# источник данных сети видит очередь (ADR-0017).
+mempool_queue = Table(
+	"mempool_queue",
 	metadata,
 	Column("id", Integer, primary_key=True),
 	Column("address", String(128), nullable=False),
@@ -144,10 +135,8 @@ tx_failed = Table(
 	Column("asset_id", Integer, nullable=False),
 	Column("direction", String(3), nullable=False),
 	Column("amount", Text, nullable=False),
-	Column("block_number", Integer),
-	Column("tx_time", DateTime),
-	Column("reason", Text, nullable=False, server_default=""),
-	Column("recorded_at", DateTime, nullable=False, server_default=func.now()),
-	UniqueConstraint("txid", "address", "asset_id", name="uq_tx_failed_key"),
-	CheckConstraint("direction IN ('in', 'out')", name="ck_tx_failed_direction"),
+	Column("first_seen_at", DateTime, nullable=False, server_default=func.now()),
+	Column("last_seen_at", DateTime),
+	UniqueConstraint("txid", "address", "asset_id", name="uq_mempool_key"),
+	CheckConstraint("direction IN ('in', 'out')", name="ck_mempool_direction"),
 )

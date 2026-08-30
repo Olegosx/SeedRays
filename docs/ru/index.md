@@ -38,6 +38,8 @@
     - [ADR-0014: Стандарты генерации ключей и деривации](20-architecture/decisions/0014-key-standards.md)
     - [ADR-0015: Провайдер данных TRON — TronGrid; интерфейс источника цепочки](20-architecture/decisions/0015-tron-provider.md)
     - [ADR-0016: Уровни конфигурации](20-architecture/decisions/0016-config-layers.md)
+    - [ADR-0017: Универсальная модель транзакций — две таблицы по физическому местоположению](20-architecture/decisions/0017-universal-tx-model.md)
+    - [ADR-0018: Диапазонное сканирование как основной съём watcher](20-architecture/decisions/0018-range-scanning.md)
 - Безопасность
   - [Управление ключами](30-security/key-management.md)
   - [Модель угроз](30-security/threat-model.md)

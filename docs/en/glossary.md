@@ -19,6 +19,7 @@ Terms used across the project documentation.
 | ES modules | The browser-native JavaScript module system: files import each other directly, no bundler required. |
 | HD wallet | Hierarchical deterministic wallet — a wallet whose entire tree of keys and addresses is derived from a single seed. |
 | Memo | A tag attached to a transaction in some networks (e.g. TON); it lets many payers share one address while being told apart by the memo. |
+| Mempool | The queue of broadcast transactions not yet included in any block; on EVM networks a low-fee transaction can linger there for a long time. |
 | Passphrase | An optional extra secret of BIP39: the same seed phrase with a different passphrase opens a completely different wallet; a forgotten passphrase means permanently lost funds. |
 | RPC | The remote-call interface of a blockchain node, used to query chain data directly from a self-hosted node. |
 | Schema migration | A controlled change of the database structure (tables, columns) applied when the gateway is upgraded; runs across all user databases. |
