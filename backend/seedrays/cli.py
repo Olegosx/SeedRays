@@ -62,6 +62,10 @@ def build_parser() -> argparse.ArgumentParser:
 	subparsers.add_parser(
 		"watch", help="run one watcher pass (data dir from SEEDRAYS_DATA_DIR)"
 	)
+	subparsers.add_parser(
+		"serve",
+		help="run the gateway: API server + watcher (SEEDRAYS_DATA_DIR, SEEDRAYS_BIND)",
+	)
 	return parser
 
 
@@ -118,6 +122,31 @@ def _cmd_watch() -> int:
 	return 0
 
 
+def _cmd_serve() -> int:
+	"""Run the whole gateway under the orchestrator supervisor."""
+	from seedrays.orchestrator.supervisor import run
+	from seedrays.storage.migrations.runner import upgrade_all
+
+	data_dir = os.environ.get("SEEDRAYS_DATA_DIR")
+	if not data_dir:
+		print("error: SEEDRAYS_DATA_DIR is not set (see ADR-0016)", file=sys.stderr)
+		return 2
+	bind = os.environ.get("SEEDRAYS_BIND", "127.0.0.1:8080")
+	host, _, port_raw = bind.rpartition(":")
+	if not host or not port_raw.isdigit():
+		print(f"error: SEEDRAYS_BIND is malformed: {bind!r}", file=sys.stderr)
+		return 2
+	logging.basicConfig(
+		level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+	)
+	upgrade_all(Path(data_dir))
+	try:
+		asyncio.run(run(Path(data_dir), host, int(port_raw)))
+	except KeyboardInterrupt:
+		print("gateway stopped")
+	return 0
+
+
 def main(argv: list[str] | None = None) -> int:
 	"""Run the CLI.
 
@@ -134,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
 		return _cmd_derive(args)
 	if args.command == "watch":
 		return _cmd_watch()
+	if args.command == "serve":
+		return _cmd_serve()
 	print(f"seedrays {args.command}: not implemented yet", file=sys.stderr)
 	return 1
 

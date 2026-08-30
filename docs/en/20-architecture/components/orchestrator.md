@@ -17,7 +17,15 @@ Service layer of the backend: owns the business logic and coordinates the functi
 
 ## Interfaces
 
-_To be defined._
+- Operations module — the business core consumed by the API groups: resolving an API key
+  to its application, idempotent binding issue (with derivation-index reuse across
+  networks of one wallet), addresses, balances (received + pending), incoming history,
+  application users.
+- Supervisor — one process (ADR-0003): the API server and the watcher loop run as parallel
+  tasks; a crash of either is logged and restarted without taking down the other.
+- Console command `seedrays serve` — migrates the databases and runs the gateway; the data
+  directory and the bind address come from `SEEDRAYS_DATA_DIR` and `SEEDRAYS_BIND`
+  (the bootstrap layer of [ADR-0016](../decisions/0016-config-layers.md)).
 
 ## Related
 

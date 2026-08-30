@@ -23,6 +23,9 @@ memo, application, application user.
 - The application reference is kept alongside the application-user reference on purpose
   (cheap filtering by application); the agreement of the two is enforced at the schema
   level.
+- The derivation index is reused across networks for the same "wallet + application user"
+  pair — an EVM-family wallet then gives the payer the same address in every network of
+  the family; otherwise the wallet's next free index is allocated.
 - No financial data.
 
 ### Applications
