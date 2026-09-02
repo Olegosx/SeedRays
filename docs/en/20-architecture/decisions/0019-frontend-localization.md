@@ -19,8 +19,7 @@ accessibility, search-engine indexing) do not apply to it.
   live in dictionaries — plain ES modules (`i18n/ru.js`, `i18n/en.js`), one file per
   language.
 - **Language choice**: the user's saved choice → the browser language → English. The
-  choice is kept in localStorage; the switcher lives in the top bar of every page and in
-  the profile settings.
+  choice is kept in localStorage; the switcher lives in the top bar of every page.
 - **Mechanics**: the `js/i18n.js` module sets the page `lang` attribute and the tab title
   (via the `data-title-key` attribute) and exposes the dictionary to Alpine as the shared
   `$store.i18n` store; labels are injected through `x-text` and attribute bindings; until

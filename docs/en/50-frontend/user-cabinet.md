@@ -60,7 +60,7 @@ worked out.
 The interface is multilingual: Russian and English at the start; adding a language is one
 new dictionary file, with no page rework. The language is resolved
 as "the saved choice → the browser language → English"; the switcher lives in the top bar
-of every page (the sign-in pages included) and in the profile settings. The technical design is
+of every page (the sign-in pages included). The technical design is
 [ADR-0019](../20-architecture/decisions/0019-frontend-localization.md) (client-side
 dictionaries, one markup for every language).
 
@@ -85,9 +85,10 @@ The sidebar — five sections:
   section is organized by applications.
 - **Operation History** — incoming operations across all wallets with filters (wallet,
   network, asset, status).
-- **Settings** — the cabinet owner's personal settings: profile (email, name), interface
-  language and security — password change, sign-in methods (attaching and detaching
-  external services). There are no gateway-wide settings in the cabinet — those live in the
+- **Settings** — the cabinet owner's personal settings: profile (the username — immutable
+  after registration; email addresses — a second email can be attached to the account,
+  each is confirmed by a message) and security — password change, sign-in methods
+  (attaching and detaching external services). There are no gateway-wide settings in the cabinet — those live in the
   operator panel only.
 
 Sign-out is an item of the top bar's user menu.
