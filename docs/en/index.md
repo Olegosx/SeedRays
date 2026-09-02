@@ -40,6 +40,7 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0016: Configuration Layers](20-architecture/decisions/0016-config-layers.md)
     - [ADR-0017: Universal Transaction Model — Two Tables by Physical Location](20-architecture/decisions/0017-universal-tx-model.md)
     - [ADR-0018: Range Scanning as the Watcher's Primary Acquisition](20-architecture/decisions/0018-range-scanning.md)
+    - [ADR-0019: Frontend Localization — Client-Side Dictionaries](20-architecture/decisions/0019-frontend-localization.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)

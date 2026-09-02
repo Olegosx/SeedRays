@@ -55,6 +55,14 @@ worked out.
 - Fallback path: a password reset by the operator from the operator panel (the user lost
   access to the email).
 
+## Interface Language
+
+The interface is bilingual from the start: Russian and English. The language is resolved
+as "the saved choice → the browser language → English"; the switcher lives on the sign-in
+page and in the profile settings. The technical design is
+[ADR-0019](../20-architecture/decisions/0019-frontend-localization.md) (client-side
+dictionaries, one markup for every language).
+
 ## Cabinet Structure
 
 A sidebar menu of five sections plus sign-out:
@@ -69,9 +77,9 @@ A sidebar menu of five sections plus sign-out:
   section is organized by applications.
 - **Operation History** — incoming operations across all wallets with filters (wallet,
   network, asset, status).
-- **Settings** — the cabinet owner's personal settings: profile (email, name) and
-  security — password change, sign-in methods (attaching and detaching external
-  services). There are no gateway-wide settings in the cabinet — those live in the
+- **Settings** — the cabinet owner's personal settings: profile (email, name), interface
+  language and security — password change, sign-in methods (attaching and detaching
+  external services). There are no gateway-wide settings in the cabinet — those live in the
   operator panel only.
 - **Sign out** — a menu element, not a section.
 
