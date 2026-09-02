@@ -46,4 +46,7 @@
 - Эксплуатация
   - [Развёртывание](40-operations/deployment.md)
   - [Мониторинг](40-operations/monitoring.md)
+- Фронтенд
+  - [Сценарии кабинета пользователя](50-frontend/user-cabinet.md)
+  - [Сценарии панели оператора](50-frontend/operator-panel.md)
 - [Словарь терминов](glossary.md)

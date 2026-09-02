@@ -46,4 +46,7 @@ Entry point for the project documentation. Every document in this tree is listed
 - Operations
   - [Deployment](40-operations/deployment.md)
   - [Monitoring](40-operations/monitoring.md)
+- Frontend
+  - [User Cabinet Scenarios](50-frontend/user-cabinet.md)
+  - [Operator Panel Scenarios](50-frontend/operator-panel.md)
 - [Glossary](glossary.md)
