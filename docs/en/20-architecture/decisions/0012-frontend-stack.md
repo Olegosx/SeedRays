@@ -2,7 +2,9 @@
 
 # ADR-0012: Frontend Stack — No-Build Static Files with Vendored Libraries
 
-**Status:** accepted
+**Status:** accepted; reconfirmed on 2026-09-03 after re-examining the server-rendering
+alternative (Jinja2 + htmx inside the backend) — gateway management through the API as a
+product property was the deciding factor
 
 ## Context
 
