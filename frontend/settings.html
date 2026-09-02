@@ -1,0 +1,277 @@
+<!doctype html>
+<html lang="ru" data-title-key="settings.pageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		emails: [
+			{ address: 'user1@example.com', primary: true, confirmed: true },
+		],
+		newEmail: '',
+		addingEmail: false,
+		addEmail() {
+			if (this.newEmail) {
+				this.emails.push({ address: this.newEmail, primary: false, confirmed: false });
+				this.newEmail = '';
+				this.addingEmail = false;
+			}
+		},
+		pass: { current: '', next: '', repeat: '' },
+		passMismatch: false,
+		passChanged: false,
+		methods: [
+			{ name: 'Google', linked: false },
+			{ name: 'Telegram', linked: true },
+		],
+		linkedCount() {
+			// Пароль всегда установлен в макете + привязанные внешние сервисы.
+			return 1 + this.methods.filter((m) => m.linked).length;
+		},
+		changePassword() {
+			this.passMismatch = this.pass.next !== this.pass.repeat;
+			this.passChanged = !this.passMismatch;
+			if (this.passChanged) {
+				this.pass = { current: '', next: '', repeat: '' };
+			}
+		},
+	}">
+		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
+		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+			<div class="container-fluid">
+				<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+					data-bs-target="#sidebar-menu" aria-expanded="false">
+					<span class="navbar-toggler-icon"></span>
+				</button>
+				<div class="navbar-brand navbar-brand-autodark">
+					<a href="dashboard.html" class="text-decoration-none fs-2 fw-bold">SeedRays</a>
+				</div>
+				<div class="collapse navbar-collapse" id="sidebar-menu">
+					<ul class="navbar-nav pt-lg-3">
+						<li class="nav-item">
+							<a class="nav-link" href="dashboard.html">
+								<span class="nav-link-icon"><i class="ti ti-home"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.dashboard')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="wallets.html">
+								<span class="nav-link-icon"><i class="ti ti-wallet"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.wallets')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="applications.html">
+								<span class="nav-link-icon"><i class="ti ti-plug-connected"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.apps')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="history.html">
+								<span class="nav-link-icon"><i class="ti ti-history"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.history')"></span>
+							</a>
+						</li>
+						<li class="nav-item active">
+							<a class="nav-link" href="settings.html">
+								<span class="nav-link-icon"><i class="ti ti-settings"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.settings')"></span>
+							</a>
+						</li>
+					</ul>
+				</div>
+			</div>
+		</aside>
+
+		<div class="page-wrapper">
+			<!-- Верхняя панель: язык и меню пользователя; состав дополняется (сводка и т.п.) -->
+			<header class="navbar navbar-expand-md d-print-none">
+				<div class="container-xl justify-content-end">
+					<div class="navbar-nav flex-row align-items-center">
+						<div class="nav-item dropdown me-2">
+							<a href="#" class="nav-link px-2" data-bs-toggle="dropdown">
+								<i class="ti ti-world me-1"></i>
+								<span x-text="$store.i18n.lang.toUpperCase()"></span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'ru' }" href="#"
+									@click.prevent="$store.i18n.set('ru')">Русский</a>
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'en' }" href="#"
+									@click.prevent="$store.i18n.set('en')">English</a>
+							</div>
+						</div>
+						<div class="nav-item dropdown">
+							<!-- Подставные данные макета: имя вошедшего пользователя -->
+							<a href="#" class="nav-link d-flex lh-1 px-2" data-bs-toggle="dropdown">
+								<span class="avatar avatar-sm"><i class="ti ti-user"></i></span>
+								<span class="ps-2">user1</span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" href="settings.html"
+									x-text="$store.i18n.t('menu.settings')"></a>
+								<a class="dropdown-item" href="login.html"
+									x-text="$store.i18n.t('menu.logout')"></a>
+							</div>
+						</div>
+					</div>
+				</div>
+			</header>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<h2 class="page-title" x-text="$store.i18n.t('settings.title')"></h2>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<!-- Одна колонка ограниченной ширины, по центру -->
+					<div class="row row-cards mx-auto" style="max-width: 40rem">
+						<!-- Профиль: имя (неизменно) и почтовые адреса -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('settings.profileCard')"></h3>
+								</div>
+								<div class="card-body">
+									<div class="mb-3">
+										<label class="form-label" x-text="$store.i18n.t('settings.username')"></label>
+										<div class="form-control-plaintext fw-bold">user1</div>
+									</div>
+									<label class="form-label" x-text="$store.i18n.t('settings.email')"></label>
+									<div class="list-group list-group-flush mb-2">
+										<template x-for="(email, i) in emails">
+											<div class="list-group-item d-flex align-items-center justify-content-between px-0">
+												<span>
+													<span x-text="email.address"></span>
+													<span class="badge bg-blue-lt ms-1" x-show="email.primary"
+														x-text="$store.i18n.t('settings.emailPrimary')"></span>
+													<span class="badge ms-1"
+														:class="email.confirmed ? 'bg-green-lt' : 'bg-yellow-lt'"
+														x-text="email.confirmed
+															? $store.i18n.t('settings.emailConfirmed')
+															: $store.i18n.t('settings.emailUnconfirmed')"></span>
+												</span>
+												<a href="#" class="link-danger" x-show="!email.primary"
+													@click.prevent="emails.splice(i, 1)"
+													x-text="$store.i18n.t('app.remove')"></a>
+											</div>
+										</template>
+									</div>
+									<div x-show="!addingEmail">
+										<button type="button" class="btn btn-outline-primary"
+											@click="addingEmail = true">
+											<i class="ti ti-plus me-1"></i>
+											<span x-text="$store.i18n.t('settings.addEmail')"></span>
+										</button>
+									</div>
+									<form x-show="addingEmail" @submit.prevent="addEmail()">
+										<div class="input-group">
+											<input type="email" class="form-control" x-model="newEmail"
+												:placeholder="$store.i18n.t('settings.emailPlaceholder')"
+												autocomplete="off">
+											<button type="submit" class="btn btn-primary"
+												x-text="$store.i18n.t('settings.add')"></button>
+										</div>
+										<small class="form-hint" x-text="$store.i18n.t('settings.emailHint')"></small>
+									</form>
+								</div>
+							</div>
+						</div>
+
+						<!-- Смена пароля -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('settings.passwordCard')"></h3>
+								</div>
+								<div class="card-body">
+									<form @submit.prevent="changePassword()">
+										<div class="mb-3">
+											<label class="form-label"
+												x-text="$store.i18n.t('settings.currentPassword')"></label>
+											<input type="password" class="form-control" x-model="pass.current"
+												autocomplete="current-password">
+										</div>
+										<div class="mb-3">
+											<label class="form-label"
+												x-text="$store.i18n.t('settings.newPassword')"></label>
+											<input type="password" class="form-control" x-model="pass.next"
+												autocomplete="new-password">
+										</div>
+										<div class="mb-3">
+											<label class="form-label"
+												x-text="$store.i18n.t('settings.repeatPassword')"></label>
+											<input type="password" class="form-control"
+												:class="{ 'is-invalid': passMismatch }" x-model="pass.repeat"
+												autocomplete="new-password">
+											<div class="invalid-feedback" x-show="passMismatch"
+												x-text="$store.i18n.t('newpass.mismatch')"></div>
+										</div>
+										<div class="d-flex align-items-center gap-2">
+											<button type="submit" class="btn btn-primary"
+												x-text="$store.i18n.t('settings.changePassword')"></button>
+											<span class="text-success" x-show="passChanged"
+												x-text="$store.i18n.t('settings.passwordChanged')"></span>
+										</div>
+									</form>
+								</div>
+							</div>
+						</div>
+
+						<!-- Способы входа: пароль + внешние сервисы (auth_identities) -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('settings.methodsCard')"></h3>
+								</div>
+								<div class="list-group list-group-flush">
+									<div class="list-group-item d-flex align-items-center justify-content-between">
+										<span>
+											<i class="ti ti-key me-2"></i>
+											<span x-text="$store.i18n.t('settings.methodPassword')"></span>
+										</span>
+										<span class="badge bg-green-lt"
+											x-text="$store.i18n.t('settings.methodSet')"></span>
+									</div>
+									<template x-for="method in methods">
+										<div class="list-group-item d-flex align-items-center justify-content-between">
+											<span>
+												<i class="ti ti-login me-2"></i>
+												<span x-text="method.name"></span>
+												<span class="badge ms-2"
+													:class="method.linked ? 'bg-green-lt' : 'bg-secondary-lt'"
+													x-text="method.linked
+														? $store.i18n.t('settings.linked')
+														: $store.i18n.t('settings.notLinked')"></span>
+											</span>
+											<button type="button" class="btn btn-sm"
+												:class="method.linked ? 'btn-outline-danger' : 'btn-outline-primary'"
+												@click="method.linked = !method.linked"
+												x-text="method.linked
+													? $store.i18n.t('settings.unlink')
+													: $store.i18n.t('settings.link')"></button>
+										</div>
+									</template>
+								</div>
+								<div class="card-footer text-secondary"
+									x-text="$store.i18n.t('settings.lastMethodHint')"></div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script src="vendor/tabler/tabler.min.js" defer></script>
+</body>
+</html>
