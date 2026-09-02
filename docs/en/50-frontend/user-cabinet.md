@@ -100,7 +100,9 @@ viewed inside the application, the wallet's addresses inside the wallet.
 
 ### Wallet List
 
-The user's wallets. The contents of a list row are to be refined.
+The user's wallets; a row: label, family, address count, date added. Above the list —
+the "Attach a wallet" button (primary) and "Create in the gateway" (secondary, with a
+warning icon).
 
 ### Attaching a Wallet (the Recommended Path)
 
@@ -130,6 +132,55 @@ The scenario:
 5. Write-down confirmation: the user enters three randomly requested words of the phrase
    (e.g. the 3rd, the 7th and the 11th). The wallets are created only after a successful
    confirmation; the gateway stores only the xpubs — one per checked family.
+
+Before the risk warning the generation page carries an "Attach a wallet" button — a quick
+exit to the recommended path. The passphrase explanation: an optional extra password for
+the wallet; a mistyped password gives no error message — a non-existent wallet is simply
+opened; a forgotten passphrase means permanently lost access to the funds.
+
+## Dashboard
+
+- **Counters**: wallets, applications, addresses.
+- **Receipts by asset**: a "network, asset, total received, pending" table (the same
+  values as the Application API balances); non-zero "pending" is highlighted.
+- **Recent operations**: a few fresh rows with statuses and a "Full history" link.
+
+## Applications (API)
+
+- **The list**: name, networks (as badges), user count, creation date; a "Create an
+  application" button.
+- **Creation**: only the name is entered; in response the key is shown **exactly once**
+  (the gateway stores the key's fingerprint, not the key) with a copy button.
+- **The application page**:
+  - the API key card: issue date, the key's first characters (kept in the open — for
+    identification), reissue (the new key is shown once), revocation (after it — a
+    warning that the application has no access);
+  - the "network → wallet" mapping ([ADR-0011](../20-architecture/decisions/0011-application-api-principles.md)):
+    a table with row removal; adding — by picking from the not-yet-assigned networks;
+  - application users: identifier, address count, creation date.
+- Open questions: confirmation of dangerous actions (key revocation/reissue); viewing
+  the addresses of one application user.
+
+## Operation History
+
+- A table of incoming operations across all wallets: time, wallet, network, asset,
+  amount, a truncated transaction id, status ("confirmed" / "pending" / "failed" as
+  colored badges — the status semantics of [ADR-0017](../20-architecture/decisions/0017-universal-tx-model.md)).
+- Filters above the table: wallet, network, asset, status.
+- Open questions: the pagination style ("show more" or pages); linking a transaction to
+  the network's block explorer.
+
+## Settings
+
+One centered column of limited width, three cards:
+
+- **Profile**: the username (immutable after registration, display only); email
+  addresses as a list — the primary and the added ones, each flagged "confirmed / not
+  confirmed", adding a second email (requires confirmation by a message), removal of a
+  non-primary one.
+- **Password change**: the current password, the new one, a repeat with a match check.
+- **Sign-in methods**: the password and external services flagged "linked / not linked",
+  link and unlink buttons; the last remaining sign-in method cannot be removed.
 
 ## Related
 
