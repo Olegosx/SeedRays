@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ru" data-title-key="login.pageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body class="d-flex flex-column">
+	<div class="page page-center" x-cloak x-data>
+		<div class="container container-tight py-4">
+			<div class="text-center mb-4">
+				<span class="fs-1 fw-bold">SeedRays</span>
+			</div>
+			<div class="card card-md">
+				<div class="card-body">
+					<h2 class="h2 text-center mb-4" x-text="$store.i18n.t('login.title')"></h2>
+					<form action="#" method="get" autocomplete="off" novalidate>
+						<div class="mb-3">
+							<label class="form-label" x-text="$store.i18n.t('login.identifier')"></label>
+							<input type="text" class="form-control" name="identifier"
+								:placeholder="$store.i18n.t('login.identifierPlaceholder')"
+								autocomplete="username">
+						</div>
+						<div class="mb-2">
+							<label class="form-label">
+								<span x-text="$store.i18n.t('login.password')"></span>
+								<span class="form-label-description">
+									<a href="password-reset.html" x-text="$store.i18n.t('login.forgot')"></a>
+								</span>
+							</label>
+							<div class="input-group input-group-flat" x-data="{ show: false }">
+								<input :type="show ? 'text' : 'password'" type="password" class="form-control"
+									name="password" :placeholder="$store.i18n.t('login.passwordPlaceholder')"
+									autocomplete="current-password">
+								<span class="input-group-text">
+									<a href="#" class="link-secondary" :title="$store.i18n.t('login.showPassword')"
+										@click.prevent="show = !show">
+										<i class="ti" :class="show ? 'ti-eye-off' : 'ti-eye'"></i>
+									</a>
+								</span>
+							</div>
+						</div>
+						<div class="mb-2">
+							<label class="form-check">
+								<input type="checkbox" class="form-check-input" name="remember">
+								<span class="form-check-label" x-text="$store.i18n.t('login.remember')"></span>
+							</label>
+						</div>
+						<div class="form-footer">
+							<button type="submit" class="btn btn-primary w-100"
+								x-text="$store.i18n.t('login.submit')"></button>
+						</div>
+					</form>
+				</div>
+			</div>
+			<div class="text-center text-secondary mt-3">
+				<span x-text="$store.i18n.t('login.noAccount')"></span>
+				<a href="register.html" tabindex="-1" x-text="$store.i18n.t('login.register')"></a>
+			</div>
+			<div class="text-center mt-2">
+				<template x-if="$store.i18n.lang !== 'ru'">
+					<a href="#" class="link-secondary" @click.prevent="$store.i18n.set('ru')">Русский</a>
+				</template>
+				<template x-if="$store.i18n.lang === 'ru'">
+					<span class="text-secondary">Русский</span>
+				</template>
+				<span class="text-secondary mx-1">·</span>
+				<template x-if="$store.i18n.lang !== 'en'">
+					<a href="#" class="link-secondary" @click.prevent="$store.i18n.set('en')">English</a>
+				</template>
+				<template x-if="$store.i18n.lang === 'en'">
+					<span class="text-secondary">English</span>
+				</template>
+			</div>
+		</div>
+	</div>
+</body>
+</html>

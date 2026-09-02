@@ -1,0 +1,6 @@
+/* Общие стили кабинета поверх Tabler. */
+
+/* Элементы с x-cloak скрыты, пока Alpine не инициализировался. */
+[x-cloak] {
+	display: none !important;
+}
