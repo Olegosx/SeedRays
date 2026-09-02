@@ -59,14 +59,21 @@ worked out.
 
 The interface is multilingual: Russian and English at the start; adding a language is one
 new dictionary file, with no page rework. The language is resolved
-as "the saved choice → the browser language → English"; the switcher lives on the sign-in
-page and in the profile settings. The technical design is
+as "the saved choice → the browser language → English"; the switcher lives in the top bar
+of every page (the sign-in pages included) and in the profile settings. The technical design is
 [ADR-0019](../20-architecture/decisions/0019-frontend-localization.md) (client-side
 dictionaries, one markup for every language).
 
 ## Cabinet Structure
 
-A sidebar menu of five sections plus sign-out:
+The skeleton of every cabinet page: a section sidebar on the left and a top bar.
+
+**The top bar** is present on every page: the language switcher and the user menu (the
+name; settings and sign-out inside). The bar's contents will grow — for example, summary
+information such as the total balance. On the sign-in pages (before authentication) the
+top bar reduces to the language switcher.
+
+The sidebar — five sections:
 
 - **Dashboard** — a summary of the cabinet (contents to be defined separately).
 - **Wallets** — the wallet list, adding a wallet by one of the two paths
@@ -82,7 +89,8 @@ A sidebar menu of five sections plus sign-out:
   language and security — password change, sign-in methods (attaching and detaching
   external services). There are no gateway-wide settings in the cabinet — those live in the
   operator panel only.
-- **Sign out** — a menu element, not a section.
+
+Sign-out is an item of the top bar's user menu.
 
 Addresses and bindings have no section of their own: the application users' addresses are
 viewed inside the application, the wallet's addresses inside the wallet.
