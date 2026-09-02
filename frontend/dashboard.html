@@ -11,7 +11,28 @@
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body>
-	<div class="page" x-cloak x-data>
+	<div class="page" x-cloak x-data="{
+		counters: { wallets: 3, apps: 3, addresses: 17 },
+		receipts: [
+			{ network: 'tron', asset: 'USDT', received: '12480.50', pending: '990.50' },
+			{ network: 'tron', asset: 'TRX', received: '3.14', pending: '0' },
+			{ network: 'tron-nile', asset: 'USDT', received: '25', pending: '0' },
+			{ network: 'tron-nile', asset: 'TRX', received: '150', pending: '0' },
+		],
+		recent: [
+			{ time: '2026-09-02 14:21', asset: 'USDT', amount: '25', status: 'confirmed' },
+			{ time: '2026-09-02 13:05', asset: 'TRX', amount: '150', status: 'confirmed' },
+			{ time: '2026-09-02 12:48', asset: 'USDT', amount: '990.5', status: 'pending' },
+			{ time: '2026-09-01 22:17', asset: 'USDT', amount: '12', status: 'failed' },
+			{ time: '2026-09-01 09:40', asset: 'TRX', amount: '3.14', status: 'confirmed' },
+		],
+		statusClass(s) {
+			return { confirmed: 'bg-green-lt', pending: 'bg-yellow-lt', failed: 'bg-red-lt' }[s];
+		},
+		statusText(s) {
+			return this.$store.i18n.t('history.status' + s.charAt(0).toUpperCase() + s.slice(1));
+		},
+	}">
 		<!-- Боковое меню кабинета: пять разделов + выход (см. docs, «Структура кабинета») -->
 		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
 			<div class="container-fluid">
@@ -103,9 +124,110 @@
 			</div>
 			<div class="page-body">
 				<div class="container-xl">
-					<div class="card">
-						<div class="card-body">
-							<p class="text-secondary mb-0" x-text="$store.i18n.t('dashboard.stub')"></p>
+					<div class="row row-cards">
+						<!-- Счётчики -->
+						<div class="col-sm-4">
+							<div class="card card-sm">
+								<div class="card-body d-flex align-items-center">
+									<span class="avatar bg-blue-lt me-3"><i class="ti ti-wallet"></i></span>
+									<div>
+										<div class="h2 mb-0" x-text="counters.wallets"></div>
+										<div class="text-secondary" x-text="$store.i18n.t('dashboard.wallets')"></div>
+									</div>
+								</div>
+							</div>
+						</div>
+						<div class="col-sm-4">
+							<div class="card card-sm">
+								<div class="card-body d-flex align-items-center">
+									<span class="avatar bg-purple-lt me-3"><i class="ti ti-plug-connected"></i></span>
+									<div>
+										<div class="h2 mb-0" x-text="counters.apps"></div>
+										<div class="text-secondary" x-text="$store.i18n.t('dashboard.apps')"></div>
+									</div>
+								</div>
+							</div>
+						</div>
+						<div class="col-sm-4">
+							<div class="card card-sm">
+								<div class="card-body d-flex align-items-center">
+									<span class="avatar bg-green-lt me-3"><i class="ti ti-map-pin"></i></span>
+									<div>
+										<div class="h2 mb-0" x-text="counters.addresses"></div>
+										<div class="text-secondary" x-text="$store.i18n.t('dashboard.addresses')"></div>
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<!-- Сводные поступления по активам -->
+						<div class="col-lg-7">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('dashboard.receiptsCard')"></h3>
+								</div>
+								<div class="table-responsive">
+									<table class="table table-vcenter card-table">
+										<thead>
+											<tr>
+												<th x-text="$store.i18n.t('history.colNetwork')"></th>
+												<th x-text="$store.i18n.t('history.colAsset')"></th>
+												<th class="text-end" x-text="$store.i18n.t('dashboard.colReceived')"></th>
+												<th class="text-end" x-text="$store.i18n.t('dashboard.colPending')"></th>
+											</tr>
+										</thead>
+										<tbody>
+											<template x-for="row in receipts">
+												<tr>
+													<td><span class="badge bg-blue-lt" x-text="row.network"></span></td>
+													<td x-text="row.asset"></td>
+													<td class="text-end font-monospace" x-text="row.received"></td>
+													<td class="text-end font-monospace"
+														:class="row.pending !== '0' ? 'text-yellow' : 'text-secondary'"
+														x-text="row.pending"></td>
+												</tr>
+											</template>
+										</tbody>
+									</table>
+								</div>
+							</div>
+						</div>
+
+						<!-- Последние операции -->
+						<div class="col-lg-5">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('dashboard.recentCard')"></h3>
+									<div class="card-actions">
+										<a href="history.html" x-text="$store.i18n.t('dashboard.allHistory')"></a>
+									</div>
+								</div>
+								<div class="table-responsive">
+									<table class="table table-vcenter card-table">
+										<thead>
+											<tr>
+												<th x-text="$store.i18n.t('history.colTime')"></th>
+												<th x-text="$store.i18n.t('history.colAsset')"></th>
+												<th class="text-end" x-text="$store.i18n.t('history.colAmount')"></th>
+												<th x-text="$store.i18n.t('history.colStatus')"></th>
+											</tr>
+										</thead>
+										<tbody>
+											<template x-for="row in recent">
+												<tr>
+													<td class="text-secondary" x-text="row.time"></td>
+													<td x-text="row.asset"></td>
+													<td class="text-end font-monospace" x-text="row.amount"></td>
+													<td>
+														<span class="badge" :class="statusClass(row.status)"
+															x-text="statusText(row.status)"></span>
+													</td>
+												</tr>
+											</template>
+										</tbody>
+									</table>
+								</div>
+							</div>
 						</div>
 					</div>
 				</div>

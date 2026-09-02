@@ -62,7 +62,14 @@ export const en = {
 
 	"dashboard.pageTitle": "Dashboard — SeedRays",
 	"dashboard.title": "Dashboard",
-	"dashboard.stub": "The dashboard contents will be defined separately.",
+	"dashboard.wallets": "Wallets",
+	"dashboard.apps": "Applications",
+	"dashboard.addresses": "Addresses",
+	"dashboard.receiptsCard": "Receipts by asset",
+	"dashboard.colReceived": "Total received",
+	"dashboard.colPending": "Pending",
+	"dashboard.recentCard": "Recent operations",
+	"dashboard.allHistory": "Full history",
 
 	"wallets.pageTitle": "Wallets — SeedRays",
 	"wallets.title": "Wallets",

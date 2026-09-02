@@ -63,7 +63,14 @@ export const ru = {
 
 	"dashboard.pageTitle": "Дашборд — SeedRays",
 	"dashboard.title": "Дашборд",
-	"dashboard.stub": "Наполнение дашборда будет определено отдельно.",
+	"dashboard.wallets": "Кошельки",
+	"dashboard.apps": "Приложения",
+	"dashboard.addresses": "Адреса",
+	"dashboard.receiptsCard": "Поступления по активам",
+	"dashboard.colReceived": "Поступило всего",
+	"dashboard.colPending": "Ожидает",
+	"dashboard.recentCard": "Последние операции",
+	"dashboard.allHistory": "Вся история",
 
 	"wallets.pageTitle": "Кошельки — SeedRays",
 	"wallets.title": "Кошельки",
