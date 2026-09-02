@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="ru" data-title-key="history.pageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		rows: [
+			{ time: '2026-09-02 14:21', wallet: 'Основной', network: 'tron-nile', asset: 'USDT',
+				amount: '25', txid: '7f3ab29c1df84b60', status: 'confirmed' },
+			{ time: '2026-09-02 13:05', wallet: 'Основной', network: 'tron-nile', asset: 'TRX',
+				amount: '150', txid: 'c81de07a44f2b391', status: 'confirmed' },
+			{ time: '2026-09-02 12:48', wallet: 'Основной', network: 'tron', asset: 'USDT',
+				amount: '990.5', txid: '5a2c9e11b7d04f83', status: 'pending' },
+			{ time: '2026-09-01 22:17', wallet: 'Магазин EVM', network: 'tron', asset: 'USDT',
+				amount: '12', txid: 'e94b60217fa3c5d8', status: 'failed' },
+			{ time: '2026-09-01 09:40', wallet: 'Основной', network: 'tron', asset: 'TRX',
+				amount: '3.14', txid: 'b06f48d29ce17a35', status: 'confirmed' },
+		],
+		filter: { wallet: '', network: '', asset: '', status: '' },
+		options(field) {
+			return [...new Set(this.rows.map((r) => r[field]))];
+		},
+		filtered() {
+			return this.rows.filter((r) =>
+				(!this.filter.wallet || r.wallet === this.filter.wallet)
+				&& (!this.filter.network || r.network === this.filter.network)
+				&& (!this.filter.asset || r.asset === this.filter.asset)
+				&& (!this.filter.status || r.status === this.filter.status));
+		},
+		statusClass(s) {
+			return { confirmed: 'bg-green-lt', pending: 'bg-yellow-lt', failed: 'bg-red-lt' }[s];
+		},
+		statusText(s) {
+			return this.$store.i18n.t('history.status' + s.charAt(0).toUpperCase() + s.slice(1));
+		},
+	}">
+		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
+		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+			<div class="container-fluid">
+				<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+					data-bs-target="#sidebar-menu" aria-expanded="false">
+					<span class="navbar-toggler-icon"></span>
+				</button>
+				<div class="navbar-brand navbar-brand-autodark">
+					<a href="dashboard.html" class="text-decoration-none fs-2 fw-bold">SeedRays</a>
+				</div>
+				<div class="collapse navbar-collapse" id="sidebar-menu">
+					<ul class="navbar-nav pt-lg-3">
+						<li class="nav-item">
+							<a class="nav-link" href="dashboard.html">
+								<span class="nav-link-icon"><i class="ti ti-home"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.dashboard')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="wallets.html">
+								<span class="nav-link-icon"><i class="ti ti-wallet"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.wallets')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="applications.html">
+								<span class="nav-link-icon"><i class="ti ti-plug-connected"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.apps')"></span>
+							</a>
+						</li>
+						<li class="nav-item active">
+							<a class="nav-link" href="history.html">
+								<span class="nav-link-icon"><i class="ti ti-history"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.history')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="settings.html">
+								<span class="nav-link-icon"><i class="ti ti-settings"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.settings')"></span>
+							</a>
+						</li>
+					</ul>
+				</div>
+			</div>
+		</aside>
+
+		<div class="page-wrapper">
+			<!-- Верхняя панель: язык и меню пользователя; состав дополняется (сводка и т.п.) -->
+			<header class="navbar navbar-expand-md d-print-none">
+				<div class="container-xl justify-content-end">
+					<div class="navbar-nav flex-row align-items-center">
+						<div class="nav-item dropdown me-2">
+							<a href="#" class="nav-link px-2" data-bs-toggle="dropdown">
+								<i class="ti ti-world me-1"></i>
+								<span x-text="$store.i18n.lang.toUpperCase()"></span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'ru' }" href="#"
+									@click.prevent="$store.i18n.set('ru')">Русский</a>
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'en' }" href="#"
+									@click.prevent="$store.i18n.set('en')">English</a>
+							</div>
+						</div>
+						<div class="nav-item dropdown">
+							<!-- Подставные данные макета: имя вошедшего пользователя -->
+							<a href="#" class="nav-link d-flex lh-1 px-2" data-bs-toggle="dropdown">
+								<span class="avatar avatar-sm"><i class="ti ti-user"></i></span>
+								<span class="ps-2">oleg</span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" href="settings.html"
+									x-text="$store.i18n.t('menu.settings')"></a>
+								<a class="dropdown-item" href="login.html"
+									x-text="$store.i18n.t('menu.logout')"></a>
+							</div>
+						</div>
+					</div>
+				</div>
+			</header>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<h2 class="page-title" x-text="$store.i18n.t('history.title')"></h2>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<div class="card">
+						<div class="card-body border-bottom py-3">
+							<div class="row g-2">
+								<div class="col-auto">
+									<select class="form-select" x-model="filter.wallet">
+										<option value=""
+											x-text="$store.i18n.t('history.colWallet') + ': ' + $store.i18n.t('history.filterAll')"></option>
+										<template x-for="option in options('wallet')">
+											<option :value="option" x-text="option"></option>
+										</template>
+									</select>
+								</div>
+								<div class="col-auto">
+									<select class="form-select" x-model="filter.network">
+										<option value=""
+											x-text="$store.i18n.t('history.colNetwork') + ': ' + $store.i18n.t('history.filterAll')"></option>
+										<template x-for="option in options('network')">
+											<option :value="option" x-text="option"></option>
+										</template>
+									</select>
+								</div>
+								<div class="col-auto">
+									<select class="form-select" x-model="filter.asset">
+										<option value=""
+											x-text="$store.i18n.t('history.colAsset') + ': ' + $store.i18n.t('history.filterAll')"></option>
+										<template x-for="option in options('asset')">
+											<option :value="option" x-text="option"></option>
+										</template>
+									</select>
+								</div>
+								<div class="col-auto">
+									<select class="form-select" x-model="filter.status">
+										<option value=""
+											x-text="$store.i18n.t('history.colStatus') + ': ' + $store.i18n.t('history.filterAll')"></option>
+										<template x-for="option in options('status')">
+											<option :value="option" x-text="statusText(option)"></option>
+										</template>
+									</select>
+								</div>
+							</div>
+						</div>
+						<div class="table-responsive">
+							<table class="table table-vcenter card-table">
+								<thead>
+									<tr>
+										<th x-text="$store.i18n.t('history.colTime')"></th>
+										<th x-text="$store.i18n.t('history.colWallet')"></th>
+										<th x-text="$store.i18n.t('history.colNetwork')"></th>
+										<th x-text="$store.i18n.t('history.colAsset')"></th>
+										<th class="text-end" x-text="$store.i18n.t('history.colAmount')"></th>
+										<th x-text="$store.i18n.t('history.colTxid')"></th>
+										<th x-text="$store.i18n.t('history.colStatus')"></th>
+									</tr>
+								</thead>
+								<tbody>
+									<template x-for="row in filtered()">
+										<tr>
+											<td class="text-secondary" x-text="row.time"></td>
+											<td x-text="row.wallet"></td>
+											<td><span class="badge bg-blue-lt" x-text="row.network"></span></td>
+											<td x-text="row.asset"></td>
+											<td class="text-end font-monospace" x-text="row.amount"></td>
+											<td>
+												<a href="#" class="font-monospace"
+													x-text="row.txid.slice(0, 8) + '…'"></a>
+											</td>
+											<td>
+												<span class="badge" :class="statusClass(row.status)"
+													x-text="statusText(row.status)"></span>
+											</td>
+										</tr>
+									</template>
+									<tr x-show="!filtered().length">
+										<td colspan="7" class="text-center text-secondary"
+											x-text="$store.i18n.t('history.empty')"></td>
+									</tr>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script src="vendor/tabler/tabler.min.js" defer></script>
+</body>
+</html>
