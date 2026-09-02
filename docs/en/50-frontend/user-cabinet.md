@@ -57,7 +57,8 @@ worked out.
 
 ## Interface Language
 
-The interface is bilingual from the start: Russian and English. The language is resolved
+The interface is multilingual: Russian and English at the start; adding a language is one
+new dictionary file, with no page rework. The language is resolved
 as "the saved choice → the browser language → English"; the switcher lives on the sign-in
 page and in the profile settings. The technical design is
 [ADR-0019](../20-architecture/decisions/0019-frontend-localization.md) (client-side

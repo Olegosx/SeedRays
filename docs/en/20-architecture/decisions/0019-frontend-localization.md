@@ -6,8 +6,8 @@
 
 ## Context
 
-The cabinet interface is bilingual from the start (Russian and English), with more
-languages possible later. The frontend is no-build static files
+The cabinet interface is multilingual: Russian and English at the start, and further
+languages must be addable without reworking the pages. The frontend is no-build static files
 ([ADR-0012](0012-frontend-stack.md)) talking to the backend only through the HTTP API.
 The cabinet sits behind sign-in and does not work without JavaScript at all (Alpine.js,
 API requests) — so the classic arguments for server-side localization (no-JavaScript
