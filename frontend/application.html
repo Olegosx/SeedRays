@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="ru" data-title-key="app.pageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		appName: 'Интернет-магазин',
+		keyIssuedAt: '2026-08-30 14:02',
+		keyPrefix: 'srk_c9a24…',
+		keyRevoked: false,
+		newKey: null,
+		copied: false,
+		wallets: ['Основной', 'Магазин EVM'],
+		allNetworks: ['tron', 'tron-nile'],
+		networks: [
+			{ network: 'tron', wallet: 'Основной' },
+			{ network: 'tron-nile', wallet: 'Основной' },
+		],
+		newMapping: { network: '', wallet: '' },
+		users: [
+			{ id: 'user1', addresses: 2, created: '2026-08-30' },
+			{ id: 'user2', addresses: 1, created: '2026-09-01' },
+		],
+		freeNetworks() {
+			return this.allNetworks.filter((n) => !this.networks.some((m) => m.network === n));
+		},
+		addMapping() {
+			if (this.newMapping.network && this.newMapping.wallet) {
+				this.networks.push({ ...this.newMapping });
+				this.newMapping = { network: '', wallet: '' };
+			}
+		},
+		reissue() {
+			// Подставной ключ макета: боевой придёт из API и показывается один раз.
+			this.newKey = 'srk_' + Array.from(crypto.getRandomValues(new Uint8Array(24)),
+				(b) => b.toString(16).padStart(2, '0')).join('');
+			this.copied = false;
+			this.keyRevoked = false;
+			this.keyPrefix = this.newKey.slice(0, 9) + '…';
+			this.keyIssuedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
+		},
+		copyKey() {
+			navigator.clipboard.writeText(this.newKey).then(() => { this.copied = true; });
+		},
+	}">
+		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
+		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+			<div class="container-fluid">
+				<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+					data-bs-target="#sidebar-menu" aria-expanded="false">
+					<span class="navbar-toggler-icon"></span>
+				</button>
+				<div class="navbar-brand navbar-brand-autodark">
+					<a href="dashboard.html" class="text-decoration-none fs-2 fw-bold">SeedRays</a>
+				</div>
+				<div class="collapse navbar-collapse" id="sidebar-menu">
+					<ul class="navbar-nav pt-lg-3">
+						<li class="nav-item">
+							<a class="nav-link" href="dashboard.html">
+								<span class="nav-link-icon"><i class="ti ti-home"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.dashboard')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="wallets.html">
+								<span class="nav-link-icon"><i class="ti ti-wallet"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.wallets')"></span>
+							</a>
+						</li>
+						<li class="nav-item active">
+							<a class="nav-link" href="applications.html">
+								<span class="nav-link-icon"><i class="ti ti-plug-connected"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.apps')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="history.html">
+								<span class="nav-link-icon"><i class="ti ti-history"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.history')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="settings.html">
+								<span class="nav-link-icon"><i class="ti ti-settings"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.settings')"></span>
+							</a>
+						</li>
+					</ul>
+				</div>
+			</div>
+		</aside>
+
+		<div class="page-wrapper">
+			<!-- Верхняя панель: язык и меню пользователя; состав дополняется (сводка и т.п.) -->
+			<header class="navbar navbar-expand-md d-print-none">
+				<div class="container-xl justify-content-end">
+					<div class="navbar-nav flex-row align-items-center">
+						<div class="nav-item dropdown me-2">
+							<a href="#" class="nav-link px-2" data-bs-toggle="dropdown">
+								<i class="ti ti-world me-1"></i>
+								<span x-text="$store.i18n.lang.toUpperCase()"></span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'ru' }" href="#"
+									@click.prevent="$store.i18n.set('ru')">Русский</a>
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'en' }" href="#"
+									@click.prevent="$store.i18n.set('en')">English</a>
+							</div>
+						</div>
+						<div class="nav-item dropdown">
+							<!-- Подставные данные макета: имя вошедшего пользователя -->
+							<a href="#" class="nav-link d-flex lh-1 px-2" data-bs-toggle="dropdown">
+								<span class="avatar avatar-sm"><i class="ti ti-user"></i></span>
+								<span class="ps-2">oleg</span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" href="settings.html"
+									x-text="$store.i18n.t('menu.settings')"></a>
+								<a class="dropdown-item" href="login.html"
+									x-text="$store.i18n.t('menu.logout')"></a>
+							</div>
+						</div>
+					</div>
+				</div>
+			</header>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<div class="page-pretitle">
+								<a href="applications.html" x-text="$store.i18n.t('app.back')"></a>
+							</div>
+							<h2 class="page-title" x-text="appName"></h2>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<div class="row row-cards">
+						<!-- API-ключ -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('app.keyCard')"></h3>
+								</div>
+								<div class="card-body">
+									<div class="alert alert-danger" x-show="keyRevoked"
+										x-text="$store.i18n.t('app.revoked')"></div>
+									<p class="mb-1">
+										<span class="text-secondary me-1" x-text="$store.i18n.t('app.keyIssued') + ':'"></span>
+										<span x-text="keyIssuedAt"></span>
+									</p>
+									<p class="mb-1">
+										<span class="text-secondary me-1" x-text="$store.i18n.t('app.keyPrefix') + ':'"></span>
+										<code x-text="keyPrefix"></code>
+									</p>
+									<p class="text-secondary" x-text="$store.i18n.t('app.keyHint')"></p>
+									<div class="btn-list">
+										<button type="button" class="btn btn-outline-primary" data-bs-toggle="modal"
+											data-bs-target="#modal-key" @click="reissue()"
+											x-text="$store.i18n.t('app.reissue')"></button>
+										<button type="button" class="btn btn-outline-danger" @click="keyRevoked = true"
+											x-text="$store.i18n.t('app.revoke')"></button>
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<!-- Соответствие «сеть → кошелёк» (ADR-0011) -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('app.networksCard')"></h3>
+								</div>
+								<div class="card-body">
+									<p class="text-secondary" x-text="$store.i18n.t('app.networksHint')"></p>
+									<div class="table-responsive">
+										<table class="table table-vcenter">
+											<thead>
+												<tr>
+													<th x-text="$store.i18n.t('app.colNetwork')"></th>
+													<th x-text="$store.i18n.t('app.colWallet')"></th>
+													<th></th>
+												</tr>
+											</thead>
+											<tbody>
+												<template x-for="(mapping, i) in networks">
+													<tr>
+														<td><span class="badge bg-blue-lt" x-text="mapping.network"></span></td>
+														<td x-text="mapping.wallet"></td>
+														<td class="text-end">
+															<a href="#" class="link-danger" @click.prevent="networks.splice(i, 1)"
+																x-text="$store.i18n.t('app.remove')"></a>
+														</td>
+													</tr>
+												</template>
+											</tbody>
+										</table>
+									</div>
+									<div class="row g-2 align-items-end" x-show="freeNetworks().length">
+										<div class="col-auto">
+											<select class="form-select" x-model="newMapping.network">
+												<option value="" disabled selected hidden
+													x-text="$store.i18n.t('app.colNetwork')"></option>
+												<template x-for="network in freeNetworks()">
+													<option :value="network" x-text="network"></option>
+												</template>
+											</select>
+										</div>
+										<div class="col-auto">
+											<select class="form-select" x-model="newMapping.wallet">
+												<option value="" disabled selected hidden
+													x-text="$store.i18n.t('app.colWallet')"></option>
+												<template x-for="wallet in wallets">
+													<option :value="wallet" x-text="wallet"></option>
+												</template>
+											</select>
+										</div>
+										<div class="col-auto">
+											<button type="button" class="btn btn-outline-primary" @click="addMapping()"
+												x-text="$store.i18n.t('app.addNetwork')"></button>
+										</div>
+									</div>
+								</div>
+							</div>
+						</div>
+
+						<!-- Пользователи приложения и их адреса -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('app.usersCard')"></h3>
+								</div>
+								<div class="table-responsive">
+									<table class="table table-vcenter card-table">
+										<thead>
+											<tr>
+												<th x-text="$store.i18n.t('app.colUser')"></th>
+												<th x-text="$store.i18n.t('app.colAddresses')"></th>
+												<th x-text="$store.i18n.t('app.colUserCreated')"></th>
+											</tr>
+										</thead>
+										<tbody>
+											<template x-for="user in users">
+												<tr>
+													<td class="font-monospace" x-text="user.id"></td>
+													<td x-text="user.addresses"></td>
+													<td class="text-secondary" x-text="user.created"></td>
+												</tr>
+											</template>
+										</tbody>
+									</table>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Окно показа перевыпущенного ключа (один раз) -->
+		<div class="modal" id="modal-key" tabindex="-1">
+			<div class="modal-dialog modal-lg" role="document">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" x-text="$store.i18n.t('appkey.title')"></h5>
+					</div>
+					<div class="modal-body">
+						<div class="alert alert-warning" x-text="$store.i18n.t('appkey.warning')"></div>
+						<div class="input-group">
+							<input type="text" class="form-control font-monospace" :value="newKey" readonly>
+							<button type="button" class="btn" @click="copyKey()"
+								x-text="copied ? $store.i18n.t('appkey.copied') : $store.i18n.t('appkey.copy')">
+							</button>
+						</div>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-primary" data-bs-dismiss="modal"
+							@click="newKey = null" x-text="$store.i18n.t('appkey.done')"></button>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script src="vendor/tabler/tabler.min.js" defer></script>
+</body>
+</html>

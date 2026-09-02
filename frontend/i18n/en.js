@@ -114,4 +114,47 @@ export const en = {
 	"gen.doneText":
 		"The gateway stored only the xpubs — one per chosen family. The seed phrase is not stored.",
 	"gen.toWallets": "To the wallet list",
+
+	"apps.pageTitle": "Applications (API) — SeedRays",
+	"apps.title": "Applications (API)",
+	"apps.create": "Create an application",
+	"apps.colName": "Name",
+	"apps.colNetworks": "Networks",
+	"apps.colUsers": "Users",
+	"apps.colCreated": "Created",
+
+	"appcreate.title": "New application",
+	"appcreate.name": "Name",
+	"appcreate.namePlaceholder": "For example: Online store",
+	"appcreate.submit": "Create",
+	"appcreate.cancel": "Cancel",
+
+	"appkey.title": "Application key",
+	"appkey.warning":
+		"The key is shown only once: the gateway stores its fingerprint, not the key itself. Copy the key now and hand it to your application.",
+	"appkey.copy": "Copy",
+	"appkey.copied": "Copied",
+	"appkey.done": "Done",
+
+	"app.pageTitle": "Application — SeedRays",
+	"app.back": "To the application list",
+	"app.keyCard": "API key",
+	"app.keyIssued": "Issued",
+	"app.keyPrefix": "The key starts with",
+	"app.keyHint":
+		"The key itself is not stored and cannot be shown again — only its first characters are kept in the open, to identify the key. If the key is lost, reissue it.",
+	"app.reissue": "Reissue the key",
+	"app.revoke": "Revoke the key",
+	"app.revoked": "The key is revoked — the application has no API access.",
+	"app.networksCard": "Networks and wallets",
+	"app.networksHint":
+		"The application works only with the networks in this list; addresses are issued from the specified wallet.",
+	"app.colNetwork": "Network",
+	"app.colWallet": "Wallet",
+	"app.addNetwork": "Add a network",
+	"app.remove": "Remove",
+	"app.usersCard": "Application users",
+	"app.colUser": "Identifier",
+	"app.colAddresses": "Addresses",
+	"app.colUserCreated": "Created",
 };

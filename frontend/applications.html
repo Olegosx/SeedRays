@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="ru" data-title-key="apps.pageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		apps: [
+			{ name: 'Интернет-магазин', networks: ['tron', 'tron-nile'], users: 2, created: '2026-08-30' },
+			{ name: 'Блог', networks: ['tron'], users: 0, created: '2026-09-01' },
+		],
+		form: { name: '' },
+		newKey: null,
+		copied: false,
+		create() {
+			this.apps.push({
+				name: this.form.name || '—',
+				networks: [],
+				users: 0,
+				created: new Date().toISOString().slice(0, 10),
+			});
+			this.form = { name: '' };
+			// Подставной ключ макета: боевой придёт из API и показывается один раз.
+			this.newKey = 'srk_' + Array.from(crypto.getRandomValues(new Uint8Array(24)),
+				(b) => b.toString(16).padStart(2, '0')).join('');
+			this.copied = false;
+		},
+		copyKey() {
+			navigator.clipboard.writeText(this.newKey).then(() => { this.copied = true; });
+		},
+	}">
+		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
+		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
+			<div class="container-fluid">
+				<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
+					data-bs-target="#sidebar-menu" aria-expanded="false">
+					<span class="navbar-toggler-icon"></span>
+				</button>
+				<div class="navbar-brand navbar-brand-autodark">
+					<a href="dashboard.html" class="text-decoration-none fs-2 fw-bold">SeedRays</a>
+				</div>
+				<div class="collapse navbar-collapse" id="sidebar-menu">
+					<ul class="navbar-nav pt-lg-3">
+						<li class="nav-item">
+							<a class="nav-link" href="dashboard.html">
+								<span class="nav-link-icon"><i class="ti ti-home"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.dashboard')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="wallets.html">
+								<span class="nav-link-icon"><i class="ti ti-wallet"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.wallets')"></span>
+							</a>
+						</li>
+						<li class="nav-item active">
+							<a class="nav-link" href="applications.html">
+								<span class="nav-link-icon"><i class="ti ti-plug-connected"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.apps')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="history.html">
+								<span class="nav-link-icon"><i class="ti ti-history"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.history')"></span>
+							</a>
+						</li>
+						<li class="nav-item">
+							<a class="nav-link" href="settings.html">
+								<span class="nav-link-icon"><i class="ti ti-settings"></i></span>
+								<span class="nav-link-title" x-text="$store.i18n.t('menu.settings')"></span>
+							</a>
+						</li>
+					</ul>
+				</div>
+			</div>
+		</aside>
+
+		<div class="page-wrapper">
+			<!-- Верхняя панель: язык и меню пользователя; состав дополняется (сводка и т.п.) -->
+			<header class="navbar navbar-expand-md d-print-none">
+				<div class="container-xl justify-content-end">
+					<div class="navbar-nav flex-row align-items-center">
+						<div class="nav-item dropdown me-2">
+							<a href="#" class="nav-link px-2" data-bs-toggle="dropdown">
+								<i class="ti ti-world me-1"></i>
+								<span x-text="$store.i18n.lang.toUpperCase()"></span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'ru' }" href="#"
+									@click.prevent="$store.i18n.set('ru')">Русский</a>
+								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'en' }" href="#"
+									@click.prevent="$store.i18n.set('en')">English</a>
+							</div>
+						</div>
+						<div class="nav-item dropdown">
+							<!-- Подставные данные макета: имя вошедшего пользователя -->
+							<a href="#" class="nav-link d-flex lh-1 px-2" data-bs-toggle="dropdown">
+								<span class="avatar avatar-sm"><i class="ti ti-user"></i></span>
+								<span class="ps-2">oleg</span>
+							</a>
+							<div class="dropdown-menu dropdown-menu-end">
+								<a class="dropdown-item" href="settings.html"
+									x-text="$store.i18n.t('menu.settings')"></a>
+								<a class="dropdown-item" href="login.html"
+									x-text="$store.i18n.t('menu.logout')"></a>
+							</div>
+						</div>
+					</div>
+				</div>
+			</header>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<h2 class="page-title" x-text="$store.i18n.t('apps.title')"></h2>
+						</div>
+						<div class="col-auto ms-auto d-print-none">
+							<button type="button" class="btn btn-primary" data-bs-toggle="modal"
+								data-bs-target="#modal-create">
+								<i class="ti ti-plus me-1"></i>
+								<span x-text="$store.i18n.t('apps.create')"></span>
+							</button>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<div class="card">
+						<div class="table-responsive">
+							<table class="table table-vcenter card-table">
+								<thead>
+									<tr>
+										<th x-text="$store.i18n.t('apps.colName')"></th>
+										<th x-text="$store.i18n.t('apps.colNetworks')"></th>
+										<th x-text="$store.i18n.t('apps.colUsers')"></th>
+										<th x-text="$store.i18n.t('apps.colCreated')"></th>
+									</tr>
+								</thead>
+								<tbody>
+									<template x-for="app in apps">
+										<tr>
+											<td><a href="application.html" x-text="app.name"></a></td>
+											<td>
+												<template x-for="network in app.networks">
+													<span class="badge bg-blue-lt me-1" x-text="network"></span>
+												</template>
+											</td>
+											<td x-text="app.users"></td>
+											<td class="text-secondary" x-text="app.created"></td>
+										</tr>
+									</template>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Окно создания приложения; после создания — показ ключа (один раз) -->
+		<div class="modal" id="modal-create" tabindex="-1">
+			<div class="modal-dialog modal-lg" role="document">
+				<div class="modal-content">
+					<template x-if="!newKey">
+						<div>
+							<div class="modal-header">
+								<h5 class="modal-title" x-text="$store.i18n.t('appcreate.title')"></h5>
+								<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+							</div>
+							<form @submit.prevent="create()">
+								<div class="modal-body">
+									<div class="mb-3">
+										<label class="form-label" x-text="$store.i18n.t('appcreate.name')"></label>
+										<input type="text" class="form-control" x-model="form.name"
+											:placeholder="$store.i18n.t('appcreate.namePlaceholder')" autocomplete="off">
+									</div>
+								</div>
+								<div class="modal-footer">
+									<button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal"
+										x-text="$store.i18n.t('appcreate.cancel')"></button>
+									<button type="submit" class="btn btn-primary"
+										x-text="$store.i18n.t('appcreate.submit')"></button>
+								</div>
+							</form>
+						</div>
+					</template>
+					<template x-if="newKey">
+						<div>
+							<div class="modal-header">
+								<h5 class="modal-title" x-text="$store.i18n.t('appkey.title')"></h5>
+							</div>
+							<div class="modal-body">
+								<div class="alert alert-warning" x-text="$store.i18n.t('appkey.warning')"></div>
+								<div class="input-group">
+									<input type="text" class="form-control font-monospace" :value="newKey" readonly>
+									<button type="button" class="btn"
+										@click="copyKey()"
+										x-text="copied ? $store.i18n.t('appkey.copied') : $store.i18n.t('appkey.copy')">
+									</button>
+								</div>
+							</div>
+							<div class="modal-footer">
+								<button type="button" class="btn btn-primary" data-bs-dismiss="modal"
+									@click="newKey = null" x-text="$store.i18n.t('appkey.done')"></button>
+							</div>
+						</div>
+					</template>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script src="vendor/tabler/tabler.min.js" defer></script>
+</body>
+</html>

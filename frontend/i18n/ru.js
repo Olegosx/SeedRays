@@ -116,4 +116,47 @@ export const ru = {
 	"gen.doneText":
 		"Шлюз сохранил только xpub — по одному на выбранное семейство. Сид-фраза не сохранена.",
 	"gen.toWallets": "К списку кошельков",
+
+	"apps.pageTitle": "Приложения (API) — SeedRays",
+	"apps.title": "Приложения (API)",
+	"apps.create": "Создать приложение",
+	"apps.colName": "Название",
+	"apps.colNetworks": "Сети",
+	"apps.colUsers": "Пользователи",
+	"apps.colCreated": "Создано",
+
+	"appcreate.title": "Новое приложение",
+	"appcreate.name": "Название",
+	"appcreate.namePlaceholder": "Например: Интернет-магазин",
+	"appcreate.submit": "Создать",
+	"appcreate.cancel": "Отмена",
+
+	"appkey.title": "Ключ приложения",
+	"appkey.warning":
+		"Ключ показывается только один раз: шлюз хранит не сам ключ, а его отпечаток. Скопируйте ключ сейчас и передайте его приложению.",
+	"appkey.copy": "Скопировать",
+	"appkey.copied": "Скопировано",
+	"appkey.done": "Готово",
+
+	"app.pageTitle": "Приложение — SeedRays",
+	"app.back": "К списку приложений",
+	"app.keyCard": "API-ключ",
+	"app.keyIssued": "Выпущен",
+	"app.keyPrefix": "Ключ начинается с",
+	"app.keyHint":
+		"Сам ключ не хранится и не может быть показан повторно — открыто хранятся только первые символы, чтобы опознать ключ. Если ключ утерян — перевыпустите его.",
+	"app.reissue": "Перевыпустить ключ",
+	"app.revoke": "Отозвать ключ",
+	"app.revoked": "Ключ отозван — у приложения нет доступа к API.",
+	"app.networksCard": "Сети и кошельки",
+	"app.networksHint":
+		"Приложение работает только с сетями из этого списка; адреса выдаются из указанного кошелька.",
+	"app.colNetwork": "Сеть",
+	"app.colWallet": "Кошелёк",
+	"app.addNetwork": "Добавить сеть",
+	"app.remove": "Убрать",
+	"app.usersCard": "Пользователи приложения",
+	"app.colUser": "Идентификатор",
+	"app.colAddresses": "Адреса",
+	"app.colUserCreated": "Создан",
 };
