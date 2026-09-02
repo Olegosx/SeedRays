@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-title-key="dashboard.pageTitle">
+<html lang="ru" data-title-key="wallets.pageTitle">
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,8 +11,31 @@
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body>
-	<div class="page" x-cloak x-data>
-		<!-- Боковое меню кабинета: пять разделов + выход (см. docs, «Структура кабинета») -->
+	<div class="page" x-cloak x-data="{
+		wallets: [
+			{ label: 'Основной', family: 'TRON', addresses: 14, added: '2026-08-30' },
+			{ label: 'Магазин EVM', family: 'EVM', addresses: 3, added: '2026-09-01' },
+		],
+		form: { family: 'tron', xpub: '', label: '' },
+		attach() {
+			this.wallets.push({
+				label: this.form.label || '—',
+				family: this.form.family.toUpperCase(),
+				addresses: 0,
+				added: new Date().toISOString().slice(0, 10),
+			});
+			this.form = { family: 'tron', xpub: '', label: '' };
+		},
+		init() {
+			// Переход со страницы генерации: #attach сразу открывает окно прикрепления.
+			window.addEventListener('load', () => {
+				if (location.hash === '#attach') {
+					new window.tabler.Modal(document.getElementById('modal-attach')).show();
+				}
+			});
+		},
+	}">
+		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
 		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
 			<div class="container-fluid">
 				<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
@@ -24,13 +47,13 @@
 				</div>
 				<div class="collapse navbar-collapse" id="sidebar-menu">
 					<ul class="navbar-nav pt-lg-3">
-						<li class="nav-item active">
+						<li class="nav-item">
 							<a class="nav-link" href="dashboard.html">
 								<span class="nav-link-icon"><i class="ti ti-home"></i></span>
 								<span class="nav-link-title" x-text="$store.i18n.t('menu.dashboard')"></span>
 							</a>
 						</li>
-						<li class="nav-item">
+						<li class="nav-item active">
 							<a class="nav-link" href="wallets.html">
 								<span class="nav-link-icon"><i class="ti ti-wallet"></i></span>
 								<span class="nav-link-title" x-text="$store.i18n.t('menu.wallets')"></span>
@@ -96,7 +119,20 @@
 				<div class="container-xl">
 					<div class="row g-2 align-items-center">
 						<div class="col">
-							<h2 class="page-title" x-text="$store.i18n.t('dashboard.title')"></h2>
+							<h2 class="page-title" x-text="$store.i18n.t('wallets.title')"></h2>
+						</div>
+						<div class="col-auto ms-auto d-print-none">
+							<div class="btn-list">
+								<a href="wallet-generate.html" class="btn btn-outline-secondary">
+									<i class="ti ti-alert-triangle me-1"></i>
+									<span x-text="$store.i18n.t('wallets.generate')"></span>
+								</a>
+								<button type="button" class="btn btn-primary" data-bs-toggle="modal"
+									data-bs-target="#modal-attach">
+									<i class="ti ti-plus me-1"></i>
+									<span x-text="$store.i18n.t('wallets.attach')"></span>
+								</button>
+							</div>
 						</div>
 					</div>
 				</div>
@@ -104,10 +140,69 @@
 			<div class="page-body">
 				<div class="container-xl">
 					<div class="card">
-						<div class="card-body">
-							<p class="text-secondary mb-0" x-text="$store.i18n.t('dashboard.stub')"></p>
+						<div class="table-responsive">
+							<table class="table table-vcenter card-table">
+								<thead>
+									<tr>
+										<th x-text="$store.i18n.t('wallets.colLabel')"></th>
+										<th x-text="$store.i18n.t('wallets.colFamily')"></th>
+										<th x-text="$store.i18n.t('wallets.colAddresses')"></th>
+										<th x-text="$store.i18n.t('wallets.colAdded')"></th>
+									</tr>
+								</thead>
+								<tbody>
+									<template x-for="w in wallets">
+										<tr>
+											<td><a href="#" x-text="w.label"></a></td>
+											<td><span class="badge bg-blue-lt" x-text="w.family"></span></td>
+											<td x-text="w.addresses"></td>
+											<td class="text-secondary" x-text="w.added"></td>
+										</tr>
+									</template>
+								</tbody>
+							</table>
 						</div>
 					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Окно прикрепления кошелька (рекомендуемый путь, ADR-0002) -->
+		<div class="modal" id="modal-attach" tabindex="-1">
+			<div class="modal-dialog modal-lg" role="document">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" x-text="$store.i18n.t('attach.title')"></h5>
+						<button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+					</div>
+					<form @submit.prevent="attach()">
+						<div class="modal-body">
+							<p class="text-secondary" x-text="$store.i18n.t('attach.hint')"></p>
+							<div class="mb-3">
+								<label class="form-label" x-text="$store.i18n.t('attach.family')"></label>
+								<select class="form-select" x-model="form.family">
+									<option value="tron">TRON</option>
+									<option value="evm">EVM</option>
+								</select>
+							</div>
+							<div class="mb-3">
+								<label class="form-label" x-text="$store.i18n.t('attach.xpub')"></label>
+								<input type="text" class="form-control font-monospace" x-model="form.xpub"
+									:placeholder="$store.i18n.t('attach.xpubPlaceholder')" autocomplete="off">
+							</div>
+							<div class="mb-3">
+								<label class="form-label" x-text="$store.i18n.t('attach.label')"></label>
+								<input type="text" class="form-control" x-model="form.label"
+									:placeholder="$store.i18n.t('attach.labelPlaceholder')" autocomplete="off">
+							</div>
+						</div>
+						<div class="modal-footer">
+							<button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal"
+								x-text="$store.i18n.t('attach.cancel')"></button>
+							<button type="submit" class="btn btn-primary" data-bs-dismiss="modal"
+								x-text="$store.i18n.t('attach.submit')"></button>
+						</div>
+					</form>
 				</div>
 			</div>
 		</div>

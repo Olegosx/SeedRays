@@ -63,4 +63,55 @@ export const en = {
 	"dashboard.pageTitle": "Dashboard — SeedRays",
 	"dashboard.title": "Dashboard",
 	"dashboard.stub": "The dashboard contents will be defined separately.",
+
+	"wallets.pageTitle": "Wallets — SeedRays",
+	"wallets.title": "Wallets",
+	"wallets.attach": "Attach a wallet",
+	"wallets.generate": "Create in the gateway",
+	"wallets.colLabel": "Label",
+	"wallets.colFamily": "Family",
+	"wallets.colAddresses": "Addresses",
+	"wallets.colAdded": "Added",
+
+	"attach.title": "Attach a wallet",
+	"attach.hint":
+		"The recommended path: the keys are created outside the gateway, and only the public key (xpub) is submitted. No secrets ever touch the gateway.",
+	"attach.family": "Family",
+	"attach.xpub": "Account-level xpub",
+	"attach.xpubPlaceholder": "xpub6…",
+	"attach.label": "Label",
+	"attach.labelPlaceholder": "For example: Main",
+	"attach.submit": "Attach",
+	"attach.cancel": "Cancel",
+
+	"gen.pageTitle": "Create a wallet — SeedRays",
+	"gen.title": "Creating a wallet in the gateway",
+	"gen.recommended":
+		"The recommended way is to create the keys on your own machine (for example, with the standalone keygen utility) and give the gateway only the xpub — no secrets ever reach the server.",
+	"gen.risk":
+		"If exporting an xpub feels complicated, you can create a wallet right here. Keep in mind: the seed phrase will be shown only once and is stored nowhere — the service cannot remind you of it or recover it. Write the phrase down right away and keep it somewhere safe.",
+	"gen.lengthLabel": "Seed phrase length",
+	"gen.words12": "12 words",
+	"gen.words24": "24 words",
+	"gen.familiesLabel": "Families — one wallet per checked family",
+	"gen.passphraseLabel": "Use a BIP39 passphrase",
+	"gen.passphraseHint":
+		"Optional: the passphrase is an extra password for the wallet. A mistyped password gives no error message — a non-existent wallet is simply opened.",
+	"gen.passphraseWarning": "If you forget the passphrase, access to the funds is lost forever.",
+	"gen.passphrasePlaceholder": "Passphrase",
+	"gen.generate": "Generate",
+	"gen.cancel": "Cancel",
+	"gen.phraseTitle": "Write down the seed phrase",
+	"gen.phraseWarning":
+		"The phrase is shown exactly once and is stored nowhere. Anyone who knows it controls the funds. Write it down on paper and keep it offline.",
+	"gen.written": "I wrote the phrase down — continue",
+	"gen.confirmTitle": "Confirm the write-down",
+	"gen.confirmText": "Enter the phrase words with the requested numbers:",
+	"gen.word": "Word #",
+	"gen.confirmError": "The words do not match the phrase.",
+	"gen.confirm": "Confirm and create",
+	"gen.doneTitle": "Wallets created",
+	"gen.doneText":
+		"The gateway stored only the xpubs — one per chosen family. The seed phrase is not stored.",
+	"gen.toWallets": "To the wallet list",
 };
