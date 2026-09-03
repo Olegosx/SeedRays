@@ -20,8 +20,9 @@ from seedrays.api.errors import ApiError
 from seedrays.mail.base import MailSender
 from seedrays.mail.resend import ResendSender
 from seedrays.orchestrator import auth
+from seedrays.orchestrator import wallets as wallet_ops
 from seedrays.storage import registry as registry_ops
-from seedrays.storage.engine import create_sqlite_engine, registry_db_path
+from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
 
 SESSION_COOKIE = "seedrays_session"
 
@@ -45,6 +46,22 @@ class LoginRequest(BaseModel):
 	identifier: str = Field(min_length=1, max_length=255)
 	password: str = Field(min_length=1, max_length=1024)
 	remember: bool = False
+
+
+class AttachWalletRequest(BaseModel):
+	"""Body of the attach-wallet operation."""
+
+	family: str = Field(min_length=1, max_length=16)
+	xpub: str = Field(min_length=1, max_length=256)
+	label: str = Field(default="", max_length=64)
+
+
+class GenerateWalletRequest(BaseModel):
+	"""Body of the in-gateway generation operation."""
+
+	words: int
+	families: list[str] = Field(min_length=1, max_length=8)
+	passphrase: str = Field(default="", max_length=256)
 
 
 @dataclass
@@ -172,6 +189,66 @@ def register_user_routes(
 		await auth.sign_out(ctx.registry, ctx.session_token)
 		response.delete_cookie(SESSION_COOKIE, path="/")
 		return {"ok": True}
+
+	async def user_engine(ctx: UserContext = SessionDep) -> AsyncIterator[AsyncEngine]:
+		"""Open the session user's own database for one request."""
+		user = await registry_ops.get_user_by_id(ctx.registry, ctx.user.user_id)
+		if user is None:
+			raise ApiError(401, "unauthorized", "the user is gone")
+		engine = create_sqlite_engine(user_db_path(data_dir, user.directory))
+		try:
+			yield engine
+		finally:
+			await engine.dispose()
+
+	UserEngineDep = Depends(user_engine)
+
+	def _wallet_json(wallet: wallet_ops.WalletInfo) -> dict:
+		return {
+			"id": wallet.id,
+			"family": wallet.family,
+			"xpub": wallet.xpub,
+			"label": wallet.label,
+			"addresses": wallet.addresses,
+			"created_at": wallet.created_at.isoformat() if wallet.created_at else None,
+		}
+
+	@app.get("/v1/user/wallets")
+	async def list_wallets(
+		ctx: UserContext = SessionDep, engine: AsyncEngine = UserEngineDep
+	) -> dict:
+		"""The user's wallets with bound address counts."""
+		return {"wallets": [_wallet_json(w) for w in await wallet_ops.list_wallets(engine)]}
+
+	@app.post("/v1/user/wallets")
+	async def attach_wallet(
+		body: AttachWalletRequest,
+		ctx: UserContext = SessionDep,
+		engine: AsyncEngine = UserEngineDep,
+		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+	) -> dict:
+		"""Attach a watch-only wallet (the recommended path of ADR-0002)."""
+		check_csrf(ctx, x_csrf_token)
+		wallet = await wallet_ops.attach_wallet(
+			engine, family=body.family, xpub=body.xpub, label=body.label
+		)
+		return {"wallet": _wallet_json(wallet)}
+
+	@app.post("/v1/user/wallets/generate")
+	async def generate_wallet(
+		body: GenerateWalletRequest,
+		ctx: UserContext = SessionDep,
+		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+	) -> dict:
+		"""One-time seed generation: the phrase is returned once, stored never."""
+		check_csrf(ctx, x_csrf_token)
+		material = wallet_ops.generate_material(
+			words=body.words, families=body.families, passphrase=body.passphrase
+		)
+		return {
+			"phrase": material.phrase.split(" "),
+			"wallets": [{"family": family, "xpub": xpub} for family, xpub in material.xpubs],
+		}
 
 	@app.get("/v1/user/me")
 	async def me(ctx: UserContext = SessionDep) -> dict:

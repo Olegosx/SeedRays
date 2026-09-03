@@ -25,6 +25,10 @@ export const ru = {
 	"errors.weak_password": "Пароль слишком короткий — минимум 8 знаков.",
 	"errors.mail_failed": "Не удалось отправить письмо — попробуйте позже.",
 	"errors.network": "Нет связи с сервером.",
+	"errors.invalid_xpub": "Это не похоже на корректный xpub уровня аккаунта.",
+	"errors.invalid_family": "Неизвестное семейство кошелька.",
+	"errors.invalid_words": "Длина фразы — 12 или 24 слова.",
+	"errors.no_families": "Отметьте хотя бы одно семейство.",
 
 	"register.pageTitle": "Регистрация — SeedRays",
 	"register.title": "Создание учётной записи",

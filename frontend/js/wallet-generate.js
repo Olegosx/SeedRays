@@ -1,14 +1,7 @@
-// Логика шагов генерации кошелька в шлюзе (макет: данные подставные).
-// Шаги: 1 — параметры; 2 — показ фразы; 3 — проверка трёх слов; 4 — готово.
-
-// Подставная фраза макета. В боевой версии фраза приходит из API и
-// существует только в памяти страницы до ухода с неё.
-const MOCK_WORDS = [
-	"ripple", "canyon", "vault", "ladder", "spice", "orbit",
-	"meadow", "pilot", "copper", "lunar", "velvet", "anchor",
-	"cabin", "sunset", "walnut", "ember", "piano", "stone",
-	"garden", "mimic", "harvest", "ocean", "tiger", "blend",
-];
+// Шаги генерации кошелька в шлюзе (ADR-0002).
+// Фраза приходит из API один раз и живёт только в памяти страницы;
+// после проверки трёх слов кошельки прикрепляются обычным путём
+// «семейство + xpub» — сид повторно по сети не передаётся.
 
 document.addEventListener("alpine:init", () => {
 	window.Alpine.data("genFlow", () => ({
@@ -18,49 +11,89 @@ document.addEventListener("alpine:init", () => {
 		usePassphrase: false,
 		passphrase: "",
 		phrase: [],
+		material: [], // [{family, xpub}] — из ответа генерации
+		created: [],
 		checkIndexes: [],
 		answers: ["", "", ""],
 		mismatch: false,
+		error: "",
 
 		canGenerate() {
 			return (this.words === 12 || this.words === 24)
 				&& (this.families.tron || this.families.evm);
 		},
 
-		generate() {
-			this.phrase = MOCK_WORDS.slice(0, this.words);
-			const indexes = new Set();
-			while (indexes.size < 3) {
-				indexes.add(Math.floor(Math.random() * this.phrase.length));
+		selectedFamilies() {
+			return Object.keys(this.families).filter((f) => this.families[f]);
+		},
+
+		async generate() {
+			this.error = "";
+			try {
+				const { api } = await import("/js/api.js");
+				const data = await api("POST", "/v1/user/wallets/generate", {
+					words: this.words,
+					families: this.selectedFamilies(),
+					passphrase: this.usePassphrase ? this.passphrase : "",
+				});
+				this.phrase = data.phrase;
+				this.material = data.wallets;
+				const indexes = new Set();
+				while (indexes.size < 3) {
+					indexes.add(Math.floor(Math.random() * this.phrase.length));
+				}
+				this.checkIndexes = [...indexes].sort((a, b) => a - b);
+				this.answers = ["", "", ""];
+				this.step = 2;
+			} catch (e) {
+				this.error = this._message(e);
 			}
-			this.checkIndexes = [...indexes].sort((a, b) => a - b);
-			this.answers = ["", "", ""];
-			this.step = 2;
 		},
 
 		confirmWritten() {
 			this.step = 3;
 		},
 
-		check() {
+		async check() {
 			this.mismatch = this.checkIndexes.some(
 				(wordIndex, i) =>
 					this.answers[i].trim().toLowerCase() !== this.phrase[wordIndex],
 			);
-			if (!this.mismatch) {
+			if (this.mismatch) {
+				return;
+			}
+			this.error = "";
+			try {
+				const { api } = await import("/js/api.js");
+				const created = [];
+				for (const wallet of this.material) {
+					const result = await api("POST", "/v1/user/wallets", {
+						family: wallet.family,
+						xpub: wallet.xpub,
+						label: "",
+					});
+					created.push(result.wallet);
+				}
+				this.created = created;
+				// Фраза больше не нужна — убираем её из состояния страницы.
+				this.phrase = [];
+				this.material = [];
 				this.step = 4;
+			} catch (e) {
+				this.error = this._message(e);
 			}
 		},
 
 		createdWallets() {
-			const wallets = [];
-			if (this.families.tron) {
-				wallets.push({ family: "TRON", xpub: "xpub6BtronMOCK…" });
-			}
-			if (this.families.evm) {
-				wallets.push({ family: "EVM", xpub: "xpub6CevmMOCK…" });
-			}
-			return wallets;
+			return this.created.map((wallet) => ({
+				family: wallet.family.toUpperCase(),
+				xpub: wallet.xpub.slice(0, 12) + "…",
+			}));
+		},
+
+		_message(e) {
+			const known = this.$store.i18n.t("errors." + e.code);
+			return known !== "errors." + e.code ? known : e.message;
 		},
 	}));
 });

@@ -13,21 +13,29 @@
 </head>
 <body>
 	<div class="page" x-cloak x-data="{
-		wallets: [
-			{ label: 'Основной', family: 'TRON', addresses: 14, added: '2026-08-30' },
-			{ label: 'Магазин EVM', family: 'EVM', addresses: 3, added: '2026-09-01' },
-		],
+		wallets: [],
 		form: { family: 'tron', xpub: '', label: '' },
-		attach() {
-			this.wallets.push({
-				label: this.form.label || '—',
-				family: this.form.family.toUpperCase(),
-				addresses: 0,
-				added: new Date().toISOString().slice(0, 10),
-			});
-			this.form = { family: 'tron', xpub: '', label: '' };
+		error: '',
+		async loadWallets() {
+			const { api } = await import('/js/api.js');
+			this.wallets = (await api('GET', '/v1/user/wallets')).wallets;
+		},
+		async attach() {
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api('POST', '/v1/user/wallets', this.form);
+				this.form = { family: 'tron', xpub: '', label: '' };
+				window.tabler.Modal.getOrCreateInstance(
+					document.getElementById('modal-attach')).hide();
+				await this.loadWallets();
+			} catch (e) {
+				const known = this.$store.i18n.t('errors.' + e.code);
+				this.error = known !== 'errors.' + e.code ? known : e.message;
+			}
 		},
 		init() {
+			this.loadWallets();
 			// Переход со страницы генерации: #attach сразу открывает окно прикрепления.
 			window.addEventListener('load', () => {
 				if (location.hash === '#attach') {
@@ -154,10 +162,11 @@
 								<tbody>
 									<template x-for="w in wallets">
 										<tr>
-											<td><a href="#" x-text="w.label"></a></td>
-											<td><span class="badge bg-blue-lt" x-text="w.family"></span></td>
+											<td><a href="#" x-text="w.label || '—'"></a></td>
+											<td><span class="badge bg-blue-lt" x-text="w.family.toUpperCase()"></span></td>
 											<td x-text="w.addresses"></td>
-											<td class="text-secondary" x-text="w.added"></td>
+											<td class="text-secondary"
+												x-text="w.created_at ? w.created_at.slice(0, 10) : ''"></td>
 										</tr>
 									</template>
 								</tbody>
@@ -179,6 +188,7 @@
 					<form @submit.prevent="attach()">
 						<div class="modal-body">
 							<p class="text-secondary" x-text="$store.i18n.t('attach.hint')"></p>
+							<div class="alert alert-danger" x-show="error" x-text="error"></div>
 							<div class="mb-3">
 								<label class="form-label" x-text="$store.i18n.t('attach.family')"></label>
 								<select class="form-select" x-model="form.family">
@@ -200,7 +210,7 @@
 						<div class="modal-footer">
 							<button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal"
 								x-text="$store.i18n.t('attach.cancel')"></button>
-							<button type="submit" class="btn btn-primary" data-bs-dismiss="modal"
+							<button type="submit" class="btn btn-primary"
 								x-text="$store.i18n.t('attach.submit')"></button>
 						</div>
 					</form>

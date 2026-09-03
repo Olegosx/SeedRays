@@ -34,6 +34,10 @@ _OPERATION_STATUS = {
 	"invalid_credentials": 401,
 	"email_not_confirmed": 403,
 	"mail_failed": 502,
+	"invalid_family": 400,
+	"invalid_xpub": 400,
+	"invalid_words": 400,
+	"no_families": 400,
 }
 
 

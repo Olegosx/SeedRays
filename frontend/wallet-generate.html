@@ -61,6 +61,7 @@
 						<span x-text="$store.i18n.t('wallets.attach')"></span>
 					</a>
 					<div class="alert alert-warning" x-text="$store.i18n.t('gen.risk')"></div>
+					<div class="alert alert-danger" x-show="error" x-text="error"></div>
 					<form @submit.prevent="generate()">
 						<div class="mb-3">
 							<label class="form-label" x-text="$store.i18n.t('gen.lengthLabel')"></label>
@@ -148,6 +149,7 @@
 						</template>
 						<div class="text-danger mb-3" x-show="mismatch"
 							x-text="$store.i18n.t('gen.confirmError')"></div>
+						<div class="alert alert-danger" x-show="error" x-text="error"></div>
 						<button type="submit" class="btn btn-primary w-100"
 							x-text="$store.i18n.t('gen.confirm')"></button>
 					</form>

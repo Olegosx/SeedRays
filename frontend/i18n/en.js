@@ -25,6 +25,10 @@ export const en = {
 	"errors.weak_password": "The password is too short — at least 8 characters.",
 	"errors.mail_failed": "Could not send the email — try again later.",
 	"errors.network": "No connection to the server.",
+	"errors.invalid_xpub": "This does not look like a valid account-level xpub.",
+	"errors.invalid_family": "Unknown wallet family.",
+	"errors.invalid_words": "The phrase length is 12 or 24 words.",
+	"errors.no_families": "Check at least one family.",
 
 	"register.pageTitle": "Sign up — SeedRays",
 	"register.title": "Create an account",
