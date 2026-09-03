@@ -43,7 +43,10 @@ applications = Table(
 	metadata,
 	Column("id", Integer, primary_key=True),
 	Column("name", String(64), nullable=False),
-	Column("key_hash", String(128), nullable=False, unique=True),
+	# NULL — ключ отозван; первые символы ключа хранятся открыто для опознания.
+	Column("key_hash", String(128), unique=True),
+	Column("key_prefix", String(16), nullable=False, server_default=""),
+	Column("key_issued_at", DateTime),
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
 )
 

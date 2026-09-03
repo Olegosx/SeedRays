@@ -13,43 +13,82 @@
 </head>
 <body>
 	<div class="page" x-cloak x-data="{
-		appName: 'Интернет-магазин',
-		keyIssuedAt: '2026-08-30 14:02',
-		keyPrefix: 'srk_c9a24…',
+		appId: null,
+		appName: '',
+		keyIssuedAt: '',
+		keyPrefix: '',
 		keyRevoked: false,
 		newKey: null,
 		copied: false,
-		wallets: ['Основной', 'Магазин EVM'],
+		wallets: [],
 		allNetworks: ['tron', 'tron-nile'],
-		networks: [
-			{ network: 'tron', wallet: 'Основной' },
-			{ network: 'tron-nile', wallet: 'Основной' },
-		],
+		networks: [],
 		newMapping: { network: '', wallet: '' },
-		users: [
-			{ id: 'user1', addresses: 2, created: '2026-08-30' },
-			{ id: 'user2', addresses: 1, created: '2026-09-01' },
-		],
+		users: [],
+		error: '',
+		async load() {
+			const { api } = await import('/js/api.js');
+			const data = await api('GET', '/v1/user/applications/' + this.appId);
+			const application = data.application;
+			this.appName = application.name;
+			this.keyPrefix = application.key.prefix ? application.key.prefix + '…' : '—';
+			this.keyIssuedAt = application.key.issued_at
+				? application.key.issued_at.slice(0, 16).replace('T', ' ') : '—';
+			this.keyRevoked = application.key.revoked;
+			this.networks = data.networks;
+			this.users = data.app_users;
+			this.wallets = (await api('GET', '/v1/user/wallets')).wallets;
+		},
+		walletName(walletId) {
+			const wallet = this.wallets.find((w) => w.id === walletId);
+			return wallet ? (wallet.label || wallet.family.toUpperCase()) : walletId;
+		},
 		freeNetworks() {
 			return this.allNetworks.filter((n) => !this.networks.some((m) => m.network === n));
 		},
-		addMapping() {
-			if (this.newMapping.network && this.newMapping.wallet) {
-				this.networks.push({ ...this.newMapping });
-				this.newMapping = { network: '', wallet: '' };
-			}
+		async addMapping() {
+			if (!this.newMapping.network || !this.newMapping.wallet) { return; }
+			await this._call('PUT', '/v1/user/applications/' + this.appId + '/networks', {
+				network: this.newMapping.network,
+				wallet_id: Number(this.newMapping.wallet),
+			});
+			this.newMapping = { network: '', wallet: '' };
 		},
-		reissue() {
-			// Подставной ключ макета: боевой придёт из API и показывается один раз.
-			this.newKey = 'srk_' + Array.from(crypto.getRandomValues(new Uint8Array(24)),
-				(b) => b.toString(16).padStart(2, '0')).join('');
-			this.copied = false;
-			this.keyRevoked = false;
-			this.keyPrefix = this.newKey.slice(0, 9) + '…';
-			this.keyIssuedAt = new Date().toISOString().slice(0, 16).replace('T', ' ');
+		async removeMapping(network) {
+			await this._call('DELETE',
+				'/v1/user/applications/' + this.appId + '/networks/' + network);
+		},
+		async reissue() {
+			const { api } = await import('/js/api.js');
+			try {
+				const result = await api('POST', '/v1/user/applications/' + this.appId + '/key');
+				this.newKey = result.key;
+				this.copied = false;
+				await this.load();
+			} catch (e) { this.error = this._message(e); }
+		},
+		async revoke() {
+			await this._call('DELETE', '/v1/user/applications/' + this.appId + '/key');
+		},
+		async _call(method, path, body) {
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api(method, path, body);
+				await this.load();
+			} catch (e) { this.error = this._message(e); }
+		},
+		_message(e) {
+			const known = this.$store.i18n.t('errors.' + e.code);
+			return known !== 'errors.' + e.code ? known : e.message;
 		},
 		copyKey() {
 			navigator.clipboard.writeText(this.newKey).then(() => { this.copied = true; });
+		},
+		init() {
+			this.appId = new URLSearchParams(location.search).get('id');
+			if (!this.appId) { location.href = 'applications.html'; return; }
+			this.load().catch(() => { location.href = 'applications.html'; });
 		},
 	}">
 		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
@@ -154,6 +193,7 @@
 									<h3 class="card-title" x-text="$store.i18n.t('app.keyCard')"></h3>
 								</div>
 								<div class="card-body">
+									<div class="alert alert-danger" x-show="error" x-text="error"></div>
 									<div class="alert alert-danger" x-show="keyRevoked"
 										x-text="$store.i18n.t('app.revoked')"></div>
 									<p class="mb-1">
@@ -169,7 +209,7 @@
 										<button type="button" class="btn btn-outline-primary" data-bs-toggle="modal"
 											data-bs-target="#modal-key" @click="reissue()"
 											x-text="$store.i18n.t('app.reissue')"></button>
-										<button type="button" class="btn btn-outline-danger" @click="keyRevoked = true"
+										<button type="button" class="btn btn-outline-danger" @click="revoke()"
 											x-text="$store.i18n.t('app.revoke')"></button>
 									</div>
 								</div>
@@ -194,12 +234,13 @@
 												</tr>
 											</thead>
 											<tbody>
-												<template x-for="(mapping, i) in networks">
+												<template x-for="mapping in networks">
 													<tr>
 														<td><span class="badge bg-blue-lt" x-text="mapping.network"></span></td>
-														<td x-text="mapping.wallet"></td>
+														<td x-text="mapping.wallet_label || walletName(mapping.wallet_id)"></td>
 														<td class="text-end">
-															<a href="#" class="link-danger" @click.prevent="networks.splice(i, 1)"
+															<a href="#" class="link-danger"
+																@click.prevent="removeMapping(mapping.network)"
 																x-text="$store.i18n.t('app.remove')"></a>
 														</td>
 													</tr>
@@ -222,7 +263,8 @@
 												<option value="" disabled selected hidden
 													x-text="$store.i18n.t('app.colWallet')"></option>
 												<template x-for="wallet in wallets">
-													<option :value="wallet" x-text="wallet"></option>
+													<option :value="wallet.id"
+														x-text="wallet.label || wallet.family.toUpperCase()"></option>
 												</template>
 											</select>
 										</div>
@@ -253,9 +295,10 @@
 										<tbody>
 											<template x-for="user in users">
 												<tr>
-													<td class="font-monospace" x-text="user.id"></td>
+													<td class="font-monospace" x-text="user.external_id"></td>
 													<td x-text="user.addresses"></td>
-													<td class="text-secondary" x-text="user.created"></td>
+													<td class="text-secondary"
+														x-text="user.created_at ? user.created_at.slice(0, 10) : ''"></td>
 												</tr>
 											</template>
 										</tbody>

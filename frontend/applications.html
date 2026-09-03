@@ -13,29 +13,34 @@
 </head>
 <body>
 	<div class="page" x-cloak x-data="{
-		apps: [
-			{ name: 'Интернет-магазин', networks: ['tron', 'tron-nile'], users: 2, created: '2026-08-30' },
-			{ name: 'Блог', networks: ['tron'], users: 0, created: '2026-09-01' },
-		],
+		apps: [],
 		form: { name: '' },
 		newKey: null,
 		copied: false,
-		create() {
-			this.apps.push({
-				name: this.form.name || '—',
-				networks: [],
-				users: 0,
-				created: new Date().toISOString().slice(0, 10),
-			});
-			this.form = { name: '' };
-			// Подставной ключ макета: боевой придёт из API и показывается один раз.
-			this.newKey = 'srk_' + Array.from(crypto.getRandomValues(new Uint8Array(24)),
-				(b) => b.toString(16).padStart(2, '0')).join('');
-			this.copied = false;
+		error: '',
+		async loadApps() {
+			const { api } = await import('/js/api.js');
+			this.apps = (await api('GET', '/v1/user/applications')).applications;
+		},
+		async create() {
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				const result = await api('POST', '/v1/user/applications', this.form);
+				this.form = { name: '' };
+				// Ключ показывается один раз — здесь и больше нигде.
+				this.newKey = result.key;
+				this.copied = false;
+				await this.loadApps();
+			} catch (e) {
+				const known = this.$store.i18n.t('errors.' + e.code);
+				this.error = known !== 'errors.' + e.code ? known : e.message;
+			}
 		},
 		copyKey() {
 			navigator.clipboard.writeText(this.newKey).then(() => { this.copied = true; });
 		},
+		init() { this.loadApps(); },
 	}">
 		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
 		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
@@ -149,14 +154,19 @@
 								<tbody>
 									<template x-for="app in apps">
 										<tr>
-											<td><a href="application.html" x-text="app.name"></a></td>
+											<td>
+												<a :href="'application.html?id=' + app.id" x-text="app.name"></a>
+												<span class="badge bg-red-lt ms-1" x-show="app.key.revoked"
+													x-text="$store.i18n.t('apps.revoked')"></span>
+											</td>
 											<td>
 												<template x-for="network in app.networks">
 													<span class="badge bg-blue-lt me-1" x-text="network"></span>
 												</template>
 											</td>
 											<td x-text="app.users"></td>
-											<td class="text-secondary" x-text="app.created"></td>
+											<td class="text-secondary"
+												x-text="app.created_at ? app.created_at.slice(0, 10) : ''"></td>
 										</tr>
 									</template>
 								</tbody>
@@ -179,6 +189,7 @@
 							</div>
 							<form @submit.prevent="create()">
 								<div class="modal-body">
+									<div class="alert alert-danger" x-show="error" x-text="error"></div>
 									<div class="mb-3">
 										<label class="form-label" x-text="$store.i18n.t('appcreate.name')"></label>
 										<input type="text" class="form-control" x-model="form.name"

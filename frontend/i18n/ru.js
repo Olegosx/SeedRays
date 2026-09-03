@@ -29,6 +29,9 @@ export const ru = {
 	"errors.invalid_family": "Неизвестное семейство кошелька.",
 	"errors.invalid_words": "Длина фразы — 12 или 24 слова.",
 	"errors.no_families": "Отметьте хотя бы одно семейство.",
+	"errors.invalid_name": "Название: от 1 до 64 знаков.",
+	"errors.unknown_application": "Такого приложения нет.",
+	"errors.wallet_missing": "Такого кошелька нет.",
 
 	"register.pageTitle": "Регистрация — SeedRays",
 	"register.title": "Создание учётной записи",
@@ -148,6 +151,7 @@ export const ru = {
 	"apps.colNetworks": "Сети",
 	"apps.colUsers": "Пользователи",
 	"apps.colCreated": "Создано",
+	"apps.revoked": "ключ отозван",
 
 	"appcreate.title": "Новое приложение",
 	"appcreate.name": "Название",

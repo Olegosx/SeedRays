@@ -38,6 +38,8 @@ _OPERATION_STATUS = {
 	"invalid_xpub": 400,
 	"invalid_words": 400,
 	"no_families": 400,
+	"invalid_name": 400,
+	"unknown_application": 404,
 }
 
 

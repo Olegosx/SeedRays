@@ -29,6 +29,9 @@ export const en = {
 	"errors.invalid_family": "Unknown wallet family.",
 	"errors.invalid_words": "The phrase length is 12 or 24 words.",
 	"errors.no_families": "Check at least one family.",
+	"errors.invalid_name": "The name is 1 to 64 characters.",
+	"errors.unknown_application": "No such application.",
+	"errors.wallet_missing": "No such wallet.",
 
 	"register.pageTitle": "Sign up — SeedRays",
 	"register.title": "Create an account",
@@ -146,6 +149,7 @@ export const en = {
 	"apps.colNetworks": "Networks",
 	"apps.colUsers": "Users",
 	"apps.colCreated": "Created",
+	"apps.revoked": "key revoked",
 
 	"appcreate.title": "New application",
 	"appcreate.name": "Name",
