@@ -82,17 +82,24 @@ GET  /v1/app/users                  [?limit=]
 - Ошибки: `{"error": {"code", "message"}}`; ошибки валидации — в том же формате.
 - Интерактивная OpenAPI-спецификация генерируется фреймворком на `/docs`.
 
-## API пользователя: реализованные маршруты (вход, кошельки)
+## API пользователя: реализованные маршруты (вход, кошельки, приложения)
 
 ```
-POST /v1/user/register          тело: {"username", "email", "password"}
-GET  /v1/user/confirm-email     ?token=…   (ссылка из письма; переадресует на вход)
-POST /v1/user/login             тело: {"identifier", "password", "remember"}
-POST /v1/user/logout
-GET  /v1/user/me
-GET  /v1/user/wallets
-POST /v1/user/wallets           тело: {"family", "xpub", "label"}
-POST /v1/user/wallets/generate  тело: {"words", "families", "passphrase"}
+POST   /v1/user/register          тело: {"username", "email", "password"}
+GET    /v1/user/confirm-email     ?token=…   (ссылка из письма; переадресует на вход)
+POST   /v1/user/login             тело: {"identifier", "password", "remember"}
+POST   /v1/user/logout
+GET    /v1/user/me
+GET    /v1/user/wallets
+POST   /v1/user/wallets           тело: {"family", "xpub", "label"}
+POST   /v1/user/wallets/generate  тело: {"words", "families", "passphrase"}
+GET    /v1/user/applications
+POST   /v1/user/applications      тело: {"name"} → ключ (показывается один раз)
+GET    /v1/user/applications/{id}
+POST   /v1/user/applications/{id}/key        (перевыпуск — новый ключ один раз)
+DELETE /v1/user/applications/{id}/key        (отзыв)
+PUT    /v1/user/applications/{id}/networks   тело: {"network", "wallet_id"}
+DELETE /v1/user/applications/{id}/networks/{network}
 ```
 
 - **Сессия** — кука HttpOnly (SameSite=Lax); в базе хранится отпечаток токена. Изменяющие
@@ -104,6 +111,10 @@ POST /v1/user/wallets/generate  тело: {"words", "families", "passphrase"}
 - Вход: одно поле идентификатора (имя или почта); до подтверждения основной почты вход
   закрыт (`email_not_confirmed`); «нет такого пользователя» и «не тот пароль» дают
   одинаковый ответ `invalid_credentials`.
+- Приложения: сам ключ не хранится — в базе пользователя его отпечаток и открытые первые
+  символы для опознания, в реестре — индекс «отпечаток → владелец»; сырой ключ
+  возвращается ровно один раз при создании и перевыпуске; отзыв обнуляет отпечаток и
+  удаляет строку индекса — доступ приложения закрывается немедленно.
 - Кошельки: прикрепление проверяет xpub выводом нулевого адреса; генерация в шлюзе
   (ADR-0002) **без состояния** — фраза создаётся в памяти запроса и возвращается ровно
   один раз вместе с xpub каждого семейства, ничего не записывается; после проверки
