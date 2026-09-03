@@ -85,6 +85,20 @@ and self-hosted nodes can).
 Alongside the user registry, the API-key index, operator accounts and gateway settings
 (see [ADR-0008](decisions/0008-shared-registry-db.md)):
 
+### User Emails
+
+Addresses attached to an account (the primary one + added ones): the address (unique
+across the gateway, lowercase), the "primary" flag, the confirmation time. Confirmation
+goes through a one-time token from the email
+([ADR-0020](decisions/0020-mail-provider.md)): the database keeps only the token's
+SHA-256 fingerprint and its expiry.
+
+### Cabinet Sessions
+
+The browser cookie carries a random token; the database keeps its SHA-256 fingerprint,
+the user, the expiry (7 days, 30 with "remember me") and the CSRF token checked against
+the `X-CSRF-Token` header of every mutating request. Expired rows are purged on sign-in.
+
 ### Asset Catalog
 
 Network-specific reference data: network, native coin or token contract, symbol, decimals.

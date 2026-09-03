@@ -41,6 +41,7 @@
     - [ADR-0017: Универсальная модель транзакций — две таблицы по физическому местоположению](20-architecture/decisions/0017-universal-tx-model.md)
     - [ADR-0018: Диапазонное сканирование как основной съём watcher](20-architecture/decisions/0018-range-scanning.md)
     - [ADR-0019: Локализация фронтенда — клиентские словари](20-architecture/decisions/0019-frontend-localization.md)
+    - [ADR-0020: Отправка почты — сторонний сервис за абстракцией](20-architecture/decisions/0020-mail-provider.md)
 - Безопасность
   - [Управление ключами](30-security/key-management.md)
   - [Модель угроз](30-security/threat-model.md)

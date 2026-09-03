@@ -28,6 +28,7 @@ considered, the choice made and its consequences.
 | [ADR-0017](0017-universal-tx-model.md) | Universal Transaction Model — Two Tables by Physical Location | accepted |
 | [ADR-0018](0018-range-scanning.md) | Range Scanning as the Watcher's Primary Acquisition | accepted |
 | [ADR-0019](0019-frontend-localization.md) | Frontend Localization — Client-Side Dictionaries | accepted |
+| [ADR-0020](0020-mail-provider.md) | Outgoing Mail — a Third-Party Service Behind an Abstraction | accepted |
 
 ## Related
 
