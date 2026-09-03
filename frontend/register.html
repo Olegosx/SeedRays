@@ -11,7 +11,26 @@
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body class="d-flex flex-column">
-	<div class="page page-center" x-cloak x-data="{ sent: false, email: '' }">
+	<div class="page page-center" x-cloak x-data="{
+		sent: false, email: '', username: '', password: '', error: '',
+		async submit() {
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				const result = await api('POST', '/v1/user/register', {
+					username: this.username, email: this.email, password: this.password,
+				});
+				if (result.confirmation_required) {
+					this.sent = true;
+				} else {
+					location.href = 'login.html?registered=1';
+				}
+			} catch (e) {
+				const known = this.$store.i18n.t('errors.' + e.code);
+				this.error = known !== 'errors.' + e.code ? known : e.message;
+			}
+		},
+	}">
 		<!-- Верхняя панель страниц входа: переключатель языка -->
 		<div class="position-absolute top-0 end-0 p-3">
 			<template x-if="$store.i18n.lang !== 'ru'">
@@ -36,8 +55,9 @@
 			<div class="card card-md" x-show="!sent">
 				<div class="card-body">
 					<h2 class="h2 text-center mb-4" x-text="$store.i18n.t('register.title')"></h2>
+					<div class="alert alert-danger" x-show="error" x-text="error"></div>
 					<form action="#" method="get" autocomplete="off" novalidate
-						@submit.prevent="sent = true">
+						@submit.prevent="submit()">
 						<div class="mb-3">
 							<label class="form-label" x-text="$store.i18n.t('register.email')"></label>
 							<input type="email" class="form-control" name="email" x-model="email"
@@ -45,7 +65,7 @@
 						</div>
 						<div class="mb-3">
 							<label class="form-label" x-text="$store.i18n.t('register.username')"></label>
-							<input type="text" class="form-control" name="username"
+							<input type="text" class="form-control" name="username" x-model="username"
 								:placeholder="$store.i18n.t('register.usernamePlaceholder')" autocomplete="off">
 							<small class="form-hint" x-text="$store.i18n.t('register.usernameHint')"></small>
 						</div>
@@ -53,7 +73,8 @@
 							<label class="form-label" x-text="$store.i18n.t('register.password')"></label>
 							<div class="input-group input-group-flat" x-data="{ show: false }">
 								<input :type="show ? 'text' : 'password'" type="password" class="form-control"
-									name="password" :placeholder="$store.i18n.t('register.passwordPlaceholder')"
+									name="password" x-model="password"
+									:placeholder="$store.i18n.t('register.passwordPlaceholder')"
 									autocomplete="new-password">
 								<span class="input-group-text">
 									<a href="#" class="link-secondary" :title="$store.i18n.t('login.showPassword')"

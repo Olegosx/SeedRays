@@ -26,6 +26,14 @@ _OPERATION_STATUS = {
 	"wallet_missing": 500,
 	"invalid_status": 400,
 	"invalid_limit": 400,
+	"invalid_username": 400,
+	"invalid_email": 400,
+	"weak_password": 400,
+	"username_taken": 409,
+	"email_taken": 409,
+	"invalid_credentials": 401,
+	"email_not_confirmed": 403,
+	"mail_failed": 502,
 }
 
 

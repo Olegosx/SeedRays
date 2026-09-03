@@ -57,6 +57,35 @@ settings = Table(
 	Column("value", Text, nullable=False),
 )
 
+# Почтовые адреса пользователя: основная почта + добавленные (сценарий кабинета).
+# Адрес хранится в нижнем регистре; подтверждение — по токену из письма
+# (хранится отпечаток SHA-256, сам токен уходит только в письмо).
+user_emails = Table(
+	"user_emails",
+	metadata,
+	Column("id", Integer, primary_key=True),
+	Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+	Column("address", String(255), nullable=False, unique=True),
+	Column("is_primary", Integer, nullable=False, server_default="0"),
+	Column("confirmed_at", DateTime),
+	Column("confirm_token_hash", String(128)),
+	Column("confirm_expires_at", DateTime),
+	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+)
+
+# Сессии кабинета: кука несёт случайный токен, в базе — его отпечаток.
+# csrf_token сверяется с заголовком X-CSRF-Token на изменяющих запросах.
+sessions = Table(
+	"sessions",
+	metadata,
+	Column("id", Integer, primary_key=True),
+	Column("token_hash", String(128), nullable=False, unique=True),
+	Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+	Column("csrf_token", String(64), nullable=False),
+	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+	Column("expires_at", DateTime, nullable=False),
+)
+
 assets = Table(
 	"assets",
 	metadata,

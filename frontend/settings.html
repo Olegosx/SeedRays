@@ -8,6 +8,7 @@
 	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
 	<link rel="stylesheet" href="css/app.css">
 	<script type="module" src="js/i18n.js"></script>
+	<script type="module" src="js/auth-guard.js"></script>
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body>
@@ -111,12 +112,12 @@
 							<!-- Подставные данные макета: имя вошедшего пользователя -->
 							<a href="#" class="nav-link d-flex lh-1 px-2" data-bs-toggle="dropdown">
 								<span class="avatar avatar-sm"><i class="ti ti-user"></i></span>
-								<span class="ps-2">user1</span>
+								<span class="ps-2" data-username>user1</span>
 							</a>
 							<div class="dropdown-menu dropdown-menu-end">
 								<a class="dropdown-item" href="settings.html"
 									x-text="$store.i18n.t('menu.settings')"></a>
-								<a class="dropdown-item" href="login.html"
+								<a class="dropdown-item" href="login.html" data-logout
 									x-text="$store.i18n.t('menu.logout')"></a>
 							</div>
 						</div>

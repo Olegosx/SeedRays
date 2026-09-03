@@ -11,10 +11,14 @@ from pathlib import Path
 from typing import Annotated, AsyncIterator, Literal
 
 from fastapi import Depends, FastAPI, Header, Query
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.api.errors import ApiError, register_error_handlers
+from seedrays.api.user_api import register_user_routes
+from seedrays.mail.base import MailSender
 from seedrays.orchestrator import operations as ops
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path
 
@@ -35,17 +39,26 @@ class CallerContext:
 	ctx: ops.AppContext
 
 
-def create_app(data_dir: Path) -> FastAPI:
-	"""Build the FastAPI application serving the Application API group.
+def create_app(
+	data_dir: Path,
+	frontend_dir: Path | None = None,
+	mailer: MailSender | None = None,
+) -> FastAPI:
+	"""Build the FastAPI application: the Application and User API groups.
 
 	Args:
 		data_dir: The gateway data directory.
+		frontend_dir: When given, the static frontend is served from here
+			(ADR-0012: the backend process may serve the static files).
+		mailer: Mail sender override for tests; by default the sender is
+			built from the registry settings.
 
 	Returns:
 		The configured FastAPI application.
 	"""
-	app = FastAPI(title="SeedRays Application API", version="1")
+	app = FastAPI(title="SeedRays API", version="1")
 	register_error_handlers(app)
+	register_user_routes(app, data_dir, mailer=mailer)
 
 	async def caller(
 		x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
@@ -117,5 +130,15 @@ def create_app(data_dir: Path) -> FastAPI:
 	) -> dict:
 		"""The application's users; limit 0 means everything."""
 		return {"users": await ops.list_app_users(call.ctx, limit)}
+
+	if frontend_dir is not None:
+
+		@app.get("/", include_in_schema=False)
+		async def root() -> RedirectResponse:
+			"""The cabinet entry point."""
+			return RedirectResponse("/login.html")
+
+		# Монтируется последним: маршруты API имеют приоритет над статикой.
+		app.mount("/", StaticFiles(directory=frontend_dir), name="frontend")
 
 	return app

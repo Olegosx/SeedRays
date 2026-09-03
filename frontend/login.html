@@ -11,7 +11,32 @@
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body class="d-flex flex-column">
-	<div class="page page-center" x-cloak x-data>
+	<div class="page page-center" x-cloak x-data="{
+		identifier: '', password: '', remember: false, error: '', notice: '',
+		init() {
+			const params = new URLSearchParams(location.search);
+			if (params.get('confirmed') === '1') {
+				this.notice = this.$store.i18n.t('login.confirmedNotice');
+			} else if (params.get('confirmed') === '0') {
+				this.error = this.$store.i18n.t('login.confirmFailedNotice');
+			} else if (params.get('registered') === '1') {
+				this.notice = this.$store.i18n.t('login.registeredNotice');
+			}
+		},
+		async submit() {
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api('POST', '/v1/user/login', {
+					identifier: this.identifier, password: this.password, remember: this.remember,
+				});
+				location.href = 'dashboard.html';
+			} catch (e) {
+				const known = this.$store.i18n.t('errors.' + e.code);
+				this.error = known !== 'errors.' + e.code ? known : e.message;
+			}
+		},
+	}">
 		<!-- Верхняя панель страниц входа: переключатель языка -->
 		<div class="position-absolute top-0 end-0 p-3">
 			<template x-if="$store.i18n.lang !== 'ru'">
@@ -35,10 +60,13 @@
 			<div class="card card-md">
 				<div class="card-body">
 					<h2 class="h2 text-center mb-4" x-text="$store.i18n.t('login.title')"></h2>
-					<form action="#" method="get" autocomplete="off" novalidate>
+					<div class="alert alert-success" x-show="notice" x-text="notice"></div>
+					<div class="alert alert-danger" x-show="error" x-text="error"></div>
+					<form action="#" method="get" autocomplete="off" novalidate
+						@submit.prevent="submit()">
 						<div class="mb-3">
 							<label class="form-label" x-text="$store.i18n.t('login.identifier')"></label>
-							<input type="text" class="form-control" name="identifier"
+							<input type="text" class="form-control" name="identifier" x-model="identifier"
 								:placeholder="$store.i18n.t('login.identifierPlaceholder')"
 								autocomplete="username">
 						</div>
@@ -51,7 +79,8 @@
 							</label>
 							<div class="input-group input-group-flat" x-data="{ show: false }">
 								<input :type="show ? 'text' : 'password'" type="password" class="form-control"
-									name="password" :placeholder="$store.i18n.t('login.passwordPlaceholder')"
+									name="password" x-model="password"
+									:placeholder="$store.i18n.t('login.passwordPlaceholder')"
 									autocomplete="current-password">
 								<span class="input-group-text">
 									<a href="#" class="link-secondary" :title="$store.i18n.t('login.showPassword')"
@@ -63,7 +92,7 @@
 						</div>
 						<div class="mb-2">
 							<label class="form-check">
-								<input type="checkbox" class="form-check-input" name="remember">
+								<input type="checkbox" class="form-check-input" name="remember" x-model="remember">
 								<span class="form-check-label" x-text="$store.i18n.t('login.remember')"></span>
 							</label>
 						</div>

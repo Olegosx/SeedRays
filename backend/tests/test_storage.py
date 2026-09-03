@@ -14,7 +14,16 @@ from seedrays.storage import schema_user
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
 from seedrays.storage.migrations.runner import upgrade_all, upgrade_registry, upgrade_user_db
 
-REGISTRY_TABLES = {"users", "operators", "api_keys", "settings", "assets", "watcher_state"}
+REGISTRY_TABLES = {
+	"users",
+	"operators",
+	"api_keys",
+	"settings",
+	"assets",
+	"watcher_state",
+	"user_emails",
+	"sessions",
+}
 USER_TABLES = {
 	"wallets",
 	"applications",

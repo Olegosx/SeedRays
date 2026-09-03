@@ -7,13 +7,20 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.storage.engine import user_db_path
 from seedrays.storage.migrations.runner import upgrade_user_db
-from seedrays.storage.schema_registry import assets, settings, users, watcher_state
+from seedrays.storage.schema_registry import (
+	assets,
+	sessions,
+	settings,
+	user_emails,
+	users,
+	watcher_state,
+)
 
 
 @dataclass(frozen=True)
@@ -87,6 +94,195 @@ async def get_user_by_login(registry: AsyncEngine, login: str) -> UserRecord | N
 		status=row.status,
 		directory=row.directory,
 	)
+
+
+async def get_user_by_id(registry: AsyncEngine, user_id: int) -> UserRecord | None:
+	"""Fetch a user by id; None if unknown."""
+	async with registry.connect() as conn:
+		row = (await conn.execute(select(users).where(users.c.id == user_id))).first()
+	if row is None:
+		return None
+	return UserRecord(
+		id=row.id,
+		login=row.login,
+		password_hash=row.password_hash,
+		status=row.status,
+		directory=row.directory,
+	)
+
+
+async def set_user_password(registry: AsyncEngine, user_id: int, password_hash: str) -> None:
+	"""Replace the user's password hash."""
+	async with registry.begin() as conn:
+		await conn.execute(
+			update(users).where(users.c.id == user_id).values(password_hash=password_hash)
+		)
+
+
+@dataclass(frozen=True)
+class EmailRecord:
+	"""One email address of a user."""
+
+	id: int
+	user_id: int
+	address: str
+	is_primary: bool
+	confirmed_at: datetime | None
+
+
+def _email_record(row) -> EmailRecord:
+	return EmailRecord(
+		id=row.id,
+		user_id=row.user_id,
+		address=row.address,
+		is_primary=bool(row.is_primary),
+		confirmed_at=row.confirmed_at,
+	)
+
+
+async def add_user_email(
+	registry: AsyncEngine,
+	*,
+	user_id: int,
+	address: str,
+	is_primary: bool,
+	confirm_token_hash: str | None,
+	confirm_expires_at: datetime | None,
+	confirmed_at: datetime | None = None,
+) -> EmailRecord:
+	"""Attach an email address to a user.
+
+	Raises:
+		ValueError: If the address is already attached to some account.
+	"""
+	try:
+		async with registry.begin() as conn:
+			result = await conn.execute(
+				insert(user_emails).values(
+					user_id=user_id,
+					address=address,
+					is_primary=int(is_primary),
+					confirmed_at=confirmed_at,
+					confirm_token_hash=confirm_token_hash,
+					confirm_expires_at=confirm_expires_at,
+				)
+			)
+	except IntegrityError as exc:
+		raise ValueError(f"email already attached: {address!r}") from exc
+	email_id = result.inserted_primary_key[0]
+	async with registry.connect() as conn:
+		row = (await conn.execute(select(user_emails).where(user_emails.c.id == email_id))).first()
+	if row is None:
+		raise RuntimeError(f"email {address!r} vanished after insert")
+	return _email_record(row)
+
+
+async def list_user_emails(registry: AsyncEngine, user_id: int) -> list[EmailRecord]:
+	"""Every email address of one user, primary first."""
+	async with registry.connect() as conn:
+		rows = (
+			await conn.execute(
+				select(user_emails)
+				.where(user_emails.c.user_id == user_id)
+				.order_by(user_emails.c.is_primary.desc(), user_emails.c.id)
+			)
+		).all()
+	return [_email_record(row) for row in rows]
+
+
+async def get_email_by_address(registry: AsyncEngine, address: str) -> EmailRecord | None:
+	"""Find an email row by address; None if unknown."""
+	async with registry.connect() as conn:
+		row = (
+			await conn.execute(select(user_emails).where(user_emails.c.address == address))
+		).first()
+	return None if row is None else _email_record(row)
+
+
+async def confirm_email_by_token_hash(
+	registry: AsyncEngine, token_hash: str, *, now: datetime
+) -> EmailRecord | None:
+	"""Confirm the email matching an unexpired token hash; None if no match."""
+	async with registry.begin() as conn:
+		row = (
+			await conn.execute(
+				select(user_emails).where(
+					user_emails.c.confirm_token_hash == token_hash,
+					user_emails.c.confirm_expires_at.is_not(None),
+					user_emails.c.confirm_expires_at >= now,
+				)
+			)
+		).first()
+		if row is None:
+			return None
+		await conn.execute(
+			update(user_emails)
+			.where(user_emails.c.id == row.id)
+			.values(confirmed_at=now, confirm_token_hash=None, confirm_expires_at=None)
+		)
+	refreshed = await get_email_by_address(registry, row.address)
+	return refreshed
+
+
+@dataclass(frozen=True)
+class SessionRecord:
+	"""A cabinet session resolved from its cookie token."""
+
+	id: int
+	user_id: int
+	csrf_token: str
+	expires_at: datetime
+
+
+async def create_session(
+	registry: AsyncEngine,
+	*,
+	user_id: int,
+	token_hash: str,
+	csrf_token: str,
+	expires_at: datetime,
+) -> None:
+	"""Store a new cabinet session."""
+	async with registry.begin() as conn:
+		await conn.execute(
+			insert(sessions).values(
+				user_id=user_id,
+				token_hash=token_hash,
+				csrf_token=csrf_token,
+				expires_at=expires_at,
+			)
+		)
+
+
+async def get_session_by_token_hash(
+	registry: AsyncEngine, token_hash: str, *, now: datetime
+) -> SessionRecord | None:
+	"""Resolve an unexpired session by its token hash; None otherwise."""
+	async with registry.connect() as conn:
+		row = (
+			await conn.execute(
+				select(sessions).where(
+					sessions.c.token_hash == token_hash, sessions.c.expires_at >= now
+				)
+			)
+		).first()
+	if row is None:
+		return None
+	return SessionRecord(
+		id=row.id, user_id=row.user_id, csrf_token=row.csrf_token, expires_at=row.expires_at
+	)
+
+
+async def delete_session(registry: AsyncEngine, token_hash: str) -> None:
+	"""Drop one session (sign-out)."""
+	async with registry.begin() as conn:
+		await conn.execute(delete(sessions).where(sessions.c.token_hash == token_hash))
+
+
+async def delete_expired_sessions(registry: AsyncEngine, *, now: datetime) -> None:
+	"""Hygiene: drop every expired session."""
+	async with registry.begin() as conn:
+		await conn.execute(delete(sessions).where(sessions.c.expires_at < now))
 
 
 @dataclass(frozen=True)

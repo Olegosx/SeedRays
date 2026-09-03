@@ -139,9 +139,17 @@ def _cmd_serve() -> int:
 	logging.basicConfig(
 		level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 	)
+	# Каталог статики фронта: переменная окружения (развёрточный уровень,
+	# ADR-0016) или frontend/ рядом с пакетом при запуске из репозитория.
+	frontend_raw = os.environ.get("SEEDRAYS_FRONTEND_DIR")
+	if frontend_raw:
+		frontend_dir = Path(frontend_raw)
+	else:
+		repo_frontend = Path(__file__).resolve().parents[2] / "frontend"
+		frontend_dir = repo_frontend if repo_frontend.is_dir() else None
 	upgrade_all(Path(data_dir))
 	try:
-		asyncio.run(run(Path(data_dir), host, int(port_raw)))
+		asyncio.run(run(Path(data_dir), host, int(port_raw), frontend_dir))
 	except KeyboardInterrupt:
 		print("gateway stopped")
 	return 0

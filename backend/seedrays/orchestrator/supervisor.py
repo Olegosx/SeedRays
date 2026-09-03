@@ -35,15 +35,23 @@ async def _supervised(name: str, factory: Callable[[], Awaitable[None]]) -> None
 		await asyncio.sleep(RESTART_DELAY_SECONDS)
 
 
-async def run(data_dir: Path, host: str, port: int) -> None:
-	"""Run the gateway: the Application API server and the watcher loop.
+async def run(
+	data_dir: Path, host: str, port: int, frontend_dir: Path | None = None
+) -> None:
+	"""Run the gateway: the API server (with the static frontend) and the watcher.
 
 	Args:
 		data_dir: The gateway data directory.
 		host: API bind address.
 		port: API bind port.
+		frontend_dir: Static frontend directory; None — API only.
 	"""
-	config = uvicorn.Config(create_app(data_dir), host=host, port=port, log_level="info")
+	config = uvicorn.Config(
+		create_app(data_dir, frontend_dir=frontend_dir),
+		host=host,
+		port=port,
+		log_level="info",
+	)
 	server = uvicorn.Server(config)
 	logger.info("gateway starting: api on %s:%d, data dir %s", host, port, data_dir)
 	await asyncio.gather(
