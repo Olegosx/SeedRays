@@ -13,19 +13,12 @@
 </head>
 <body>
 	<div class="page" x-cloak x-data="{
-		rows: [
-			{ time: '2026-09-02 14:21', wallet: 'Основной', network: 'tron-nile', asset: 'USDT',
-				amount: '25', txid: '7f3ab29c1df84b60', status: 'confirmed' },
-			{ time: '2026-09-02 13:05', wallet: 'Основной', network: 'tron-nile', asset: 'TRX',
-				amount: '150', txid: 'c81de07a44f2b391', status: 'confirmed' },
-			{ time: '2026-09-02 12:48', wallet: 'Основной', network: 'tron', asset: 'USDT',
-				amount: '990.5', txid: '5a2c9e11b7d04f83', status: 'pending' },
-			{ time: '2026-09-01 22:17', wallet: 'Магазин EVM', network: 'tron', asset: 'USDT',
-				amount: '12', txid: 'e94b60217fa3c5d8', status: 'failed' },
-			{ time: '2026-09-01 09:40', wallet: 'Основной', network: 'tron', asset: 'TRX',
-				amount: '3.14', txid: 'b06f48d29ce17a35', status: 'confirmed' },
-		],
+		rows: [],
 		filter: { wallet: '', network: '', asset: '', status: '' },
+		async init() {
+			const { api } = await import('/js/api.js');
+			this.rows = (await api('GET', '/v1/user/history?limit=200')).history;
+		},
 		options(field) {
 			return [...new Set(this.rows.map((r) => r[field]))];
 		},

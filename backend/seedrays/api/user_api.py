@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, AsyncIterator
 
-from fastapi import Depends, FastAPI, Header, Request, Response
+from fastapi import Depends, FastAPI, Header, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -21,6 +21,7 @@ from seedrays.mail.base import MailSender
 from seedrays.mail.resend import ResendSender
 from seedrays.orchestrator import apps as app_ops
 from seedrays.orchestrator import auth
+from seedrays.orchestrator import overview as overview_ops
 from seedrays.orchestrator import wallets as wallet_ops
 from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
@@ -368,6 +369,56 @@ def register_user_routes(
 		check_csrf(ctx, x_csrf_token)
 		await app_ops.remove_network_mapping(engine, app_id=app_id, network=network)
 		return {"ok": True}
+
+	def _history_json(row: overview_ops.HistoryRow) -> dict:
+		return {
+			"time": row.time,
+			"wallet_id": row.wallet_id,
+			"wallet": row.wallet,
+			"network": row.network,
+			"asset": row.asset,
+			"amount": row.amount,
+			"txid": row.txid,
+			"status": row.status,
+		}
+
+	@app.get("/v1/user/history")
+	async def history(
+		ctx: UserContext = SessionDep,
+		engine: AsyncEngine = UserEngineDep,
+		wallet_id: int | None = None,
+		network: str | None = None,
+		asset: str | None = None,
+		status: str = "all",
+		limit: Annotated[int, Query(ge=0)] = overview_ops.HISTORY_LIMIT_DEFAULT,
+	) -> dict:
+		"""Incoming operations across every wallet, with filters."""
+		rows = await overview_ops.history(
+			engine,
+			ctx.registry,
+			wallet_id=wallet_id,
+			network=network,
+			asset=asset,
+			status=status,
+			limit=limit,
+		)
+		return {"history": [_history_json(row) for row in rows]}
+
+	@app.get("/v1/user/overview")
+	async def get_overview(
+		ctx: UserContext = SessionDep, engine: AsyncEngine = UserEngineDep
+	) -> dict:
+		"""The dashboard summary: counters, receipts, recent operations."""
+		data = await overview_ops.overview(engine, ctx.registry)
+		return {
+			"counters": {
+				"wallets": data.wallets,
+				"applications": data.applications,
+				"addresses": data.addresses,
+			},
+			"receipts": data.receipts,
+			"recent": [_history_json(row) for row in data.recent],
+		}
 
 	@app.get("/v1/user/me")
 	async def me(ctx: UserContext = SessionDep) -> dict:

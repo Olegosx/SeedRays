@@ -13,20 +13,20 @@
 </head>
 <body>
 	<div class="page" x-cloak x-data="{
-		counters: { wallets: 3, apps: 3, addresses: 17 },
-		receipts: [
-			{ network: 'tron', asset: 'USDT', received: '12480.50', pending: '990.50' },
-			{ network: 'tron', asset: 'TRX', received: '3.14', pending: '0' },
-			{ network: 'tron-nile', asset: 'USDT', received: '25', pending: '0' },
-			{ network: 'tron-nile', asset: 'TRX', received: '150', pending: '0' },
-		],
-		recent: [
-			{ time: '2026-09-02 14:21', asset: 'USDT', amount: '25', status: 'confirmed' },
-			{ time: '2026-09-02 13:05', asset: 'TRX', amount: '150', status: 'confirmed' },
-			{ time: '2026-09-02 12:48', asset: 'USDT', amount: '990.5', status: 'pending' },
-			{ time: '2026-09-01 22:17', asset: 'USDT', amount: '12', status: 'failed' },
-			{ time: '2026-09-01 09:40', asset: 'TRX', amount: '3.14', status: 'confirmed' },
-		],
+		counters: { wallets: 0, apps: 0, addresses: 0 },
+		receipts: [],
+		recent: [],
+		async init() {
+			const { api } = await import('/js/api.js');
+			const data = await api('GET', '/v1/user/overview');
+			this.counters = {
+				wallets: data.counters.wallets,
+				apps: data.counters.applications,
+				addresses: data.counters.addresses,
+			};
+			this.receipts = data.receipts;
+			this.recent = data.recent;
+		},
 		statusClass(s) {
 			return { confirmed: 'bg-green-lt', pending: 'bg-yellow-lt', failed: 'bg-red-lt' }[s];
 		},
