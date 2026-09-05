@@ -102,7 +102,12 @@ PUT    /v1/user/applications/{id}/networks   тело: {"network", "wallet_id"}
 DELETE /v1/user/applications/{id}/networks/{network}
 GET    /v1/user/history      [?wallet_id=&network=&asset=&status=&limit=]
 GET    /v1/user/overview     (счётчики, поступления по активам, последние операции)
+POST   /v1/user/emails       тело: {"address"}   (вторая почта, подтверждение письмом)
+DELETE /v1/user/emails/{id}                      (основную удалить нельзя)
+POST   /v1/user/password     тело: {"current_password", "new_password"}
 ```
+
+Смена пароля гасит все остальные сессии пользователя (текущая остаётся).
 
 - **Сессия** — кука HttpOnly (SameSite=Lax); в базе хранится отпечаток токена. Изменяющие
   запросы обязаны нести заголовок `X-CSRF-Token`, выданный при входе и в `/me`.

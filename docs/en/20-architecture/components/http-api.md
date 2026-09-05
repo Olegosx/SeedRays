@@ -101,7 +101,12 @@ PUT    /v1/user/applications/{id}/networks   body: {"network", "wallet_id"}
 DELETE /v1/user/applications/{id}/networks/{network}
 GET    /v1/user/history      [?wallet_id=&network=&asset=&status=&limit=]
 GET    /v1/user/overview     (counters, receipts by asset, recent operations)
+POST   /v1/user/emails       body: {"address"}   (a second email, confirmed by a message)
+DELETE /v1/user/emails/{id}                      (the primary one cannot be removed)
+POST   /v1/user/password     body: {"current_password", "new_password"}
 ```
+
+A password change drops every other session of the user (the current one stays).
 
 - **The session** is an HttpOnly cookie (SameSite=Lax); the database stores the token's
   fingerprint. Mutating requests must carry the `X-CSRF-Token` header issued at sign-in
