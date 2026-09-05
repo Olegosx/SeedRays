@@ -239,3 +239,104 @@ async def resolve_session(registry: AsyncEngine, session_token: str) -> CurrentU
 async def sign_out(registry: AsyncEngine, session_token: str) -> None:
 	"""Drop the session."""
 	await registry_ops.delete_session(registry, _sha256(session_token))
+
+
+async def add_email(
+	registry: AsyncEngine,
+	*,
+	user_id: int,
+	address: str,
+	mailer: MailSender | None,
+	confirm_base_url: str,
+) -> bool:
+	"""Attach a secondary email; returns True when confirmation is required.
+
+	Raises:
+		OperationError: invalid_email / email_taken / mail_failed.
+	"""
+	address = address.strip().lower()
+	if not _EMAIL_RE.fullmatch(address):
+		raise OperationError("invalid_email", "email address looks invalid")
+	if await registry_ops.get_email_by_address(registry, address) is not None:
+		raise OperationError("email_taken", "this email is already attached to an account")
+
+	if mailer is None:
+		logger.warning("mail sender is not configured; email %s auto-confirmed", address)
+		await registry_ops.add_user_email(
+			registry,
+			user_id=user_id,
+			address=address,
+			is_primary=False,
+			confirm_token_hash=None,
+			confirm_expires_at=None,
+			confirmed_at=_now(),
+		)
+		return False
+
+	token = secrets.token_urlsafe(32)
+	await registry_ops.add_user_email(
+		registry,
+		user_id=user_id,
+		address=address,
+		is_primary=False,
+		confirm_token_hash=_sha256(token),
+		confirm_expires_at=_now() + timedelta(hours=CONFIRM_TOKEN_HOURS),
+	)
+	link = f"{confirm_base_url.rstrip('/')}/v1/user/confirm-email?token={token}"
+	try:
+		await mailer.send(
+			address,
+			"SeedRays: confirm your email",
+			"Follow the link to confirm this email address:\n"
+			f"{link}\n\nThe link is valid for {CONFIRM_TOKEN_HOURS} hours.",
+		)
+	except MailError as exc:
+		logger.error("confirmation email to %s failed: %s", address, exc)
+		raise OperationError(
+			"mail_failed", "could not send the confirmation email; try again later"
+		) from exc
+	return True
+
+
+async def remove_email(registry: AsyncEngine, *, user_id: int, email_id: int) -> None:
+	"""Detach a secondary email.
+
+	Raises:
+		OperationError: unknown_email / cannot_remove_primary.
+	"""
+	record = await registry_ops.get_email_by_id(registry, email_id)
+	if record is None or record.user_id != user_id:
+		raise OperationError("unknown_email", "no such email on this account")
+	if record.is_primary:
+		raise OperationError("cannot_remove_primary", "the primary email cannot be removed")
+	await registry_ops.delete_user_email(registry, email_id)
+
+
+async def change_password(
+	registry: AsyncEngine,
+	*,
+	user_id: int,
+	current_password: str,
+	new_password: str,
+	session_token: str,
+) -> None:
+	"""Change the password; every other session of the user is dropped.
+
+	Raises:
+		OperationError: invalid_credentials / weak_password.
+	"""
+	if len(new_password) < _MIN_PASSWORD_LEN:
+		raise OperationError(
+			"weak_password", f"password must be at least {_MIN_PASSWORD_LEN} characters"
+		)
+	user = await registry_ops.get_user_by_id(registry, user_id)
+	if user is None:
+		raise OperationError("invalid_credentials", "wrong current password")
+	try:
+		_hasher.verify(user.password_hash, current_password)
+	except (VerifyMismatchError, InvalidHashError) as exc:
+		raise OperationError("invalid_credentials", "wrong current password") from exc
+	await registry_ops.set_user_password(registry, user_id, _hasher.hash(new_password))
+	await registry_ops.delete_user_sessions(
+		registry, user_id, keep_token_hash=_sha256(session_token)
+	)

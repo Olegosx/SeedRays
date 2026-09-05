@@ -32,6 +32,8 @@ export const ru = {
 	"errors.invalid_name": "Название: от 1 до 64 знаков.",
 	"errors.unknown_application": "Такого приложения нет.",
 	"errors.wallet_missing": "Такого кошелька нет.",
+	"errors.unknown_email": "Такой почты на учётной записи нет.",
+	"errors.cannot_remove_primary": "Основную почту удалить нельзя.",
 
 	"register.pageTitle": "Регистрация — SeedRays",
 	"register.title": "Создание учётной записи",
@@ -229,4 +231,6 @@ export const ru = {
 	"settings.link": "Привязать",
 	"settings.unlink": "Отвязать",
 	"settings.lastMethodHint": "Нельзя удалить последний способ входа.",
+	"settings.emailSent": "Письмо со ссылкой подтверждения отправлено.",
+	"settings.methodsSoon": "Вход через внешние сервисы появится на следующих этапах.",
 };

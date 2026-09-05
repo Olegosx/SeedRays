@@ -40,6 +40,8 @@ _OPERATION_STATUS = {
 	"no_families": 400,
 	"invalid_name": 400,
 	"unknown_application": 404,
+	"unknown_email": 404,
+	"cannot_remove_primary": 400,
 }
 
 

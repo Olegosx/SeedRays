@@ -32,6 +32,8 @@ export const en = {
 	"errors.invalid_name": "The name is 1 to 64 characters.",
 	"errors.unknown_application": "No such application.",
 	"errors.wallet_missing": "No such wallet.",
+	"errors.unknown_email": "No such email on this account.",
+	"errors.cannot_remove_primary": "The primary email cannot be removed.",
 
 	"register.pageTitle": "Sign up — SeedRays",
 	"register.title": "Create an account",
@@ -227,4 +229,6 @@ export const en = {
 	"settings.link": "Link",
 	"settings.unlink": "Unlink",
 	"settings.lastMethodHint": "The last remaining sign-in method cannot be removed.",
+	"settings.emailSent": "A message with the confirmation link has been sent.",
+	"settings.methodsSoon": "Signing in through external services arrives in later stages.",
 };

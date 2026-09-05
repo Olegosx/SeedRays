@@ -279,6 +279,32 @@ async def delete_session(registry: AsyncEngine, token_hash: str) -> None:
 		await conn.execute(delete(sessions).where(sessions.c.token_hash == token_hash))
 
 
+async def delete_user_sessions(
+	registry: AsyncEngine, user_id: int, *, keep_token_hash: str | None = None
+) -> None:
+	"""Drop the user's sessions; optionally keep the current one."""
+	query = delete(sessions).where(sessions.c.user_id == user_id)
+	if keep_token_hash is not None:
+		query = query.where(sessions.c.token_hash != keep_token_hash)
+	async with registry.begin() as conn:
+		await conn.execute(query)
+
+
+async def get_email_by_id(registry: AsyncEngine, email_id: int) -> EmailRecord | None:
+	"""Find an email row by id; None if unknown."""
+	async with registry.connect() as conn:
+		row = (
+			await conn.execute(select(user_emails).where(user_emails.c.id == email_id))
+		).first()
+	return None if row is None else _email_record(row)
+
+
+async def delete_user_email(registry: AsyncEngine, email_id: int) -> None:
+	"""Drop one email row."""
+	async with registry.begin() as conn:
+		await conn.execute(delete(user_emails).where(user_emails.c.id == email_id))
+
+
 async def delete_expired_sessions(registry: AsyncEngine, *, now: datetime) -> None:
 	"""Hygiene: drop every expired session."""
 	async with registry.begin() as conn:

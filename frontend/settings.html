@@ -13,36 +13,62 @@
 </head>
 <body>
 	<div class="page" x-cloak x-data="{
-		emails: [
-			{ address: 'user1@example.com', primary: true, confirmed: true },
-		],
+		emails: [],
 		newEmail: '',
 		addingEmail: false,
-		addEmail() {
-			if (this.newEmail) {
-				this.emails.push({ address: this.newEmail, primary: false, confirmed: false });
-				this.newEmail = '';
-				this.addingEmail = false;
-			}
-		},
+		emailNotice: '',
+		emailError: '',
 		pass: { current: '', next: '', repeat: '' },
 		passMismatch: false,
 		passChanged: false,
-		methods: [
-			{ name: 'Google', linked: false },
-			{ name: 'Telegram', linked: true },
-		],
-		linkedCount() {
-			// Пароль всегда установлен в макете + привязанные внешние сервисы.
-			return 1 + this.methods.filter((m) => m.linked).length;
+		passError: '',
+		async loadEmails() {
+			const { api } = await import('/js/api.js');
+			this.emails = (await api('GET', '/v1/user/me')).user.emails;
 		},
-		changePassword() {
+		async addEmail() {
+			if (!this.newEmail) { return; }
+			this.emailError = '';
+			this.emailNotice = '';
+			try {
+				const { api } = await import('/js/api.js');
+				const result = await api('POST', '/v1/user/emails', { address: this.newEmail });
+				if (result.confirmation_required) {
+					this.emailNotice = this.$store.i18n.t('settings.emailSent');
+				}
+				this.newEmail = '';
+				this.addingEmail = false;
+				await this.loadEmails();
+			} catch (e) { this.emailError = this._message(e); }
+		},
+		async removeEmail(emailId) {
+			this.emailError = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api('DELETE', '/v1/user/emails/' + emailId);
+				await this.loadEmails();
+			} catch (e) { this.emailError = this._message(e); }
+		},
+		async changePassword() {
 			this.passMismatch = this.pass.next !== this.pass.repeat;
-			this.passChanged = !this.passMismatch;
-			if (this.passChanged) {
+			this.passChanged = false;
+			this.passError = '';
+			if (this.passMismatch) { return; }
+			try {
+				const { api } = await import('/js/api.js');
+				await api('POST', '/v1/user/password', {
+					current_password: this.pass.current,
+					new_password: this.pass.next,
+				});
+				this.passChanged = true;
 				this.pass = { current: '', next: '', repeat: '' };
-			}
+			} catch (e) { this.passError = this._message(e); }
 		},
+		_message(e) {
+			const known = this.$store.i18n.t('errors.' + e.code);
+			return known !== 'errors.' + e.code ? known : e.message;
+		},
+		init() { this.loadEmails(); },
 	}">
 		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
 		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
@@ -146,9 +172,11 @@
 								<div class="card-body">
 									<div class="mb-3">
 										<label class="form-label" x-text="$store.i18n.t('settings.username')"></label>
-										<div class="form-control-plaintext fw-bold">user1</div>
+										<div class="form-control-plaintext fw-bold" data-username></div>
 									</div>
 									<label class="form-label" x-text="$store.i18n.t('settings.email')"></label>
+									<div class="alert alert-success" x-show="emailNotice" x-text="emailNotice"></div>
+									<div class="alert alert-danger" x-show="emailError" x-text="emailError"></div>
 									<div class="list-group list-group-flush mb-2">
 										<template x-for="(email, i) in emails">
 											<div class="list-group-item d-flex align-items-center justify-content-between px-0">
@@ -163,7 +191,7 @@
 															: $store.i18n.t('settings.emailUnconfirmed')"></span>
 												</span>
 												<a href="#" class="link-danger" x-show="!email.primary"
-													@click.prevent="emails.splice(i, 1)"
+													@click.prevent="removeEmail(email.id)"
 													x-text="$store.i18n.t('app.remove')"></a>
 											</div>
 										</template>
@@ -197,6 +225,7 @@
 								</div>
 								<div class="card-body">
 									<form @submit.prevent="changePassword()">
+										<div class="alert alert-danger" x-show="passError" x-text="passError"></div>
 										<div class="mb-3">
 											<label class="form-label"
 												x-text="$store.i18n.t('settings.currentPassword')"></label>
@@ -244,28 +273,9 @@
 										<span class="badge bg-green-lt"
 											x-text="$store.i18n.t('settings.methodSet')"></span>
 									</div>
-									<template x-for="method in methods">
-										<div class="list-group-item d-flex align-items-center justify-content-between">
-											<span>
-												<i class="ti ti-login me-2"></i>
-												<span x-text="method.name"></span>
-												<span class="badge ms-2"
-													:class="method.linked ? 'bg-green-lt' : 'bg-secondary-lt'"
-													x-text="method.linked
-														? $store.i18n.t('settings.linked')
-														: $store.i18n.t('settings.notLinked')"></span>
-											</span>
-											<button type="button" class="btn btn-sm"
-												:class="method.linked ? 'btn-outline-danger' : 'btn-outline-primary'"
-												@click="method.linked = !method.linked"
-												x-text="method.linked
-													? $store.i18n.t('settings.unlink')
-													: $store.i18n.t('settings.link')"></button>
-										</div>
-									</template>
 								</div>
 								<div class="card-footer text-secondary"
-									x-text="$store.i18n.t('settings.lastMethodHint')"></div>
+									x-text="$store.i18n.t('settings.methodsSoon')"></div>
 							</div>
 						</div>
 					</div>

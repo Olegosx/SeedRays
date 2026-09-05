@@ -66,6 +66,19 @@ class GenerateWalletRequest(BaseModel):
 	passphrase: str = Field(default="", max_length=256)
 
 
+class AddEmailRequest(BaseModel):
+	"""Body of the add-email operation."""
+
+	address: str = Field(min_length=3, max_length=255)
+
+
+class ChangePasswordRequest(BaseModel):
+	"""Body of the change-password operation."""
+
+	current_password: str = Field(min_length=1, max_length=1024)
+	new_password: str = Field(min_length=1, max_length=1024)
+
+
 class CreateApplicationRequest(BaseModel):
 	"""Body of the create-application operation."""
 
@@ -429,6 +442,7 @@ def register_user_routes(
 				"username": ctx.user.username,
 				"emails": [
 					{
+						"id": e.id,
 						"address": e.address,
 						"primary": e.is_primary,
 						"confirmed": e.confirmed_at is not None,
@@ -438,3 +452,53 @@ def register_user_routes(
 			},
 			"csrf": ctx.user.csrf_token,
 		}
+
+	@app.post("/v1/user/emails")
+	async def add_email(
+		body: AddEmailRequest,
+		request: Request,
+		ctx: UserContext = SessionDep,
+		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+	) -> dict:
+		"""Attach a secondary email; it is confirmed by a message."""
+		check_csrf(ctx, x_csrf_token)
+		active_mailer = mailer if mailer is not None else await _resolve_mailer(ctx.registry)
+		base_url = await registry_ops.get_setting(ctx.registry, SETTING_BASE_URL)
+		if not base_url:
+			base_url = str(request.base_url)
+		required = await auth.add_email(
+			ctx.registry,
+			user_id=ctx.user.user_id,
+			address=body.address,
+			mailer=active_mailer,
+			confirm_base_url=base_url,
+		)
+		return {"confirmation_required": required}
+
+	@app.delete("/v1/user/emails/{email_id}")
+	async def remove_email(
+		email_id: int,
+		ctx: UserContext = SessionDep,
+		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+	) -> dict:
+		"""Detach a secondary email; the primary one cannot be removed."""
+		check_csrf(ctx, x_csrf_token)
+		await auth.remove_email(ctx.registry, user_id=ctx.user.user_id, email_id=email_id)
+		return {"ok": True}
+
+	@app.post("/v1/user/password")
+	async def change_password(
+		body: ChangePasswordRequest,
+		ctx: UserContext = SessionDep,
+		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+	) -> dict:
+		"""Change the password; other sessions of the user are dropped."""
+		check_csrf(ctx, x_csrf_token)
+		await auth.change_password(
+			ctx.registry,
+			user_id=ctx.user.user_id,
+			current_password=body.current_password,
+			new_password=body.new_password,
+			session_token=ctx.session_token,
+		)
+		return {"ok": True}
