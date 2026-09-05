@@ -82,7 +82,7 @@ GET  /v1/app/users                  [?limit=]
 - Ошибки: `{"error": {"code", "message"}}`; ошибки валидации — в том же формате.
 - Интерактивная OpenAPI-спецификация генерируется фреймворком на `/docs`.
 
-## API пользователя: реализованные маршруты (вход, кошельки, приложения)
+## API пользователя: реализованные маршруты
 
 ```
 POST   /v1/user/register          тело: {"username", "email", "password"}
@@ -100,6 +100,8 @@ POST   /v1/user/applications/{id}/key        (перевыпуск — новы�
 DELETE /v1/user/applications/{id}/key        (отзыв)
 PUT    /v1/user/applications/{id}/networks   тело: {"network", "wallet_id"}
 DELETE /v1/user/applications/{id}/networks/{network}
+GET    /v1/user/history      [?wallet_id=&network=&asset=&status=&limit=]
+GET    /v1/user/overview     (счётчики, поступления по активам, последние операции)
 ```
 
 - **Сессия** — кука HttpOnly (SameSite=Lax); в базе хранится отпечаток токена. Изменяющие
