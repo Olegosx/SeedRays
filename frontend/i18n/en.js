@@ -167,6 +167,16 @@ export const en = {
 	"appkey.title": "Application key",
 	"appkey.warning":
 		"The key is shown only once: the gateway stores its fingerprint, not the key itself. Copy the key now and hand it to your application.",
+	"confirm.cancel": "Cancel",
+	"confirm.reissueTitle": "Reissue the key?",
+	"confirm.reissueText":
+		"The old key stops working immediately — the application loses access until the new key is put into it. The new key will be shown once.",
+	"confirm.reissueGo": "Reissue",
+	"confirm.revokeTitle": "Revoke the key?",
+	"confirm.revokeText":
+		"The application loses API access immediately. Access can only be restored by reissuing the key.",
+	"confirm.revokeGo": "Revoke",
+
 	"appkey.copy": "Copy",
 	"appkey.copyFailed": "Could not copy automatically — select the key and copy it manually.",
 	"appkey.copied": "Copied",

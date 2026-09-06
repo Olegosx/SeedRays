@@ -62,6 +62,22 @@
 			await this._call('DELETE',
 				'/v1/user/applications/' + this.appId + '/networks/' + network);
 		},
+		confirmAction: '',
+		askConfirm(action) {
+			// Опасные действия — только через подтверждающий диалог.
+			this.confirmAction = action;
+			new window.tabler.Modal(document.getElementById('modal-confirm')).show();
+		},
+		async confirmProceed() {
+			window.tabler.Modal.getOrCreateInstance(
+				document.getElementById('modal-confirm')).hide();
+			if (this.confirmAction === 'reissue') {
+				await this.reissue();
+			} else if (this.confirmAction === 'revoke') {
+				await this.revoke();
+			}
+			this.confirmAction = '';
+		},
 		async reissue() {
 			const { api } = await import('/js/api.js');
 			try {
@@ -147,9 +163,11 @@
 									</p>
 									<p class="text-secondary" x-text="$store.i18n.t('app.keyHint')"></p>
 									<div class="btn-list">
-										<button type="button" class="btn btn-outline-primary" @click="reissue()"
+										<button type="button" class="btn btn-outline-primary"
+											@click="askConfirm('reissue')"
 											x-text="$store.i18n.t('app.reissue')"></button>
-										<button type="button" class="btn btn-outline-danger" @click="revoke()"
+										<button type="button" class="btn btn-outline-danger"
+											@click="askConfirm('revoke')"
 											x-text="$store.i18n.t('app.revoke')"></button>
 									</div>
 								</div>
@@ -246,6 +264,32 @@
 								</div>
 							</div>
 						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Подтверждение опасных действий с ключом (сценарий кабинета) -->
+		<div class="modal" id="modal-confirm" tabindex="-1">
+			<div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+				<div class="modal-content">
+					<div class="modal-status bg-danger"></div>
+					<div class="modal-body text-center py-4">
+						<i class="ti ti-alert-triangle text-danger mb-2" style="font-size: 3rem;"></i>
+						<h3 x-text="confirmAction === 'revoke'
+							? $store.i18n.t('confirm.revokeTitle')
+							: $store.i18n.t('confirm.reissueTitle')"></h3>
+						<div class="text-secondary" x-text="confirmAction === 'revoke'
+							? $store.i18n.t('confirm.revokeText')
+							: $store.i18n.t('confirm.reissueText')"></div>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal"
+							x-text="$store.i18n.t('confirm.cancel')"></button>
+						<button type="button" class="btn btn-danger" @click="confirmProceed()"
+							x-text="confirmAction === 'revoke'
+								? $store.i18n.t('confirm.revokeGo')
+								: $store.i18n.t('confirm.reissueGo')"></button>
 					</div>
 				</div>
 			</div>

@@ -154,12 +154,12 @@ opened; a forgotten passphrase means permanently lost access to the funds.
 - **The application page**:
   - the API key card: issue date, the key's first characters (kept in the open — for
     identification), reissue (the new key is shown once), revocation (after it — a
-    warning that the application has no access);
+    warning that the application has no access); reissue and revocation go only through
+    a confirmation dialog describing the consequences;
   - the "network → wallet" mapping ([ADR-0011](../20-architecture/decisions/0011-application-api-principles.md)):
     a table with row removal; adding — by picking from the not-yet-assigned networks;
   - application users: identifier, address count, creation date.
-- Open questions: confirmation of dangerous actions (key revocation/reissue); viewing
-  the addresses of one application user.
+- Open question: viewing the addresses of one application user.
 
 ## Operation History
 
