@@ -8,6 +8,7 @@ import httpx
 
 from seedrays.api.app_api import create_app
 from seedrays.mail.base import MailSender
+from seeding import enable_dev_mail
 from seedrays.storage.migrations.runner import upgrade_registry
 
 
@@ -32,8 +33,9 @@ async def _signed_in_client(
 	data_dir: Path, mailer: MailSender | None
 ) -> tuple[httpx.AsyncClient, str]:
 	upgrade_registry(data_dir)
+	await enable_dev_mail(data_dir)
 	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=mailer))
-	client = httpx.AsyncClient(transport=transport, base_url="http://gw")
+	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
 	await client.post(
 		"/v1/user/register",
 		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
@@ -99,12 +101,13 @@ def test_change_password_drops_other_sessions(tmp_path: Path) -> None:
 
 	async def scenario() -> None:
 		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
 		app = create_app(tmp_path, mailer=None)
 		first = httpx.AsyncClient(
-			transport=httpx.ASGITransport(app=app), base_url="http://gw"
+			transport=httpx.ASGITransport(app=app), base_url="https://gw"
 		)
 		second = httpx.AsyncClient(
-			transport=httpx.ASGITransport(app=app), base_url="http://gw"
+			transport=httpx.ASGITransport(app=app), base_url="https://gw"
 		)
 		try:
 			await first.post(

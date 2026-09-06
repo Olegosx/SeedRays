@@ -46,6 +46,18 @@ def _hex_to_base58(hex_address: str) -> str:
 	return Base58Encoder.CheckEncode(bytes.fromhex(hex_address))
 
 
+def _amount(raw: object) -> int:
+	"""Parse a provider amount; a negative value is a data error, not a transfer.
+
+	Защита в глубину: скомпрометированный источник не должен уметь тихо
+	уменьшать балансы «переводом» с отрицательной суммой.
+	"""
+	value = int(raw)  # ValueError/TypeError ловит вызывающий разбор
+	if value < 0:
+		raise ChainDataSourceError(f"provider returned a negative amount: {value}")
+	return value
+
+
 def _normalize_address(raw: str) -> str:
 	"""Normalize an address from any provider form (base58, 41-hex, 0x-hex)."""
 	if raw.startswith("T"):
@@ -206,7 +218,7 @@ class TronGridSource(ChainDataSource):
 							symbol=str(token.get("symbol", "")),
 							decimals=int(decimals),
 						),
-						amount=int(item["value"]),
+						amount=_amount(item["value"]),
 						block_number=None,
 						timestamp=_ms_to_utc(item.get("block_timestamp")),
 						status=TransferStatus.SUCCESS,
@@ -233,7 +245,7 @@ class TronGridSource(ChainDataSource):
 			try:
 				sender = _hex_to_base58(value["owner_address"])
 				recipient = _hex_to_base58(value["to_address"])
-				amount = int(value["amount"])
+				amount = _amount(value["amount"])
 				txid = item["txID"]
 			except (KeyError, TypeError, ValueError) as exc:
 				raise ChainDataSourceError(f"unexpected transaction item: {exc!r}") from exc
@@ -327,7 +339,7 @@ class TronGridSource(ChainDataSource):
 							symbol=symbol,
 							decimals=decimals,
 						),
-						amount=int(result["value"]),
+						amount=_amount(result["value"]),
 						block_number=int(item["block_number"]),
 						timestamp=_ms_to_utc(item.get("block_timestamp")),
 						# События порождаются только успешным исполнением.
@@ -375,7 +387,7 @@ class TronGridSource(ChainDataSource):
 			try:
 				sender = _hex_to_base58(value["owner_address"])
 				recipient = _hex_to_base58(value["to_address"])
-				amount = int(value["amount"])
+				amount = _amount(value["amount"])
 				txid = tx["txID"]
 			except (KeyError, TypeError, ValueError) as exc:
 				raise ChainDataSourceError(f"unexpected block transaction: {exc!r}") from exc

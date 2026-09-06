@@ -399,3 +399,30 @@ def test_token_transfers_until_bound() -> None:
 	)
 	assert seen_params[0]["min_block_timestamp"] == "1699999000000"
 	assert seen_params[0]["max_block_timestamp"] == "1699999600000"
+
+
+def test_negative_amount_rejected() -> None:
+	"""A negative amount from the provider is a data error, not a transfer."""
+	from seedrays.chains.base import ChainDataSourceError
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		return httpx.Response(
+			200,
+			json={
+				"data": [
+					{
+						"transaction_id": "ev-negative",
+						"event_name": "Transfer",
+						"block_number": 55000001,
+						"block_timestamp": 1700000000000,
+						"result": {"from": OTHER_HEX, "to": ADDRESS_HEX, "value": "-5"},
+					}
+				],
+				"meta": {},
+			},
+		)
+
+	with pytest.raises(ChainDataSourceError, match="negative amount"):
+		asyncio.run(
+			_make_source(handler).token_transfers(USDT_CONTRACT, "USDT", 6, None, confirmed=True)
+		)

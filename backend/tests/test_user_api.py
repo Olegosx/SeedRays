@@ -8,6 +8,7 @@ import httpx
 
 from seedrays.api.app_api import create_app
 from seedrays.mail.base import MailSender
+from seeding import enable_dev_mail
 from seedrays.storage.migrations.runner import upgrade_registry
 
 GOOD_USER = {"username": "alice", "email": "Alice@Example.com", "password": "correct-horse"}
@@ -25,7 +26,7 @@ class FakeMailer(MailSender):
 
 def _client(data_dir: Path, mailer: MailSender | None) -> httpx.AsyncClient:
 	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=mailer))
-	return httpx.AsyncClient(transport=transport, base_url="http://gw")
+	return httpx.AsyncClient(transport=transport, base_url="https://gw")
 
 
 def _confirm_link(mailer: FakeMailer) -> str:
@@ -41,6 +42,7 @@ def test_register_confirm_login_me_logout(tmp_path: Path) -> None:
 
 	async def scenario() -> None:
 		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
 		mailer = FakeMailer()
 		async with _client(tmp_path, mailer) as client:
 			created = await client.post("/v1/user/register", json=GOOD_USER)
@@ -90,6 +92,7 @@ def test_register_without_mailer_autoconfirms(tmp_path: Path) -> None:
 
 	async def scenario() -> None:
 		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			created = await client.post("/v1/user/register", json=GOOD_USER)
 			assert created.status_code == 200
@@ -108,6 +111,7 @@ def test_register_validation_and_duplicates(tmp_path: Path) -> None:
 
 	async def scenario() -> None:
 		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			cases = [
 				({**GOOD_USER, "username": "a@b"}, "invalid_username"),
@@ -140,6 +144,7 @@ def test_login_failures(tmp_path: Path) -> None:
 
 	async def scenario() -> None:
 		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			await client.post("/v1/user/register", json=GOOD_USER)
 			for identifier, password in (("alice", "wrong-password"), ("nobody", "whatever12")):
@@ -157,9 +162,86 @@ def test_bad_confirmation_token_redirects_with_zero(tmp_path: Path) -> None:
 
 	async def scenario() -> None:
 		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			response = await client.get("/v1/user/confirm-email?token=bogus")
 			assert response.status_code == 303
 			assert "confirmed=0" in response.headers["location"]
+
+	asyncio.run(scenario())
+
+
+def test_register_refused_without_mail_and_without_dev_mode(tmp_path: Path) -> None:
+	"""No mail sender and no explicit dev mode — registration answers 503."""
+
+	async def scenario() -> None:
+		upgrade_registry(tmp_path)  # флаг dev-почты сознательно НЕ включаем
+		async with _client(tmp_path, None) as client:
+			response = await client.post("/v1/user/register", json=GOOD_USER)
+			assert response.status_code == 503
+			assert response.json()["error"]["code"] == "mail_not_configured"
+
+	asyncio.run(scenario())
+
+
+def test_login_rate_limited(tmp_path: Path) -> None:
+	"""Password brute force hits the sliding-window limit with 429."""
+
+	async def scenario() -> None:
+		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
+		async with _client(tmp_path, None) as client:
+			await client.post("/v1/user/register", json=GOOD_USER)
+			for _ in range(10):
+				attempt = await client.post(
+					"/v1/user/login",
+					json={"identifier": "alice", "password": "wrong-password"},
+				)
+				assert attempt.status_code == 401
+			# Одиннадцатая попытка — даже с верным паролем — отбивается лимитом.
+			blocked = await client.post(
+				"/v1/user/login",
+				json={"identifier": "alice", "password": GOOD_USER["password"]},
+			)
+			assert blocked.status_code == 429
+			assert blocked.json()["error"]["code"] == "rate_limited"
+
+	asyncio.run(scenario())
+
+
+def test_session_cookie_is_secure_and_httponly(tmp_path: Path) -> None:
+	"""The session cookie never travels over plain HTTP and is JS-invisible."""
+
+	async def scenario() -> None:
+		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
+		async with _client(tmp_path, None) as client:
+			await client.post("/v1/user/register", json=GOOD_USER)
+			login = await client.post(
+				"/v1/user/login",
+				json={"identifier": "alice", "password": GOOD_USER["password"]},
+			)
+			cookie = login.headers["set-cookie"]
+			assert "Secure" in cookie
+			assert "HttpOnly" in cookie
+			assert "SameSite=lax" in cookie
+
+	asyncio.run(scenario())
+
+
+def test_validation_error_does_not_echo_input(tmp_path: Path) -> None:
+	"""The 400 body names the field and the reason, never the submitted value."""
+
+	async def scenario() -> None:
+		upgrade_registry(tmp_path)
+		async with _client(tmp_path, None) as client:
+			secret = "very-secret-password-" + "x" * 1200  # длиннее лимита поля
+			response = await client.post(
+				"/v1/user/register", json={**GOOD_USER, "password": secret}
+			)
+			assert response.status_code == 400
+			assert response.json()["error"]["code"] == "validation"
+			assert "very-secret-password" not in response.text
+			assert "password" in response.json()["error"]["message"]
 
 	asyncio.run(scenario())

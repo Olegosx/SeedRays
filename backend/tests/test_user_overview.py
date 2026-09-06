@@ -13,6 +13,7 @@ from seedrays.orchestrator.overview import format_amount
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_store
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
+from seeding import enable_dev_mail
 from seedrays.storage.migrations.runner import upgrade_registry
 
 TEST_MNEMONIC = (
@@ -34,8 +35,9 @@ def test_format_amount_is_exact() -> None:
 async def _prepared_client(data_dir: Path) -> tuple[httpx.AsyncClient, str, str]:
 	"""A signed-in client with a wallet, an app, a mapping and one binding."""
 	upgrade_registry(data_dir)
+	await enable_dev_mail(data_dir)
 	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=None))
-	client = httpx.AsyncClient(transport=transport, base_url="http://gw")
+	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
 	await client.post(
 		"/v1/user/register",
 		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},

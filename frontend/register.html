@@ -56,7 +56,7 @@
 				<div class="card-body">
 					<h2 class="h2 text-center mb-4" x-text="$store.i18n.t('register.title')"></h2>
 					<div class="alert alert-danger" x-show="error" x-text="error"></div>
-					<form action="#" method="get" autocomplete="off" novalidate
+					<form action="#" method="post" autocomplete="off" novalidate
 						@submit.prevent="submit()">
 						<div class="mb-3">
 							<label class="form-label" x-text="$store.i18n.t('register.email')"></label>

@@ -34,6 +34,7 @@ _OPERATION_STATUS = {
 	"invalid_credentials": 401,
 	"email_not_confirmed": 403,
 	"mail_failed": 502,
+	"mail_not_configured": 503,
 	"invalid_family": 400,
 	"invalid_xpub": 400,
 	"private_key_rejected": 400,
@@ -66,4 +67,10 @@ def register_error_handlers(app: FastAPI) -> None:
 	async def _validation_error(
 		_request: Request, exc: RequestValidationError
 	) -> JSONResponse:
-		return JSONResponse(status_code=400, content=_body("validation", str(exc)))
+		# Только поле и причина: сырой дамп pydantic эхом возвращал бы
+		# значения полей — включая пароли.
+		message = "; ".join(
+			f"{'.'.join(str(part) for part in error.get('loc', ()))}: {error.get('msg', '')}"
+			for error in exc.errors()
+		)
+		return JSONResponse(status_code=400, content=_body("validation", message))

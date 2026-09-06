@@ -86,16 +86,19 @@ async def register(
 	password: str,
 	mailer: MailSender | None,
 	confirm_base_url: str,
+	dev_autoconfirm: bool = False,
 ) -> RegisteredUser:
 	"""Create an account: user row, own database, primary email.
 
 	With a mail sender configured the primary email gets a confirmation
-	token and a message; without one (development mode) the email is
-	confirmed immediately and a warning is logged.
+	token and a message. Without one the outcome is explicit: the
+	development mode (``dev_autoconfirm``) confirms the email immediately
+	with a warning in the log; otherwise registration is refused — a
+	silent fall-back would let anyone claim a stranger's address.
 
 	Raises:
 		OperationError: invalid_username / invalid_email / weak_password /
-			username_taken / email_taken.
+			username_taken / email_taken / mail_not_configured.
 	"""
 	if not _USERNAME_RE.fullmatch(username):
 		raise OperationError(
@@ -118,10 +121,15 @@ async def register(
 	except ValueError as exc:
 		raise OperationError("username_taken", "this username is already taken") from exc
 
-	token: str | None = None
 	if mailer is None:
-		# Режим разработки: отправитель почты не настроен — подтверждаем сразу.
-		logger.warning("mail sender is not configured; email %s auto-confirmed", email)
+		if not dev_autoconfirm:
+			raise OperationError(
+				"mail_not_configured",
+				"registration is unavailable until the operator configures "
+				"outgoing mail (or enables the development auto-confirm mode)",
+			)
+		# Явный режим разработки: почта авто-подтверждается с предупреждением.
+		logger.warning("development mail mode: email %s auto-confirmed", email)
 		await registry_ops.add_user_email(
 			registry,
 			user_id=user.id,
@@ -248,11 +256,17 @@ async def add_email(
 	address: str,
 	mailer: MailSender | None,
 	confirm_base_url: str,
+	dev_autoconfirm: bool = False,
 ) -> bool:
 	"""Attach a secondary email; returns True when confirmation is required.
 
+	Without a mail sender the outcome mirrors registration: the explicit
+	development mode auto-confirms with a warning, otherwise the
+	operation is refused.
+
 	Raises:
-		OperationError: invalid_email / email_taken / mail_failed.
+		OperationError: invalid_email / email_taken / mail_failed /
+			mail_not_configured.
 	"""
 	address = address.strip().lower()
 	if not _EMAIL_RE.fullmatch(address):
@@ -261,7 +275,13 @@ async def add_email(
 		raise OperationError("email_taken", "this email is already attached to an account")
 
 	if mailer is None:
-		logger.warning("mail sender is not configured; email %s auto-confirmed", address)
+		if not dev_autoconfirm:
+			raise OperationError(
+				"mail_not_configured",
+				"adding an email is unavailable until the operator configures "
+				"outgoing mail (or enables the development auto-confirm mode)",
+			)
+		logger.warning("development mail mode: email %s auto-confirmed", address)
 		await registry_ops.add_user_email(
 			registry,
 			user_id=user_id,

@@ -7,11 +7,13 @@ header matching the session's CSRF token.
 
 from __future__ import annotations
 
+import hmac
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, AsyncIterator
 
-from fastapi import Depends, FastAPI, Header, Query, Request, Response
+from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -23,8 +25,11 @@ from seedrays.orchestrator import apps as app_ops
 from seedrays.orchestrator import auth
 from seedrays.orchestrator import overview as overview_ops
 from seedrays.orchestrator import wallets as wallet_ops
+from seedrays.orchestrator.ratelimit import RateLimiter
 from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
+
+logger = logging.getLogger(__name__)
 
 SESSION_COOKIE = "seedrays_session"
 
@@ -32,6 +37,15 @@ SESSION_COOKIE = "seedrays_session"
 SETTING_MAIL_API_KEY = "mail.resend.api_key"
 SETTING_MAIL_FROM = "mail.from"
 SETTING_BASE_URL = "gateway.base_url"
+# Явный режим разработки: без отправителя почты адреса авто-подтверждаются
+# только при включённом флаге — молчаливый «fail-open» недопустим.
+SETTING_MAIL_DEV = "mail.dev_autoconfirm"
+
+# Тормоз перебора (скользящие окна в памяти процесса, ADR-0003).
+LOGIN_LIMIT = 10
+LOGIN_WINDOW_SECONDS = 15 * 60
+REGISTER_LIMIT = 10
+REGISTER_WINDOW_SECONDS = 60 * 60
 
 
 class RegisterRequest(BaseModel):
@@ -119,8 +133,38 @@ def register_user_routes(
 		app: The FastAPI application.
 		data_dir: The gateway data directory.
 		mailer: Mail sender override (tests); by default the sender is
-			built from the registry settings on every registration.
+			built from the registry settings on every mail-sending
+			operation (registration, adding an email).
 	"""
+	login_limiter = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS)
+	register_limiter = RateLimiter(REGISTER_LIMIT, REGISTER_WINDOW_SECONDS)
+
+	def _client_host(request: Request) -> str:
+		"""The caller's address for rate-limit keys."""
+		return request.client.host if request.client else "unknown"
+
+	async def _mail_context(registry: AsyncEngine) -> tuple[MailSender | None, str, bool]:
+		"""Resolve the mail sender, the confirmation base URL and the dev mode.
+
+		Ссылка подтверждения строится только из настройки
+		``gateway.base_url`` — заголовку Host запроса доверять нельзя
+		(подменённый Host увёл бы токен подтверждения на чужой домен).
+		Отправитель из настроек без базового адреса не используется.
+		"""
+		base_url = await registry_ops.get_setting(registry, SETTING_BASE_URL) or ""
+		if mailer is not None:
+			active: MailSender | None = mailer
+		else:
+			active = await _resolve_mailer(registry)
+			if active is not None and not base_url:
+				logger.error(
+					"mail sender is configured but %s is not set; mail disabled",
+					SETTING_BASE_URL,
+				)
+				active = None
+		dev_raw = await registry_ops.get_setting(registry, SETTING_MAIL_DEV)
+		dev = (dev_raw or "").strip().lower() in ("1", "true", "yes")
+		return active, base_url, dev
 
 	async def registry_engine() -> AsyncIterator[AsyncEngine]:
 		"""Open the registry engine for one request."""
@@ -146,18 +190,34 @@ def register_user_routes(
 
 	SessionDep = Depends(session_user)
 
-	def check_csrf(ctx: UserContext, header_token: str | None) -> None:
-		"""Mutating requests must present the session's CSRF token."""
-		if not header_token or header_token != ctx.user.csrf_token:
+	async def mutating_session(
+		request: Request, ctx: UserContext = SessionDep
+	) -> UserContext:
+		"""Session + CSRF check in one dependency.
+
+		Каждый изменяющий маршрут объявляет эту зависимость и тем самым
+		защищён по построению (структурная граница ADR-0004): забыть
+		проверку, добавив маршрут, невозможно. Сравнение токена — за
+		постоянное время, чтобы не давать оракула по времени отклика.
+		"""
+		header_token = request.headers.get("X-CSRF-Token")
+		if not header_token or not hmac.compare_digest(header_token, ctx.user.csrf_token):
 			raise ApiError(403, "csrf", "the X-CSRF-Token header is missing or wrong")
+		return ctx
+
+	MutatingSessionDep = Depends(mutating_session)
 
 	def _set_session_cookie(response: Response, signed: auth.SignedIn) -> None:
 		max_age = int((signed.expires_at - auth._now()).total_seconds())
+		# Secure: токен сессии не должен уходить по нешифрованному каналу
+		# (threat-model требует «HTTPS only»); локальная разработка не
+		# страдает — localhost браузеры считают доверенным источником.
 		response.set_cookie(
 			SESSION_COOKIE,
 			signed.session_token,
 			max_age=max_age,
 			httponly=True,
+			secure=True,
 			samesite="lax",
 			path="/",
 		)
@@ -167,10 +227,9 @@ def register_user_routes(
 		body: RegisterRequest, request: Request, registry: AsyncEngine = RegistryDep
 	) -> dict:
 		"""Create an account; sends the confirmation email when mail is set up."""
-		active_mailer = mailer if mailer is not None else await _resolve_mailer(registry)
-		base_url = await registry_ops.get_setting(registry, SETTING_BASE_URL)
-		if not base_url:
-			base_url = str(request.base_url)
+		if not register_limiter.allow(_client_host(request)):
+			raise ApiError(429, "rate_limited", "too many registrations; try again later")
+		active_mailer, base_url, dev = await _mail_context(registry)
 		registered = await auth.register(
 			registry,
 			data_dir,
@@ -179,6 +238,7 @@ def register_user_routes(
 			password=body.password,
 			mailer=active_mailer,
 			confirm_base_url=base_url,
+			dev_autoconfirm=dev,
 		)
 		return {
 			"user": {"username": registered.username},
@@ -194,9 +254,15 @@ def register_user_routes(
 
 	@app.post("/v1/user/login")
 	async def login(
-		body: LoginRequest, response: Response, registry: AsyncEngine = RegistryDep
+		body: LoginRequest,
+		request: Request,
+		response: Response,
+		registry: AsyncEngine = RegistryDep,
 	) -> dict:
 		"""Sign in by username or email; sets the session cookie."""
+		key = f"{_client_host(request)}|{body.identifier.strip().lower()}"
+		if not login_limiter.allow(key):
+			raise ApiError(429, "rate_limited", "too many sign-in attempts; try again later")
 		signed = await auth.sign_in(
 			registry,
 			identifier=body.identifier,
@@ -208,12 +274,9 @@ def register_user_routes(
 
 	@app.post("/v1/user/logout")
 	async def logout(
-		response: Response,
-		ctx: UserContext = SessionDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+		response: Response, ctx: UserContext = MutatingSessionDep
 	) -> dict:
 		"""Drop the session and clear the cookie."""
-		check_csrf(ctx, x_csrf_token)
 		await auth.sign_out(ctx.registry, ctx.session_token)
 		response.delete_cookie(SESSION_COOKIE, path="/")
 		return {"ok": True}
@@ -251,12 +314,10 @@ def register_user_routes(
 	@app.post("/v1/user/wallets")
 	async def attach_wallet(
 		body: AttachWalletRequest,
-		ctx: UserContext = SessionDep,
+		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 	) -> dict:
 		"""Attach a watch-only wallet (the recommended path of ADR-0002)."""
-		check_csrf(ctx, x_csrf_token)
 		wallet = await wallet_ops.attach_wallet(
 			engine,
 			ctx.registry,
@@ -269,12 +330,9 @@ def register_user_routes(
 
 	@app.post("/v1/user/wallets/generate")
 	async def generate_wallet(
-		body: GenerateWalletRequest,
-		ctx: UserContext = SessionDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+		body: GenerateWalletRequest, ctx: UserContext = MutatingSessionDep
 	) -> dict:
 		"""One-time seed generation: the phrase is returned once, stored never."""
-		check_csrf(ctx, x_csrf_token)
 		material = wallet_ops.generate_material(
 			words=body.words, families=body.families, passphrase=body.passphrase
 		)
@@ -311,12 +369,10 @@ def register_user_routes(
 	@app.post("/v1/user/applications")
 	async def create_application(
 		body: CreateApplicationRequest,
-		ctx: UserContext = SessionDep,
+		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 	) -> dict:
 		"""Create an application; the raw key is returned exactly once."""
-		check_csrf(ctx, x_csrf_token)
 		summary, key = await app_ops.create_application(
 			ctx.registry, engine, user_id=ctx.user.user_id, name=body.name
 		)
@@ -337,12 +393,10 @@ def register_user_routes(
 	@app.post("/v1/user/applications/{app_id}/key")
 	async def reissue_key(
 		app_id: int,
-		ctx: UserContext = SessionDep,
+		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 	) -> dict:
 		"""Reissue the application key; the new raw key is returned exactly once."""
-		check_csrf(ctx, x_csrf_token)
 		summary, key = await app_ops.reissue_key(
 			ctx.registry, engine, user_id=ctx.user.user_id, app_id=app_id
 		)
@@ -351,12 +405,10 @@ def register_user_routes(
 	@app.delete("/v1/user/applications/{app_id}/key")
 	async def revoke_key(
 		app_id: int,
-		ctx: UserContext = SessionDep,
+		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 	) -> dict:
 		"""Revoke the application key: the application loses API access."""
-		check_csrf(ctx, x_csrf_token)
 		summary = await app_ops.revoke_key(ctx.registry, engine, app_id=app_id)
 		return {"application": _app_json(summary)}
 
@@ -364,12 +416,10 @@ def register_user_routes(
 	async def set_network_mapping(
 		app_id: int,
 		body: NetworkMappingRequest,
-		ctx: UserContext = SessionDep,
+		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 	) -> dict:
 		"""Create or replace one "network → wallet" mapping entry."""
-		check_csrf(ctx, x_csrf_token)
 		await app_ops.set_network_mapping(
 			engine, app_id=app_id, network=body.network, wallet_id=body.wallet_id
 		)
@@ -379,12 +429,10 @@ def register_user_routes(
 	async def remove_network_mapping(
 		app_id: int,
 		network: str,
-		ctx: UserContext = SessionDep,
+		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
 	) -> dict:
 		"""Drop one mapping entry."""
-		check_csrf(ctx, x_csrf_token)
 		await app_ops.remove_network_mapping(engine, app_id=app_id, network=network)
 		return {"ok": True}
 
@@ -460,45 +508,33 @@ def register_user_routes(
 
 	@app.post("/v1/user/emails")
 	async def add_email(
-		body: AddEmailRequest,
-		request: Request,
-		ctx: UserContext = SessionDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+		body: AddEmailRequest, ctx: UserContext = MutatingSessionDep
 	) -> dict:
 		"""Attach a secondary email; it is confirmed by a message."""
-		check_csrf(ctx, x_csrf_token)
-		active_mailer = mailer if mailer is not None else await _resolve_mailer(ctx.registry)
-		base_url = await registry_ops.get_setting(ctx.registry, SETTING_BASE_URL)
-		if not base_url:
-			base_url = str(request.base_url)
+		active_mailer, base_url, dev = await _mail_context(ctx.registry)
 		required = await auth.add_email(
 			ctx.registry,
 			user_id=ctx.user.user_id,
 			address=body.address,
 			mailer=active_mailer,
 			confirm_base_url=base_url,
+			dev_autoconfirm=dev,
 		)
 		return {"confirmation_required": required}
 
 	@app.delete("/v1/user/emails/{email_id}")
 	async def remove_email(
-		email_id: int,
-		ctx: UserContext = SessionDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+		email_id: int, ctx: UserContext = MutatingSessionDep
 	) -> dict:
 		"""Detach a secondary email; the primary one cannot be removed."""
-		check_csrf(ctx, x_csrf_token)
 		await auth.remove_email(ctx.registry, user_id=ctx.user.user_id, email_id=email_id)
 		return {"ok": True}
 
 	@app.post("/v1/user/password")
 	async def change_password(
-		body: ChangePasswordRequest,
-		ctx: UserContext = SessionDep,
-		x_csrf_token: Annotated[str | None, Header(alias="X-CSRF-Token")] = None,
+		body: ChangePasswordRequest, ctx: UserContext = MutatingSessionDep
 	) -> dict:
 		"""Change the password; other sessions of the user are dropped."""
-		check_csrf(ctx, x_csrf_token)
 		await auth.change_password(
 			ctx.registry,
 			user_id=ctx.user.user_id,

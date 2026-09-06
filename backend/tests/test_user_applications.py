@@ -8,6 +8,7 @@ import httpx
 from seedrays.api.app_api import create_app
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub
+from seeding import enable_dev_mail
 from seedrays.storage.migrations.runner import upgrade_registry
 
 TEST_MNEMONIC = (
@@ -18,8 +19,9 @@ TEST_MNEMONIC = (
 
 async def _signed_in_client(data_dir: Path) -> tuple[httpx.AsyncClient, str]:
 	upgrade_registry(data_dir)
+	await enable_dev_mail(data_dir)
 	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=None))
-	client = httpx.AsyncClient(transport=transport, base_url="http://gw")
+	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
 	await client.post(
 		"/v1/user/register",
 		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},

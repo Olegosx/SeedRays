@@ -8,6 +8,7 @@ import httpx
 from seedrays.api.app_api import create_app
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, validate_mnemonic
+from seeding import enable_dev_mail
 from seedrays.storage.migrations.runner import upgrade_registry
 
 TEST_MNEMONIC = (
@@ -19,8 +20,9 @@ TEST_MNEMONIC = (
 async def _signed_in_client(data_dir: Path) -> tuple[httpx.AsyncClient, str]:
 	"""A client with a live session; returns (client, csrf token)."""
 	upgrade_registry(data_dir)
+	await enable_dev_mail(data_dir)
 	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=None))
-	client = httpx.AsyncClient(transport=transport, base_url="http://gw")
+	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
 	await client.post(
 		"/v1/user/register",
 		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
@@ -197,3 +199,31 @@ def test_attach_rejects_duplicate_xpub_neutrally(tmp_path: Path) -> None:
 			await client.aclose()
 
 	asyncio.run(scenario())
+
+
+def test_generated_phrase_never_persisted_or_logged(tmp_path: Path, caplog) -> None:
+	"""The seed phrase appears in the one-time response only: not in DBs, not in logs."""
+
+	import logging
+
+	async def scenario() -> str:
+		client, csrf = await _signed_in_client(tmp_path)
+		try:
+			result = await client.post(
+				"/v1/user/wallets/generate",
+				json={"words": 12, "families": ["tron"]},
+				headers={"X-CSRF-Token": csrf},
+			)
+			return " ".join(result.json()["phrase"])
+		finally:
+			await client.aclose()
+
+	with caplog.at_level(logging.DEBUG):
+		phrase = asyncio.run(scenario())
+
+	# Ни целая фраза, ни отдельные её слова не должны осесть в журнале.
+	logged = " ".join(record.getMessage() for record in caplog.records)
+	assert phrase not in logged
+	# И ни в одном файле базы шлюза (реестр и база пользователя).
+	for db_file in tmp_path.rglob("*.db"):
+		assert phrase.encode() not in db_file.read_bytes(), db_file

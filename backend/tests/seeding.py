@@ -23,6 +23,15 @@ TEST_API_KEY = "test-api-key-0001"
 FIRST_TRON_ADDRESS = "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH"
 
 
+async def enable_dev_mail(data_dir: Path) -> None:
+	"""Turn on the explicit development auto-confirm mail mode for a test gateway."""
+	registry = create_sqlite_engine(registry_db_path(data_dir))
+	try:
+		await registry_ops.set_setting(registry, "mail.dev_autoconfirm", "1")
+	finally:
+		await registry.dispose()
+
+
 async def seed_gateway(data_dir: Path, networks: tuple[str, ...] = ("tron-nile",)) -> None:
 	"""Create a migrated gateway with one user, wallet, application and API key.
 
