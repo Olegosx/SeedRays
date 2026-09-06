@@ -89,6 +89,7 @@ GET    /v1/user/confirm-email     ?token=…   (the link from the email; redirec
 POST   /v1/user/login             body: {"identifier", "password", "remember"}
 POST   /v1/user/logout
 GET    /v1/user/me
+GET    /v1/user/networks          (supported networks and wallet families for pickers)
 GET    /v1/user/wallets
 POST   /v1/user/wallets           body: {"family", "xpub", "label"}
 POST   /v1/user/wallets/generate  body: {"words", "families", "passphrase"}
