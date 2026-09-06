@@ -86,6 +86,10 @@ bindings = Table(
 		"wallet_id", "network", "application_id", "app_user_id", name="uq_bindings_owner"
 	),
 	UniqueConstraint("network", "address", "memo", name="uq_bindings_address"),
+	# Индекс деривации выдаётся в сети один раз; переиспользование того же
+	# индекса той же связкой «приложение + пользователь» в другой сети —
+	# осознанный путь (см. выдачу индекса в оркестраторе).
+	UniqueConstraint("wallet_id", "network", "derivation_index", name="uq_bindings_index"),
 	# Составной внешний ключ: пользователь приложения обязан принадлежать
 	# тому же приложению, на которое ссылается привязка (ADR-0009).
 	ForeignKeyConstraint(
@@ -105,9 +109,12 @@ balances = Table(
 	Column("last_deposit_at", DateTime),
 )
 
-# Транзакции в блокчейне (ADR-0017): номер блока обязателен, провал исполнения —
-# атрибут, финальность вычисляется от границы сети и не хранится. Строки после
-# вставки меняются один раз — простановкой отметки «учтена в балансе».
+# Транзакции в блокчейне (ADR-0017, ADR-0021): номер блока обязателен, провал
+# исполнения — атрибут. Строка живёт в двух состояниях: предварительная
+# (finalized_at IS NULL — наблюдение из зоны выше границы финальности,
+# может исчезнуть при перестройке цепи) и финализированная (подтверждена
+# авторитетным сканированием финализированной зоны). К балансу применяются
+# только финализированные строки.
 transactions = Table(
 	"transactions",
 	metadata,
@@ -116,13 +123,20 @@ transactions = Table(
 	Column("txid", String(128), nullable=False),
 	Column("asset_id", Integer, nullable=False),
 	Column("direction", String(3), nullable=False),
+	# Порядковый номер события в транзакции: различает несколько переводов
+	# одного актива на один адрес внутри одной транзакции (батч-выплаты).
+	Column("event_index", Integer, nullable=False, server_default="0"),
 	Column("amount", Text, nullable=False),
 	Column("block_number", Integer, nullable=False),
 	Column("tx_time", DateTime),
 	Column("status", String(8), nullable=False),
 	Column("first_seen_at", DateTime, nullable=False, server_default=func.now()),
+	Column("finalized_at", DateTime),
 	Column("balance_applied_at", DateTime),
-	UniqueConstraint("txid", "address", "asset_id", name="uq_transactions_key"),
+	UniqueConstraint(
+		"txid", "address", "asset_id", "direction", "event_index",
+		name="uq_transactions_key",
+	),
 	CheckConstraint("direction IN ('in', 'out')", name="ck_transactions_direction"),
 	CheckConstraint("status IN ('success', 'failed')", name="ck_transactions_status"),
 )

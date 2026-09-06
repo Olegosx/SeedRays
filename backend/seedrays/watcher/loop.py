@@ -40,11 +40,12 @@ async def run_forever(data_dir: Path) -> None:
 		try:
 			stats: PassStats = await run_pass(data_dir)
 			logger.info(
-				"pass done: networks=%d matched=%d recorded=%d applied=%d rate_limited=%s",
+				"pass done: networks=%d matched=%d recorded=%d applied=%d deleted=%d rate_limited=%s",
 				stats.networks_scanned,
 				stats.transfers_matched,
 				stats.rows_recorded,
 				stats.rows_applied,
+				stats.rows_deleted,
 				",".join(stats.networks_rate_limited) or "-",
 			)
 		except asyncio.CancelledError:

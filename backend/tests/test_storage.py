@@ -18,6 +18,7 @@ REGISTRY_TABLES = {
 	"users",
 	"operators",
 	"api_keys",
+	"wallet_xpubs",
 	"settings",
 	"assets",
 	"watcher_state",
@@ -190,5 +191,47 @@ def test_registry_settings_assets_and_watcher_state(tmp_path: Path) -> None:
 		assert state.last_block == 20
 		assert state.last_scan_at == moment
 		await engine.dispose()
+
+	asyncio.run(scenario())
+
+
+def test_record_transaction_rejects_invalid_domain_values(tmp_path: Path) -> None:
+	"""A bad direction/status raises instead of masquerading as "already seen"."""
+
+	async def scenario() -> None:
+		from seedrays.storage import user_store
+		from seedrays.storage.migrations.runner import upgrade_user_db
+
+		db_path = user_db_path(tmp_path, "u1")
+		db_path.parent.mkdir(parents=True)
+		upgrade_user_db(db_path)
+		engine = create_sqlite_engine(db_path)
+		try:
+			with pytest.raises(ValueError):
+				await user_store.record_transaction(
+					engine,
+					address="T-addr",
+					txid="tx1",
+					asset_id=1,
+					direction="sideways",
+					amount=1,
+					block_number=1,
+					tx_time=None,
+					status="success",
+				)
+			with pytest.raises(ValueError):
+				await user_store.record_transaction(
+					engine,
+					address="T-addr",
+					txid="tx1",
+					asset_id=1,
+					direction="in",
+					amount=1,
+					block_number=1,
+					tx_time=None,
+					status="maybe",
+				)
+		finally:
+			await engine.dispose()
 
 	asyncio.run(scenario())

@@ -30,7 +30,8 @@ async def _seed_transactions(data_dir: Path) -> None:
 	await registry.dispose()
 
 	engine = create_sqlite_engine(user_db_path(data_dir, "u1"))
-	for txid, block in (("tx-old", 90), ("tx-new", 105)):
+	# tx-old — финализирована и применяется; tx-new — предварительная (pending).
+	for txid, block, finalized in (("tx-old", 90, True), ("tx-new", 105, False)):
 		await user_store.record_transaction(
 			engine,
 			address=FIRST_TRON_ADDRESS,
@@ -41,11 +42,11 @@ async def _seed_transactions(data_dir: Path) -> None:
 			block_number=block,
 			tx_time=datetime(2026, 8, 29, 12, 0),
 			status="success",
+			finalized_at=datetime(2026, 8, 29, 12, 1) if finalized else None,
 		)
 	await user_store.apply_finalized(
 		engine,
 		asset_ids={asset.id},
-		boundary_block=100,
 		applied_at=datetime(2026, 8, 29, 12, 1),
 	)
 	await engine.dispose()
@@ -171,5 +172,32 @@ def test_balances_and_history(tmp_path: Path) -> None:
 
 			users = await client.get("/v1/app/users", headers=HEADERS)
 			assert [u["external_id"] for u in users.json()["users"]] == ["user1"]
+
+	asyncio.run(scenario())
+
+
+def test_concurrent_address_issue_gets_distinct_addresses(tmp_path: Path) -> None:
+	"""Concurrent issuance for different app users never shares an address."""
+
+	async def scenario() -> None:
+		await seed_gateway(tmp_path, NETWORKS)
+		async with _client(tmp_path) as client:
+			async def issue(user: str) -> httpx.Response:
+				return await client.post(
+					f"/v1/app/users/{user}/addresses",
+					json={"networks": "all"},
+					headers=HEADERS,
+				)
+
+			responses = await asyncio.gather(*(issue(f"cc-user{i}") for i in range(4)))
+			assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
+			# Один пользователь — один адрес (одинаковый в обеих сетях семейства);
+			# у разных пользователей адреса не пересекаются.
+			per_user = []
+			for r in responses:
+				addresses = {a["address"] for a in r.json()["addresses"]}
+				assert len(addresses) == 1
+				per_user.append(addresses.pop())
+			assert len(set(per_user)) == len(per_user)
 
 	asyncio.run(scenario())

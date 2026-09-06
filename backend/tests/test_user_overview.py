@@ -74,7 +74,8 @@ async def _seed_transactions(data_dir: Path, address: str) -> None:
 	)
 	await registry.dispose()
 	engine = create_sqlite_engine(user_db_path(data_dir, "u1"))
-	for txid, block in (("tx-old", 90), ("tx-new", 105)):
+	# tx-old — финализирована и применяется; tx-new — предварительная (pending).
+	for txid, block, finalized in (("tx-old", 90, True), ("tx-new", 105, False)):
 		await user_store.record_transaction(
 			engine,
 			address=address,
@@ -85,9 +86,10 @@ async def _seed_transactions(data_dir: Path, address: str) -> None:
 			block_number=block,
 			tx_time=datetime(2026, 9, 3, 12, 0),
 			status="success",
+			finalized_at=datetime(2026, 9, 3, 12, 1) if finalized else None,
 		)
 	await user_store.apply_finalized(
-		engine, asset_ids={asset.id}, boundary_block=100,
+		engine, asset_ids={asset.id},
 		applied_at=datetime(2026, 9, 3, 12, 1),
 	)
 	await engine.dispose()

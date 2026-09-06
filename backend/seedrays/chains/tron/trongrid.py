@@ -269,16 +269,29 @@ class TronGridSource(ChainDataSource):
 			) from exc
 
 	async def token_transfers(
-		self, contract: str, symbol: str, decimals: int, since: datetime
+		self,
+		contract: str,
+		symbol: str,
+		decimals: int,
+		since: datetime | None,
+		*,
+		confirmed: bool,
 	) -> list[RangeTransfer]:
-		"""All Transfer events of one token contract since a moment (range scan)."""
+		"""Transfer events of one token contract (range scan, ADR-0021).
+
+		``confirmed=True`` asks the provider for solidified events only (the
+		authoritative scan); ``confirmed=False`` — for events above the
+		finality boundary (the provisional preview).
+		"""
 		path = f"/v1/contracts/{contract}/events"
 		params: dict[str, Any] = {
 			"event_name": "Transfer",
 			"limit": self._page_limit,
-			"min_block_timestamp": int(since.timestamp() * 1000),
 			"order_by": "block_timestamp,asc",
+			"only_confirmed" if confirmed else "only_unconfirmed": "true",
 		}
+		if since is not None:
+			params["min_block_timestamp"] = int(since.timestamp() * 1000)
 		transfers = []
 		for item in await self._paginate(path, params):
 			if item.get("event_name") != "Transfer":
@@ -302,6 +315,9 @@ class TronGridSource(ChainDataSource):
 						timestamp=_ms_to_utc(item.get("block_timestamp")),
 						# События порождаются только успешным исполнением.
 						status=TransferStatus.SUCCESS,
+						# Различает несколько переводов одного токена в одной
+						# транзакции (часть ключа идемпотентности, ADR-0017).
+						event_index=int(item.get("event_index", 0)),
 					)
 				)
 			except (KeyError, TypeError, ValueError) as exc:

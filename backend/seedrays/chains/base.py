@@ -71,9 +71,16 @@ class RateLimitedError(ChainDataSourceError):
 
 
 class ChainDataSource(ABC):
-	"""Read-only access to one network's data."""
+	"""Read-only access to one network's data.
+
+	Sources own network resources (HTTP clients); the consumer must call
+	:meth:`aclose` when done with the source.
+	"""
 
 	network: str
+
+	async def aclose(self) -> None:
+		"""Release the source's resources; default implementation holds none."""
 
 	@abstractmethod
 	async def latest_block(self) -> int:
@@ -115,15 +122,25 @@ class ChainDataSource(ABC):
 
 	@abstractmethod
 	async def token_transfers(
-		self, contract: str, symbol: str, decimals: int, since: datetime
+		self,
+		contract: str,
+		symbol: str,
+		decimals: int,
+		since: datetime | None,
+		*,
+		confirmed: bool,
 	) -> "list[RangeTransfer]":
-		"""Return all transfers of one token contract since a moment (range scan).
+		"""Return transfers of one token contract (range scan, ADR-0021).
 
 		Args:
 			contract: Token contract address.
 			symbol: Display symbol for the asset info (events carry none).
 			decimals: Decimals for the asset info.
-			since: Lower time bound of the range.
+			since: Lower time bound; None — the provider's default window
+				(used for the unconfirmed preview, whose zone is small).
+			confirmed: True — only transfers at or below the finality
+				boundary (the authoritative scan); False — only transfers
+				above it (the provisional preview).
 
 		Raises:
 			ChainDataSourceError: On request failure or unusable response.
@@ -150,7 +167,11 @@ class FinalityBoundary:
 
 @dataclass(frozen=True)
 class RangeTransfer:
-	"""One transfer observed by range scanning (ADR-0018); not tied to our addresses."""
+	"""One transfer observed by range scanning (ADR-0018); not tied to our addresses.
+
+	``event_index`` distinguishes several transfers of the same asset inside
+	one transaction (batch payouts); native-coin transfers carry 0.
+	"""
 
 	network: str
 	txid: str
@@ -161,3 +182,4 @@ class RangeTransfer:
 	block_number: int
 	timestamp: datetime | None
 	status: TransferStatus
+	event_index: int = 0

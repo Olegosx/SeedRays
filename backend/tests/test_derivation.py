@@ -75,3 +75,32 @@ def test_cli_keygen_and_derive(capsys: pytest.CaptureFixture) -> None:
 	assert cli.main(["derive", "--family", "tron", "--xpub", xpub, "--index", "0"]) == 0
 	out = capsys.readouterr().out
 	assert TRON_REFERENCE_ADDRESS in out
+
+
+def test_derive_rejects_garbage_key() -> None:
+	"""A malformed key raises the core's own error, not a raw library one."""
+	from seedrays.derivation.derive import InvalidKeyError
+
+	with pytest.raises(InvalidKeyError):
+		derive_address(Family.TRON, "xpub6NotAKey", 0)
+
+
+def test_derive_rejects_private_key() -> None:
+	"""An extended PRIVATE key is refused with the dedicated error (ADR-0002)."""
+	from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins
+
+	from seedrays.derivation.derive import PrivateKeyError
+
+	seed = Bip39SeedGenerator(TEST_MNEMONIC).Generate()
+	account = Bip44.FromSeed(seed, Bip44Coins.TRON).Purpose().Coin().Account(0)
+	xprv = account.PrivateKey().ToExtended()
+	with pytest.raises(PrivateKeyError):
+		derive_address(Family.TRON, xprv, 0)
+
+
+def test_derive_rejects_master_level_xpub() -> None:
+	"""A key of the wrong depth (master instead of account) is refused."""
+	from seedrays.derivation.derive import InvalidKeyError
+
+	with pytest.raises(InvalidKeyError):
+		derive_address(Family.EVM, BIP32_VECTOR1_MASTER_XPUB, 0)

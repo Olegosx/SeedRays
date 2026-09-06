@@ -6,6 +6,7 @@ and history lives here.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from dataclasses import dataclass
 from pathlib import Path
@@ -194,6 +195,19 @@ async def ensure_bindings(
 	return results
 
 
+# Замки выдачи индексов деривации, по одному на пользователя: чтение максимума
+# и вставка привязки обязаны быть атомарными, иначе два конкурентных запроса
+# получают один индекс — и один адрес на двух плательщиков. Бэкенд — один
+# процесс (ADR-0003), поэтому замок событийного цикла закрывает гонку целиком;
+# уникальность (wallet, network, index) в схеме — страховка на случай иного.
+_binding_locks: dict[int, asyncio.Lock] = {}
+
+
+def _binding_lock(user_id: int) -> asyncio.Lock:
+	"""The per-user lock serializing derivation-index allocation."""
+	return _binding_locks.setdefault(user_id, asyncio.Lock())
+
+
 async def _ensure_one_binding(
 	ctx: AppContext, network: str, wallet_id: int, app_user_id: int
 ) -> dict:
@@ -208,57 +222,69 @@ async def _ensure_one_binding(
 	if row is not None:
 		return {"network": row.network, "address": row.address, "memo": row.memo}
 
-	async with ctx.engine.connect() as conn:
-		wallet = (
-			await conn.execute(select(wallets).where(wallets.c.id == wallet_id))
-		).first()
-		if wallet is None:
-			raise OperationError("wallet_missing", f"wallet {wallet_id} does not exist")
-		# Переиспользование индекса: та же связка «кошелёк + пользователь
-		# приложения» в другой сети даёт тот же адрес (развилка 2, EVM-свойство).
-		reuse = (
-			await conn.execute(
-				select(bindings.c.derivation_index)
-				.where(
-					bindings.c.wallet_id == wallet_id,
-					bindings.c.application_id == ctx.application_id,
-					bindings.c.app_user_id == app_user_id,
-				)
-				.limit(1)
-			)
-		).first()
-		if reuse is not None:
-			index = reuse.derivation_index
-		else:
-			max_index = (
-				await conn.execute(
-					select(func.max(bindings.c.derivation_index)).where(
-						bindings.c.wallet_id == wallet_id
-					)
-				)
-			).scalar()
-			index = 0 if max_index is None else max_index + 1
-
-	address = derive_address(Family(wallet.family), wallet.xpub, index)
-	try:
-		async with ctx.engine.begin() as conn:
-			await conn.execute(
-				insert(bindings).values(
-					wallet_id=wallet_id,
-					network=network,
-					address=address,
-					application_id=ctx.application_id,
-					app_user_id=app_user_id,
-					derivation_index=index,
-				)
-			)
-	except IntegrityError:
-		# Гонка создания: привязка появилась параллельно — возвращаем её.
+	async with _binding_lock(ctx.user_id):
+		# Перечитать под замком: привязка могла появиться, пока ждали очередь.
 		async with ctx.engine.connect() as conn:
 			row = (await conn.execute(existing_q)).first()
-		if row is None:
-			raise RuntimeError(f"binding for {network} vanished after insert") from None
-		return {"network": row.network, "address": row.address, "memo": row.memo}
+		if row is not None:
+			return {"network": row.network, "address": row.address, "memo": row.memo}
+
+		async with ctx.engine.connect() as conn:
+			wallet = (
+				await conn.execute(select(wallets).where(wallets.c.id == wallet_id))
+			).first()
+			if wallet is None:
+				raise OperationError("wallet_missing", f"wallet {wallet_id} does not exist")
+			# Переиспользование индекса: та же связка «кошелёк + пользователь
+			# приложения» в другой сети даёт тот же адрес (развилка 2, EVM-свойство).
+			reuse = (
+				await conn.execute(
+					select(bindings.c.derivation_index)
+					.where(
+						bindings.c.wallet_id == wallet_id,
+						bindings.c.application_id == ctx.application_id,
+						bindings.c.app_user_id == app_user_id,
+					)
+					.limit(1)
+				)
+			).first()
+			if reuse is not None:
+				index = reuse.derivation_index
+			else:
+				max_index = (
+					await conn.execute(
+						select(func.max(bindings.c.derivation_index)).where(
+							bindings.c.wallet_id == wallet_id
+						)
+					)
+				).scalar()
+				index = 0 if max_index is None else max_index + 1
+
+		address = derive_address(Family(wallet.family), wallet.xpub, index)
+		try:
+			async with ctx.engine.begin() as conn:
+				await conn.execute(
+					insert(bindings).values(
+						wallet_id=wallet_id,
+						network=network,
+						address=address,
+						application_id=ctx.application_id,
+						app_user_id=app_user_id,
+						derivation_index=index,
+					)
+				)
+		except IntegrityError as exc:
+			# Под замком конфликт возможен только от внешнего по отношению
+			# к процессу писателя; идемпотентный исход — вернуть свою
+			# привязку, если её успели создать, иначе поднять с контекстом.
+			async with ctx.engine.connect() as conn:
+				row = (await conn.execute(existing_q)).first()
+			if row is None:
+				raise RuntimeError(
+					f"binding insert conflicted for network {network}, "
+					f"wallet {wallet_id}, index {index}: {exc.orig}"
+				) from exc
+			return {"network": row.network, "address": row.address, "memo": row.memo}
 	return {"network": network, "address": address, "memo": ""}
 
 

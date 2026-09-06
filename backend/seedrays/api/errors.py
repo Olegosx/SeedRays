@@ -36,6 +36,7 @@ _OPERATION_STATUS = {
 	"mail_failed": 502,
 	"invalid_family": 400,
 	"invalid_xpub": 400,
+	"private_key_rejected": 400,
 	"invalid_words": 400,
 	"no_families": 400,
 	"invalid_name": 400,

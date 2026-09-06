@@ -124,3 +124,76 @@ def test_generate_returns_valid_material_and_stores_nothing(tmp_path: Path) -> N
 			await client.aclose()
 
 	asyncio.run(scenario())
+
+
+def test_attach_rejects_private_key(tmp_path: Path) -> None:
+	"""An extended PRIVATE key is refused with a warning code, never stored."""
+
+	async def scenario() -> None:
+		client, csrf = await _signed_in_client(tmp_path)
+		try:
+			from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins
+
+			seed = Bip39SeedGenerator(TEST_MNEMONIC).Generate()
+			account = Bip44.FromSeed(seed, Bip44Coins.TRON).Purpose().Coin().Account(0)
+			xprv = account.PrivateKey().ToExtended()
+
+			refused = await client.post(
+				"/v1/user/wallets",
+				json={"family": "tron", "xpub": xprv, "label": ""},
+				headers={"X-CSRF-Token": csrf},
+			)
+			assert refused.status_code == 400
+			assert refused.json()["error"]["code"] == "private_key_rejected"
+			# Ничего не сохранено.
+			assert (await client.get("/v1/user/wallets")).json()["wallets"] == []
+		finally:
+			await client.aclose()
+
+	asyncio.run(scenario())
+
+
+def test_attach_rejects_duplicate_xpub_neutrally(tmp_path: Path) -> None:
+	"""A duplicate xpub — same or another user — gets the same neutral error."""
+
+	async def scenario() -> None:
+		client, csrf = await _signed_in_client(tmp_path)
+		try:
+			xpub = account_xpub(TEST_MNEMONIC, Family.TRON)
+			first = await client.post(
+				"/v1/user/wallets",
+				json={"family": "tron", "xpub": xpub, "label": "Main"},
+				headers={"X-CSRF-Token": csrf},
+			)
+			assert first.status_code == 200, first.text
+
+			# Повтор у того же пользователя.
+			again = await client.post(
+				"/v1/user/wallets",
+				json={"family": "tron", "xpub": xpub, "label": "Copy"},
+				headers={"X-CSRF-Token": csrf},
+			)
+			assert again.status_code == 400
+			assert again.json()["error"]["code"] == "invalid_xpub"
+
+			# Другой пользователь того же шлюза: тот же нейтральный отказ,
+			# без раскрытия, что xpub уже подключён.
+			await client.post(
+				"/v1/user/register",
+				json={"username": "bob", "email": "b@example.com", "password": "correct-horse"},
+			)
+			login = await client.post(
+				"/v1/user/login", json={"identifier": "bob", "password": "correct-horse"}
+			)
+			other = await client.post(
+				"/v1/user/wallets",
+				json={"family": "tron", "xpub": xpub, "label": ""},
+				headers={"X-CSRF-Token": login.json()["csrf"]},
+			)
+			assert other.status_code == 400
+			assert other.json()["error"]["code"] == "invalid_xpub"
+			assert other.json()["error"]["message"] == again.json()["error"]["message"]
+		finally:
+			await client.aclose()
+
+	asyncio.run(scenario())

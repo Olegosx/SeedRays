@@ -50,6 +50,18 @@ api_keys = Table(
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
 )
 
+# Индекс подключённых xpub всего шлюза (по образцу api_keys): один xpub —
+# один кошелёк. Хранится отпечаток SHA-256, сам xpub живёт только в базе
+# владельца; при дубле подключение отвергается нейтральной ошибкой.
+wallet_xpubs = Table(
+	"wallet_xpubs",
+	metadata,
+	Column("id", Integer, primary_key=True),
+	Column("xpub_hash", String(128), nullable=False, unique=True),
+	Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
+	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+)
+
 settings = Table(
 	"settings",
 	metadata,
@@ -102,12 +114,16 @@ assets = Table(
 	CheckConstraint("kind IN ('native', 'token')", name="ck_assets_kind"),
 )
 
+# Курсоры авторитетного сканирования финализированной зоны (ADR-0018, ADR-0021):
+# last_block — последний блок нативного скана (не выше границы финальности),
+# last_scan_at — временной курсор скана токен-событий (провайдеры фильтруют
+# события по времени, не по высоте). Предпросмотр зоны выше границы курсоров
+# не имеет — она пересканируется целиком каждый проход.
 watcher_state = Table(
 	"watcher_state",
 	metadata,
 	Column("network", String(32), primary_key=True),
 	Column("last_block", Integer, nullable=False),
-	# Курсор сканирования: провайдеры фильтруют по времени, не по высоте (ADR-0018).
 	Column("last_scan_at", DateTime),
 	Column("updated_at", DateTime, nullable=False, server_default=func.now()),
 )

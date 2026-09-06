@@ -11,7 +11,7 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from seedrays.storage.engine import user_db_path
+from seedrays.storage.engine import unique_violation, user_db_path
 from seedrays.storage.migrations.runner import upgrade_user_db
 from seedrays.storage.schema_registry import (
 	assets,
@@ -19,6 +19,7 @@ from seedrays.storage.schema_registry import (
 	settings,
 	user_emails,
 	users,
+	wallet_xpubs,
 	watcher_state,
 )
 
@@ -57,6 +58,8 @@ async def create_user(
 				insert(users).values(login=login, password_hash=password_hash, directory="")
 			)
 		except IntegrityError as exc:
+			if unique_violation(exc) != "users.login":
+				raise  # иная ошибка целостности — не «логин занят»
 			raise ValueError(f"login already taken: {login!r}") from exc
 		user_id = result.inserted_primary_key[0]
 		directory = f"u{user_id}"
@@ -168,6 +171,8 @@ async def add_user_email(
 				)
 			)
 	except IntegrityError as exc:
+		if unique_violation(exc) != "user_emails.address":
+			raise  # иная ошибка целостности — не «адрес занят»
 		raise ValueError(f"email already attached: {address!r}") from exc
 	email_id = result.inserted_primary_key[0]
 	async with registry.connect() as conn:
@@ -400,8 +405,10 @@ async def get_or_create_asset(
 					decimals=decimals,
 				)
 			)
-	except IntegrityError:
-		pass  # параллельная вставка того же актива — читаем существующий
+	except IntegrityError as exc:
+		if unique_violation(exc) is None:
+			raise  # иная ошибка целостности — не гонка вставки актива
+		# Параллельная вставка того же актива — читаем существующий.
 	async with registry.connect() as conn:
 		row = (await conn.execute(lookup)).first()
 	if row is None:
@@ -431,6 +438,37 @@ async def set_setting(registry: AsyncEngine, key: str, value: str) -> None:
 		)
 		if result.rowcount == 0:
 			await conn.execute(insert(settings).values(key=key, value=value))
+
+
+async def reserve_wallet_xpub(
+	registry: AsyncEngine, *, user_id: int, xpub_hash: str
+) -> bool:
+	"""Reserve an xpub fingerprint in the gateway-wide index (one xpub — one wallet).
+
+	Args:
+		registry: Engine of the shared registry database.
+		user_id: Owner of the wallet being attached.
+		xpub_hash: SHA-256 fingerprint of the normalized xpub.
+
+	Returns:
+		True if reserved; False if the fingerprint is already taken.
+	"""
+	try:
+		async with registry.begin() as conn:
+			await conn.execute(
+				insert(wallet_xpubs).values(xpub_hash=xpub_hash, user_id=user_id)
+			)
+	except IntegrityError as exc:
+		if unique_violation(exc) != "wallet_xpubs.xpub_hash":
+			raise  # иная ошибка целостности — не «xpub занят»
+		return False
+	return True
+
+
+async def release_wallet_xpub(registry: AsyncEngine, xpub_hash: str) -> None:
+	"""Release a reserved xpub fingerprint (compensation for a failed attach)."""
+	async with registry.begin() as conn:
+		await conn.execute(delete(wallet_xpubs).where(wallet_xpubs.c.xpub_hash == xpub_hash))
 
 
 async def get_watcher_state(registry: AsyncEngine, network: str) -> WatcherState | None:

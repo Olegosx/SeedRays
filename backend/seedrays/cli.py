@@ -116,7 +116,7 @@ def _cmd_watch() -> int:
 	print(
 		f"pass done: networks={stats.networks_scanned}"
 		f" matched={stats.transfers_matched} recorded={stats.rows_recorded}"
-		f" applied={stats.rows_applied}"
+		f" applied={stats.rows_applied} deleted={stats.rows_deleted}"
 		f" rate_limited={','.join(stats.networks_rate_limited) or '-'}"
 	)
 	return 0

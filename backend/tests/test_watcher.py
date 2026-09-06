@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -88,10 +89,17 @@ class FakeSource(ChainDataSource):
 	async def transfers(self, address, since=None, only_confirmed=None):
 		return []
 
-	async def token_transfers(self, contract, symbol, decimals, since):
+	async def token_transfers(self, contract, symbol, decimals, since, *, confirmed):
 		if self._rate_limited:
 			raise RateLimitedError("fake 429")
-		return [t for t in self._tokens if t.asset.contract_address == contract]
+		# Как у провайдера: confirmed — события не выше границы финальности,
+		# unconfirmed — только зона выше неё.
+		return [
+			t
+			for t in self._tokens
+			if t.asset.contract_address == contract
+			and (t.block_number <= self._boundary) == confirmed
+		]
 
 	async def native_transfers(self, start_block, end_block):
 		return [t for t in self._natives if start_block <= t.block_number <= end_block]
@@ -157,25 +165,29 @@ def test_pass_records_matches_and_applies_finalized(tmp_path: Path) -> None:
 		)
 		stats = await run_pass(tmp_path, source_factory=lambda n, k, i: source)
 
-		# Нативные в первый проход не сканируются (курсора ещё нет) — 3 совпадения токенов… нет:
-		# t-foreign не наш адрес. Совпали: t-final, t-young. Нативные — со второго прохода.
+		# Авторитетное сканирование: t-final (95 ≤ границы 100) финализирован
+		# и применён; нативные в первый проход не сканируются (курсора нет).
+		# Предпросмотр: t-young (105 > границы) записан предварительной строкой.
 		assert stats.networks_scanned == 1
 		assert stats.transfers_matched == 2
 		assert stats.rows_recorded == 2
-		assert stats.rows_applied == 1  # t-final (блок 95 ≤ границы 100)
+		assert stats.rows_applied == 1  # t-final
 
 		rows = await _user_rows(tmp_path, schema_user.transactions)
 		assert {r.txid for r in rows} == {"t-final", "t-young"}
-		applied = {r.txid: r.balance_applied_at for r in rows}
-		assert applied["t-final"] is not None
-		assert applied["t-young"] is None
+		by_txid = {r.txid: r for r in rows}
+		assert by_txid["t-final"].finalized_at is not None
+		assert by_txid["t-final"].balance_applied_at is not None
+		assert by_txid["t-young"].finalized_at is None  # предварительная (pending)
+		assert by_txid["t-young"].balance_applied_at is None
 
 		balances = await _user_rows(tmp_path, schema_user.balances)
 		assert len(balances) == 1
 		assert balances[0].balance == "5000000"
 		assert balances[0].total_received == "5000000"
 
-		# Второй проход: те же токены (дубли игнорируются) + нативные из диапазона.
+		# Второй проход: токен-дубль отброшен, нативные выше границы попадают
+		# в предпросмотр предварительными строками.
 		source2 = FakeSource(
 			boundary=100,
 			head=115,
@@ -187,12 +199,22 @@ def test_pass_records_matches_and_applies_finalized(tmp_path: Path) -> None:
 		)
 		stats2 = await run_pass(tmp_path, source_factory=lambda n, k, i: source2)
 		assert stats2.rows_recorded == 2  # только нативные; токен-дубль отброшен
-		assert stats2.rows_applied == 0  # нативные выше границы 100
+		assert stats2.rows_applied == 0  # всё записанное — выше границы 100
 
-		# Третий проход: граница выросла — успешный натив учтён, провал никогда.
-		source3 = FakeSource(boundary=114, head=116, tokens=[], natives=[])
+		# Третий проход: граница выросла, финализированная цепь подтверждает
+		# все три строки — успешные учтены, провал никогда.
+		source3 = FakeSource(
+			boundary=114,
+			head=116,
+			tokens=[_usdt("t-young", OUR_ADDRESS, 2_000_000, block=105)],
+			natives=[
+				_native("n-final", OUR_ADDRESS, OTHER, 7_000_000, block=112, ok=True),
+				_native("n-failed", OUR_ADDRESS, OTHER, 1_000_000, block=113, ok=False),
+			],
+		)
 		stats3 = await run_pass(tmp_path, source_factory=lambda n, k, i: source3)
 		assert stats3.rows_applied == 2  # t-young (105) и n-final (112)
+		assert stats3.rows_deleted == 0  # всё подтвердилось — чистить нечего
 
 		balances = await _user_rows(tmp_path, schema_user.balances)
 		by_asset = {b.asset_id: b for b in balances}
@@ -224,6 +246,73 @@ def test_pass_survives_rate_limit(tmp_path: Path) -> None:
 		state = await registry_ops.get_watcher_state(registry, NETWORK)
 		await registry.dispose()
 		assert state is None  # курсор не сдвинут — следующий проход всё пересканирует
+
+	asyncio.run(scenario())
+
+
+def test_reorged_provisional_rows_are_removed(tmp_path: Path) -> None:
+	"""A provisional row the finalized chain never confirms is deleted (ADR-0021)."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		# Проход 1: перевод виден только в зоне выше границы — предварительная строка.
+		source = FakeSource(
+			boundary=100, head=110,
+			tokens=[_usdt("t-orphan", OUR_ADDRESS, 3_000_000, block=105)],
+		)
+		await run_pass(tmp_path, source_factory=lambda n, k, i: source)
+		rows = await _user_rows(tmp_path, schema_user.transactions)
+		assert [r.txid for r in rows] == ["t-orphan"]
+		assert rows[0].finalized_at is None
+
+		# Проход 2: граница переросла блок 105, но финализированная цепь
+		# транзакцию не подтверждает (реорганизация) — строка удаляется.
+		source2 = FakeSource(boundary=114, head=116, tokens=[])
+		stats2 = await run_pass(tmp_path, source_factory=lambda n, k, i: source2)
+		assert stats2.rows_deleted == 1
+		assert stats2.rows_applied == 0
+		assert await _user_rows(tmp_path, schema_user.transactions) == []
+		assert await _user_rows(tmp_path, schema_user.balances) == []
+
+	asyncio.run(scenario())
+
+
+def test_self_transfer_records_both_legs(tmp_path: Path) -> None:
+	"""A transfer to self records both legs: net zero balance, deposit counted."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		# Первый проход лишь заводит курсор на границе финальности.
+		empty = FakeSource(boundary=100, head=100)
+		await run_pass(tmp_path, source_factory=lambda n, k, i: empty)
+
+		self_tx = _native("n-self", OUR_ADDRESS, OUR_ADDRESS, 4_000_000, block=110, ok=True)
+		source = FakeSource(boundary=120, head=121, natives=[self_tx])
+		stats = await run_pass(tmp_path, source_factory=lambda n, k, i: source)
+		assert stats.rows_recorded == 2  # обе ноги: in и out
+
+		rows = await _user_rows(tmp_path, schema_user.transactions)
+		assert {r.direction for r in rows if r.txid == "n-self"} == {"in", "out"}
+		balances = await _user_rows(tmp_path, schema_user.balances)
+		assert balances[0].balance == "0"  # нетто нулевое
+		assert balances[0].total_received == "4000000"  # приход честно учтён
+
+	asyncio.run(scenario())
+
+
+def test_batch_transfers_in_one_transaction_are_distinct(tmp_path: Path) -> None:
+	"""Several transfers of one asset inside one transaction all count (event_index)."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		first = _usdt("t-batch", OUR_ADDRESS, 1_000_000, block=95)
+		second = replace(first, amount=2_500_000, event_index=1)
+		source = FakeSource(boundary=100, head=101, tokens=[first, second])
+		stats = await run_pass(tmp_path, source_factory=lambda n, k, i: source)
+		assert stats.rows_recorded == 2
+
+		balances = await _user_rows(tmp_path, schema_user.balances)
+		assert balances[0].balance == "3500000"
 
 	asyncio.run(scenario())
 

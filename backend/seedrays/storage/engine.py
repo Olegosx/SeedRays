@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from sqlalchemy import event
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 REGISTRY_DB_FILENAME = "registry.db"
@@ -25,6 +26,29 @@ def users_root(data_dir: Path) -> Path:
 def user_db_path(data_dir: Path, directory: str) -> Path:
 	"""Path of a user's database given the user's directory name from the registry."""
 	return users_root(data_dir) / directory / USER_DB_FILENAME
+
+
+def unique_violation(exc: IntegrityError) -> str | None:
+	"""Return the violated columns ("table.column, …") of a UNIQUE conflict.
+
+	``IntegrityError`` covers unique, CHECK, NOT NULL and foreign-key
+	violations alike; callers that treat a conflict as "already exists"
+	must first make sure the violation is the unique key they expect —
+	anything else is a real error and has to propagate.
+
+	Args:
+		exc: The caught integrity error.
+
+	Returns:
+		The column list from the SQLite message, or None when the error is
+		not a UNIQUE violation. Single point to extend for other dialects
+		(the PostgreSQL/MySQL ADR).
+	"""
+	marker = "UNIQUE constraint failed: "
+	message = str(exc.orig)
+	if marker not in message:
+		return None
+	return message.split(marker, 1)[1]
 
 
 def sqlite_sync_url(path: Path) -> str:

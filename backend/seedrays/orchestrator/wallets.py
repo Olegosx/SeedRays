@@ -8,16 +8,18 @@ user confirms the written-down words. Nothing secret is ever stored.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from seedrays.derivation.derive import derive_address
+from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_address
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, generate_mnemonic
 from seedrays.orchestrator.operations import OperationError
+from seedrays.storage import registry as registry_ops
 from seedrays.storage.schema_user import bindings, wallets
 
 
@@ -69,25 +71,62 @@ async def list_wallets(engine: AsyncEngine) -> list[WalletInfo]:
 
 
 async def attach_wallet(
-	engine: AsyncEngine, *, family: str, xpub: str, label: str
+	engine: AsyncEngine,
+	registry: AsyncEngine,
+	*,
+	user_id: int,
+	family: str,
+	xpub: str,
+	label: str,
 ) -> WalletInfo:
 	"""Attach a watch-only wallet: validate the xpub by deriving address 0.
 
+	The xpub must be unique across the whole gateway (the registry index):
+	a duplicate is rejected with the same neutral error as a broken key —
+	the response must not reveal that the key is attached elsewhere.
+
+	Args:
+		engine: The user's database engine.
+		registry: Engine of the shared registry database.
+		user_id: The attaching user (owner recorded in the xpub index).
+		family: Chain family code.
+		xpub: Account-level extended public key.
+		label: Display label.
+
 	Raises:
-		OperationError: invalid_family / invalid_xpub.
+		OperationError: invalid_family / invalid_xpub / private_key_rejected.
 	"""
 	parsed = _parse_family(family)
+	cleaned = xpub.strip()
 	try:
-		derive_address(parsed, xpub.strip(), 0)
-	except Exception as exc:  # bip-utils бросает разные типы на кривом ключе
+		derive_address(parsed, cleaned, 0)
+	except PrivateKeyError as exc:
 		raise OperationError(
-			"invalid_xpub", "the xpub is not a valid account-level extended public key"
+			"private_key_rejected",
+			"an extended PRIVATE key was supplied; treat it as compromised "
+			"and move the funds to a new wallet — the gateway needs the "
+			"public account-level key (xpub) only",
 		) from exc
-	async with engine.begin() as conn:
-		result = await conn.execute(
-			insert(wallets).values(family=parsed.value, xpub=xpub.strip(), label=label.strip())
-		)
-		wallet_id = result.inserted_primary_key[0]
+	except InvalidKeyError as exc:
+		raise OperationError("invalid_xpub", "the xpub was not accepted") from exc
+	xpub_hash = hashlib.sha256(cleaned.encode()).hexdigest()
+	if not await registry_ops.reserve_wallet_xpub(
+		registry, user_id=user_id, xpub_hash=xpub_hash
+	):
+		# Дубль по всему шлюзу: нейтральный отказ тем же кодом и текстом,
+		# что и невалидный ключ, — факт «xpub уже подключён» не раскрывается.
+		raise OperationError("invalid_xpub", "the xpub was not accepted")
+	try:
+		async with engine.begin() as conn:
+			result = await conn.execute(
+				insert(wallets).values(family=parsed.value, xpub=cleaned, label=label.strip())
+			)
+			wallet_id = result.inserted_primary_key[0]
+	except BaseException:
+		# Компенсация: запись в базу владельца не состоялась — резерв в
+		# индексе реестра снимается, иначе xpub заблокирован навсегда.
+		await registry_ops.release_wallet_xpub(registry, xpub_hash)
+		raise
 	listed = await list_wallets(engine)
 	created = next(w for w in listed if w.id == wallet_id)
 	return created

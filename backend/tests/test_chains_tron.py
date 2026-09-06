@@ -255,6 +255,7 @@ def test_token_transfers_range() -> None:
 							"event_name": "Transfer",
 							"block_number": 55000001,
 							"block_timestamp": 1700000000000,
+							"event_index": 2,
 							"result": {"from": OTHER_HEX, "to": address_hex, "value": "123"},
 						},
 						{
@@ -285,18 +286,38 @@ def test_token_transfers_range() -> None:
 
 	since = datetime.fromtimestamp(1699999000, tz=timezone.utc)
 	transfers = asyncio.run(
-		_make_source(handler).token_transfers(USDT_CONTRACT, "USDT", 6, since)
+		_make_source(handler).token_transfers(USDT_CONTRACT, "USDT", 6, since, confirmed=True)
 	)
 	assert [t.txid for t in transfers] == ["ev-1", "ev-2"]
 	assert transfers[0].to_address == ADDRESS
 	assert transfers[0].from_address == OTHER
 	assert transfers[0].amount == 123
 	assert transfers[0].block_number == 55000001
+	assert transfers[0].event_index == 2
+	assert transfers[1].event_index == 0  # поле не пришло — порядковый ноль
 	assert transfers[0].asset.contract_address == USDT_CONTRACT
 	first = seen_params[0]
 	assert first["event_name"] == "Transfer"
 	assert first["min_block_timestamp"] == "1699999000000"
 	assert first["order_by"] == "block_timestamp,asc"
+	assert first["only_confirmed"] == "true"
+	assert "only_unconfirmed" not in first
+
+
+def test_token_transfers_unconfirmed_mode() -> None:
+	"""The preview mode asks for unconfirmed events only, without a time bound."""
+	seen_params: list[dict] = []
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		seen_params.append(dict(request.url.params))
+		return httpx.Response(200, json={"data": [], "meta": {}})
+
+	asyncio.run(
+		_make_source(handler).token_transfers(USDT_CONTRACT, "USDT", 6, None, confirmed=False)
+	)
+	assert seen_params[0]["only_unconfirmed"] == "true"
+	assert "only_confirmed" not in seen_params[0]
+	assert "min_block_timestamp" not in seen_params[0]
 
 
 def test_native_transfers_range_chunks() -> None:

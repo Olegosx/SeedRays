@@ -258,7 +258,12 @@ def register_user_routes(
 		"""Attach a watch-only wallet (the recommended path of ADR-0002)."""
 		check_csrf(ctx, x_csrf_token)
 		wallet = await wallet_ops.attach_wallet(
-			engine, family=body.family, xpub=body.xpub, label=body.label
+			engine,
+			ctx.registry,
+			user_id=ctx.user.user_id,
+			family=body.family,
+			xpub=body.xpub,
+			label=body.label,
 		)
 		return {"wallet": _wallet_json(wallet)}
 

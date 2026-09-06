@@ -55,7 +55,16 @@ def account_xpub(mnemonic: str, family: Family, passphrase: str = "") -> str:
 
 	Returns:
 		The account-level xpub — the only thing the online gateway ever needs.
+
+	Raises:
+		ValueError: If the mnemonic is not a valid BIP39 phrase (wordlist
+			or checksum); the phrase itself never appears in the message.
 	"""
-	seed = Bip39SeedGenerator(mnemonic).Generate(passphrase)
+	try:
+		seed = Bip39SeedGenerator(mnemonic).Generate(passphrase)
+	# У исключений bip_utils нет общей базы — граница библиотеки конвертирует
+	# всё в ValueError; саму фразу в сообщение не включаем (это секрет).
+	except Exception as exc:
+		raise ValueError("the mnemonic is not a valid BIP39 phrase") from exc
 	account = Bip44.FromSeed(seed, BIP44_COINS[family]).Purpose().Coin().Account(0)
 	return account.PublicKey().ToExtended()
