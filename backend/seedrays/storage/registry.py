@@ -1,4 +1,10 @@
-"""Registry database operations: users, assets, settings, watcher state."""
+"""Registry database operations.
+
+Users, emails, sessions, the API-key and wallet-xpub indexes, the asset
+catalog, gateway settings and the watcher service state. Every datetime
+parameter and column follows the storage-layer convention: naive UTC
+(see :func:`seedrays.storage.engine.now_utc`).
+"""
 
 from __future__ import annotations
 
@@ -11,9 +17,10 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from seedrays.storage.engine import unique_violation, user_db_path
+from seedrays.storage.engine import unique_violation, upsert, user_db_path
 from seedrays.storage.migrations.runner import upgrade_user_db
 from seedrays.storage.schema_registry import (
+	api_keys,
 	assets,
 	sessions,
 	settings,
@@ -66,14 +73,32 @@ async def create_user(
 		await conn.execute(update(users).where(users.c.id == user_id).values(directory=directory))
 
 	db_path = user_db_path(data_dir, directory)
-	db_path.parent.mkdir(parents=True, exist_ok=True)
-	# Alembic работает синхронно — уводим миграцию новой базы в поток.
-	await asyncio.to_thread(upgrade_user_db, db_path)
+	try:
+		db_path.parent.mkdir(parents=True, exist_ok=True)
+		# Alembic работает синхронно — уводим миграцию новой базы в поток.
+		await asyncio.to_thread(upgrade_user_db, db_path)
+	except BaseException:
+		# Компенсация: без своей базы пользователь неработоспособен, а его
+		# строка навсегда занимала бы логин — снимаем её и поднимаем ошибку.
+		async with registry.begin() as conn:
+			await conn.execute(delete(users).where(users.c.id == user_id))
+		raise
 
 	record = await get_user_by_login(registry, login)
 	if record is None:
 		raise RuntimeError(f"user {login!r} not found right after insert")
 	return record
+
+
+def _user_record(row) -> UserRecord:
+	"""Build a UserRecord out of a row."""
+	return UserRecord(
+		id=row.id,
+		login=row.login,
+		password_hash=row.password_hash,
+		status=row.status,
+		directory=row.directory,
+	)
 
 
 async def get_user_by_login(registry: AsyncEngine, login: str) -> UserRecord | None:
@@ -90,13 +115,7 @@ async def get_user_by_login(registry: AsyncEngine, login: str) -> UserRecord | N
 		row = (await conn.execute(select(users).where(users.c.login == login))).first()
 	if row is None:
 		return None
-	return UserRecord(
-		id=row.id,
-		login=row.login,
-		password_hash=row.password_hash,
-		status=row.status,
-		directory=row.directory,
-	)
+	return _user_record(row)
 
 
 async def get_user_by_id(registry: AsyncEngine, user_id: int) -> UserRecord | None:
@@ -105,13 +124,7 @@ async def get_user_by_id(registry: AsyncEngine, user_id: int) -> UserRecord | No
 		row = (await conn.execute(select(users).where(users.c.id == user_id))).first()
 	if row is None:
 		return None
-	return UserRecord(
-		id=row.id,
-		login=row.login,
-		password_hash=row.password_hash,
-		status=row.status,
-		directory=row.directory,
-	)
+	return _user_record(row)
 
 
 async def set_user_password(registry: AsyncEngine, user_id: int, password_hash: str) -> None:
@@ -316,6 +329,10 @@ async def delete_expired_sessions(registry: AsyncEngine, *, now: datetime) -> No
 		await conn.execute(delete(sessions).where(sessions.c.expires_at < now))
 
 
+# Виды активов каталога (ADR-0010) — единственная точка правды для сравнений.
+KIND_NATIVE = "native"
+KIND_TOKEN = "token"
+
 @dataclass(frozen=True)
 class AssetRecord:
 	"""An asset row from the registry catalog."""
@@ -341,16 +358,7 @@ async def list_users(registry: AsyncEngine) -> list[UserRecord]:
 	"""Return every user of the gateway."""
 	async with registry.connect() as conn:
 		rows = (await conn.execute(select(users))).all()
-	return [
-		UserRecord(
-			id=row.id,
-			login=row.login,
-			password_hash=row.password_hash,
-			status=row.status,
-			directory=row.directory,
-		)
-		for row in rows
-	]
+	return [_user_record(row) for row in rows]
 
 
 def _asset_record(row) -> AssetRecord:
@@ -433,11 +441,7 @@ async def get_setting(registry: AsyncEngine, key: str) -> str | None:
 async def set_setting(registry: AsyncEngine, key: str, value: str) -> None:
 	"""Create or replace one gateway setting."""
 	async with registry.begin() as conn:
-		result = await conn.execute(
-			update(settings).where(settings.c.key == key).values(value=value)
-		)
-		if result.rowcount == 0:
-			await conn.execute(insert(settings).values(key=key, value=value))
+		await upsert(conn, settings, {"key": key}, {"value": value})
 
 
 async def reserve_wallet_xpub(
@@ -487,14 +491,43 @@ async def set_watcher_state(
 ) -> None:
 	"""Create or replace the watcher service state of one network."""
 	async with registry.begin() as conn:
-		result = await conn.execute(
-			update(watcher_state)
-			.where(watcher_state.c.network == network)
-			.values(last_block=last_block, last_scan_at=last_scan_at)
+		await upsert(
+			conn,
+			watcher_state,
+			{"network": network},
+			{"last_block": last_block, "last_scan_at": last_scan_at},
 		)
-		if result.rowcount == 0:
-			await conn.execute(
-				insert(watcher_state).values(
-					network=network, last_block=last_block, last_scan_at=last_scan_at
-				)
-			)
+
+
+async def get_assets_by_ids(
+	registry: AsyncEngine, asset_ids: set[int]
+) -> dict[int, AssetRecord]:
+	"""Catalog assets by their ids — the shared lookup of every read path."""
+	if not asset_ids:
+		return {}
+	async with registry.connect() as conn:
+		rows = (await conn.execute(select(assets).where(assets.c.id.in_(asset_ids)))).all()
+	return {row.id: _asset_record(row) for row in rows}
+
+
+async def resolve_api_key(registry: AsyncEngine, key_hash: str) -> UserRecord | None:
+	"""The owner of an application API key, or None for an unknown key (ADR-0008)."""
+	async with registry.connect() as conn:
+		key_row = (
+			await conn.execute(select(api_keys).where(api_keys.c.key_hash == key_hash))
+		).first()
+	if key_row is None:
+		return None
+	return await get_user_by_id(registry, key_row.user_id)
+
+
+async def add_api_key(registry: AsyncEngine, *, user_id: int, key_hash: str) -> None:
+	"""Add one key fingerprint to the gateway-wide index."""
+	async with registry.begin() as conn:
+		await conn.execute(insert(api_keys).values(key_hash=key_hash, user_id=user_id))
+
+
+async def delete_api_key(registry: AsyncEngine, key_hash: str) -> None:
+	"""Drop one key fingerprint from the index (revocation, reissue)."""
+	async with registry.begin() as conn:
+		await conn.execute(delete(api_keys).where(api_keys.c.key_hash == key_hash))

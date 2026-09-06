@@ -28,6 +28,8 @@ from seedrays.chains import tron
 from seedrays.chains.base import ChainDataSource, ChainDataSourceError, RangeTransfer, RateLimitedError
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_store
+from seedrays.storage.registry import KIND_NATIVE, KIND_TOKEN
+from seedrays.storage.user_store import DIRECTION_IN, DIRECTION_OUT
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
 
 logger = logging.getLogger(__name__)
@@ -275,7 +277,7 @@ async def _scan_network(
 		catalog = await registry_ops.list_assets(registry, network)
 		asset_ids = {a.id for a in catalog}
 		cleanup_ids = {
-			a.id for a in catalog if a.kind == "native" or token_caught_up
+			a.id for a in catalog if a.kind == KIND_NATIVE or token_caught_up
 		}
 		deleted = 0
 		applied = 0
@@ -382,8 +384,8 @@ async def _record_transfers(
 	matched = recorded = 0
 	for transfer in transfers:
 		for address, direction in (
-			(transfer.to_address, "in"),
-			(transfer.from_address, "out"),
+			(transfer.to_address, DIRECTION_IN),
+			(transfer.from_address, DIRECTION_OUT),
 		):
 			engine = addresses.get(address)
 			if engine is None or engine in failed_engines:
@@ -392,7 +394,7 @@ async def _record_transfers(
 			asset = await registry_ops.get_or_create_asset(
 				registry,
 				network=transfer.asset.network,
-				kind="native" if transfer.asset.contract_address == "" else "token",
+				kind=KIND_NATIVE if transfer.asset.contract_address == "" else KIND_TOKEN,
 				contract_address=transfer.asset.contract_address,
 				symbol=transfer.asset.symbol,
 				decimals=transfer.asset.decimals,
@@ -439,7 +441,7 @@ async def _watched_contracts(registry: AsyncEngine, network: str) -> list[dict]:
 		except (ValueError, TypeError, KeyError) as exc:
 			logger.error("invalid watcher.contracts.%s setting ignored: %s", network, exc)
 	for asset in await registry_ops.list_assets(registry, network):
-		if asset.kind == "token":
+		if asset.kind == KIND_TOKEN:
 			contracts.setdefault(
 				asset.contract_address,
 				{

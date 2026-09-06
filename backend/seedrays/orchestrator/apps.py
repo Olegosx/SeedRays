@@ -4,83 +4,43 @@ An application is identified by its API key (ADR-0009): the key itself is
 never stored — the user database keeps its SHA-256 fingerprint and the
 open first characters for identification, the registry keeps the
 "fingerprint → owner" index (ADR-0008). The raw key is returned exactly
-once at creation or reissue.
+once at creation or reissue. Database access goes through the storage
+layer (ADR-0006).
 """
 
 from __future__ import annotations
 
+import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timezone
 
-from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.orchestrator.operations import OperationError, hash_api_key
-from seedrays.storage.schema_registry import api_keys
-from seedrays.storage.schema_user import app_networks, app_users, applications, bindings, wallets
+from seedrays.storage import registry as registry_ops
+from seedrays.storage import user_apps, user_wallets
+from seedrays.storage.engine import now_utc
+from seedrays.storage.user_apps import AppSummary
+
+logger = logging.getLogger(__name__)
 
 KEY_PREFIX_LEN = 9  # "srk_" + 5 знаков — достаточно для опознания
-
-
-def _now() -> datetime:
-	return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _new_key() -> str:
 	return "srk_" + secrets.token_urlsafe(32)
 
 
-@dataclass(frozen=True)
-class AppSummary:
-	"""One application in the list."""
-
-	id: int
-	name: str
-	networks: list[str]
-	users: int
-	key_prefix: str
-	key_issued_at: datetime | None
-	key_revoked: bool
-	created_at: datetime | None
-
-
 async def list_applications(engine: AsyncEngine) -> list[AppSummary]:
 	"""The user's applications with networks and user counts."""
-	async with engine.connect() as conn:
-		rows = (await conn.execute(select(applications).order_by(applications.c.id))).all()
-		networks = (await conn.execute(select(app_networks))).all()
-		counts = dict(
-			(
-				await conn.execute(
-					select(app_users.c.application_id, func.count())
-					.group_by(app_users.c.application_id)
-				)
-			).all()
-		)
-	per_app: dict[int, list[str]] = {}
-	for mapping in networks:
-		per_app.setdefault(mapping.application_id, []).append(mapping.network)
-	return [
-		AppSummary(
-			id=row.id,
-			name=row.name,
-			networks=sorted(per_app.get(row.id, [])),
-			users=counts.get(row.id, 0),
-			key_prefix=row.key_prefix,
-			key_issued_at=row.key_issued_at,
-			key_revoked=row.key_hash is None,
-			created_at=row.created_at,
-		)
-		for row in rows
-	]
+	return await user_apps.list_summaries(engine)
 
 
-async def _get_summary(engine: AsyncEngine, app_id: int) -> AppSummary:
-	for summary in await list_applications(engine):
-		if summary.id == app_id:
-			return summary
-	raise OperationError("unknown_application", f"application {app_id} does not exist")
+async def _require_summary(engine: AsyncEngine, app_id: int) -> AppSummary:
+	summary = await user_apps.get_summary(engine, app_id)
+	if summary is None:
+		raise OperationError("unknown_application", f"application {app_id} does not exist")
+	return summary
 
 
 async def create_application(
@@ -96,62 +56,67 @@ async def create_application(
 		raise OperationError("invalid_name", "the application name must be 1-64 characters")
 	key = _new_key()
 	key_hash = hash_api_key(key)
-	async with engine.begin() as conn:
-		result = await conn.execute(
-			insert(applications).values(
-				name=name,
-				key_hash=key_hash,
-				key_prefix=key[:KEY_PREFIX_LEN],
-				key_issued_at=_now(),
-			)
-		)
-		app_id = result.inserted_primary_key[0]
-	async with registry.begin() as conn:
-		await conn.execute(insert(api_keys).values(key_hash=key_hash, user_id=user_id))
-	return await _get_summary(engine, app_id), key
+	app_id = await user_apps.insert_application(
+		engine,
+		name=name,
+		key_hash=key_hash,
+		key_prefix=key[:KEY_PREFIX_LEN],
+		issued_at=now_utc(),
+	)
+	try:
+		await registry_ops.add_api_key(registry, user_id=user_id, key_hash=key_hash)
+	except BaseException:
+		# Компенсация: без строки индекса ключ не работает — не отдавать же
+		# пользователю «выданный» мёртвый ключ; создание отменяется целиком.
+		logger.exception("api-key index write failed; rolling back application %d", app_id)
+		await user_apps.delete_application(engine, app_id)
+		raise
+	return await _require_summary(engine, app_id), key
 
 
 async def reissue_key(
 	registry: AsyncEngine, engine: AsyncEngine, *, user_id: int, app_id: int
 ) -> tuple[AppSummary, str]:
 	"""Replace the application's key; the old one dies, the new one shows once."""
-	async with engine.connect() as conn:
-		row = (
-			await conn.execute(select(applications).where(applications.c.id == app_id))
-		).first()
+	row = await user_apps.get_application(engine, app_id)
 	if row is None:
 		raise OperationError("unknown_application", f"application {app_id} does not exist")
 	key = _new_key()
 	key_hash = hash_api_key(key)
-	async with engine.begin() as conn:
-		await conn.execute(
-			update(applications)
-			.where(applications.c.id == app_id)
-			.values(key_hash=key_hash, key_prefix=key[:KEY_PREFIX_LEN], key_issued_at=_now())
-		)
-	async with registry.begin() as conn:
+	await user_apps.set_application_key(
+		engine, app_id, key_hash=key_hash, key_prefix=key[:KEY_PREFIX_LEN], issued_at=now_utc()
+	)
+	try:
 		if row.key_hash is not None:
-			await conn.execute(delete(api_keys).where(api_keys.c.key_hash == row.key_hash))
-		await conn.execute(insert(api_keys).values(key_hash=key_hash, user_id=user_id))
-	return await _get_summary(engine, app_id), key
+			await registry_ops.delete_api_key(registry, row.key_hash)
+		await registry_ops.add_api_key(registry, user_id=user_id, key_hash=key_hash)
+	except BaseException:
+		# Компенсация: индекс не переключился — возвращаем прежний ключ,
+		# иначе пользователь остаётся с нерабочим «новым» ключом.
+		logger.exception(
+			"api-key index update failed; restoring the previous key of application %d",
+			app_id,
+		)
+		await user_apps.set_application_key(
+			engine,
+			app_id,
+			key_hash=row.key_hash,
+			key_prefix=row.key_prefix,
+			issued_at=row.key_issued_at,
+		)
+		raise
+	return await _require_summary(engine, app_id), key
 
 
 async def revoke_key(registry: AsyncEngine, engine: AsyncEngine, *, app_id: int) -> AppSummary:
 	"""Revoke the application's key: the application loses API access."""
-	async with engine.connect() as conn:
-		row = (
-			await conn.execute(select(applications).where(applications.c.id == app_id))
-		).first()
+	row = await user_apps.get_application(engine, app_id)
 	if row is None:
 		raise OperationError("unknown_application", f"application {app_id} does not exist")
-	async with engine.begin() as conn:
-		await conn.execute(
-			update(applications).where(applications.c.id == app_id).values(key_hash=None)
-		)
+	await user_apps.set_application_key(engine, app_id, key_hash=None)
 	if row.key_hash is not None:
-		async with registry.begin() as conn:
-			await conn.execute(delete(api_keys).where(api_keys.c.key_hash == row.key_hash))
-	return await _get_summary(engine, app_id)
+		await registry_ops.delete_api_key(registry, row.key_hash)
+	return await _require_summary(engine, app_id)
 
 
 @dataclass(frozen=True)
@@ -165,38 +130,13 @@ class AppDetail:
 
 async def get_application(engine: AsyncEngine, app_id: int) -> AppDetail:
 	"""The application with its network mappings and users."""
-	summary = await _get_summary(engine, app_id)
-	async with engine.connect() as conn:
-		mapping_rows = (
-			await conn.execute(
-				select(app_networks.c.network, app_networks.c.wallet_id, wallets.c.label)
-				.join(wallets, wallets.c.id == app_networks.c.wallet_id)
-				.where(app_networks.c.application_id == app_id)
-				.order_by(app_networks.c.network)
-			)
-		).all()
-		user_rows = (
-			await conn.execute(
-				select(app_users)
-				.where(app_users.c.application_id == app_id)
-				.order_by(app_users.c.id)
-			)
-		).all()
-		address_counts = dict(
-			(
-				await conn.execute(
-					select(bindings.c.app_user_id, func.count())
-					.where(bindings.c.application_id == app_id)
-					.group_by(bindings.c.app_user_id)
-				)
-			).all()
-		)
+	summary = await _require_summary(engine, app_id)
+	mappings = await user_apps.list_network_mappings(engine, app_id)
+	user_rows = await user_apps.list_app_users(engine, app_id)
+	address_counts = await user_apps.app_user_address_counts(engine, app_id)
 	return AppDetail(
 		summary=summary,
-		mappings=[
-			{"network": m.network, "wallet_id": m.wallet_id, "wallet_label": m.label}
-			for m in mapping_rows
-		],
+		mappings=mappings,
 		users=[
 			{
 				"external_id": u.external_id,
@@ -214,36 +154,17 @@ async def set_network_mapping(
 	"""Create or replace the application's "network → wallet" mapping entry.
 
 	Raises:
-		OperationError: unknown_application / wallet_missing.
+		OperationError: unknown_application / unknown_wallet.
 	"""
-	await _get_summary(engine, app_id)
-	async with engine.connect() as conn:
-		wallet = (
-			await conn.execute(select(wallets.c.id).where(wallets.c.id == wallet_id))
-		).first()
-	if wallet is None:
-		raise OperationError("wallet_missing", f"wallet {wallet_id} does not exist")
-	async with engine.begin() as conn:
-		result = await conn.execute(
-			update(app_networks)
-			.where(
-				app_networks.c.application_id == app_id, app_networks.c.network == network
-			)
-			.values(wallet_id=wallet_id)
-		)
-		if result.rowcount == 0:
-			await conn.execute(
-				insert(app_networks).values(
-					application_id=app_id, network=network, wallet_id=wallet_id
-				)
-			)
+	await _require_summary(engine, app_id)
+	if await user_wallets.get_wallet(engine, wallet_id) is None:
+		# Ошибка ввода пользователя кабинета, не серверная несогласованность.
+		raise OperationError("unknown_wallet", f"wallet {wallet_id} does not exist")
+	await user_apps.upsert_network_mapping(
+		engine, app_id=app_id, network=network, wallet_id=wallet_id
+	)
 
 
 async def remove_network_mapping(engine: AsyncEngine, *, app_id: int, network: str) -> None:
 	"""Drop one mapping entry; existing bindings of that network stay untouched."""
-	async with engine.begin() as conn:
-		await conn.execute(
-			delete(app_networks).where(
-				app_networks.c.application_id == app_id, app_networks.c.network == network
-			)
-		)
+	await user_apps.delete_network_mapping(engine, app_id=app_id, network=network)

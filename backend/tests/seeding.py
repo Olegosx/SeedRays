@@ -1,13 +1,17 @@
-"""Shared test seeding: a gateway with one user, wallet, application and key."""
+"""Shared test helpers: gateway seeding, the fake mailer, signed-in clients."""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import httpx
 from sqlalchemy import insert
 
+from seedrays.api.app_api import create_app
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub
+from seedrays.mail.base import MailSender
 from seedrays.orchestrator.operations import hash_api_key
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import schema_registry, schema_user
@@ -21,6 +25,48 @@ TEST_MNEMONIC = (
 TEST_API_KEY = "test-api-key-0001"
 # m/44'/195'/0'/0/0 этой фразы — эталонный адрес из тестов деривации.
 FIRST_TRON_ADDRESS = "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH"
+
+
+class FakeMailer(MailSender):
+	"""Captures outgoing messages instead of sending them."""
+
+	def __init__(self) -> None:
+		self.messages: list[tuple[str, str, str]] = []
+
+	async def send(self, to: str, subject: str, text: str) -> None:
+		self.messages.append((to, subject, text))
+
+
+def confirm_link(mailer: FakeMailer) -> str:
+	"""The confirmation path from the last captured message."""
+	text = mailer.messages[-1][2]
+	match = re.search(r"(/v1/user/confirm-email\?token=[\w~-]+)", text)
+	assert match, f"no confirmation link in: {text!r}"
+	return match.group(1)
+
+
+async def signed_in_client(
+	data_dir: Path, mailer: MailSender | None = None
+) -> tuple[httpx.AsyncClient, str]:
+	"""A client with a live session of a fresh user; returns (client, csrf).
+
+	Мигрирует реестр, включает dev-режим почты, регистрирует пользователя
+	alice (с подтверждением по письму, если передан почтовик) и входит.
+	"""
+	upgrade_registry(data_dir)
+	await enable_dev_mail(data_dir)
+	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=mailer))
+	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
+	await client.post(
+		"/v1/user/register",
+		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
+	)
+	if mailer is not None:
+		await client.get(confirm_link(mailer))
+	login = await client.post(
+		"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
+	)
+	return client, login.json()["csrf"]
 
 
 async def enable_dev_mail(data_dir: Path) -> None:

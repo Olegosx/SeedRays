@@ -1,51 +1,13 @@
 """Settings routes: secondary emails and password change."""
 
 import asyncio
-import re
 from pathlib import Path
 
 import httpx
 
 from seedrays.api.app_api import create_app
-from seedrays.mail.base import MailSender
-from seeding import enable_dev_mail
+from seeding import FakeMailer, confirm_link, enable_dev_mail, signed_in_client
 from seedrays.storage.migrations.runner import upgrade_registry
-
-
-class FakeMailer(MailSender):
-	"""Captures outgoing messages instead of sending them."""
-
-	def __init__(self) -> None:
-		self.messages: list[tuple[str, str, str]] = []
-
-	async def send(self, to: str, subject: str, text: str) -> None:
-		self.messages.append((to, subject, text))
-
-
-def _confirm_link(mailer: FakeMailer) -> str:
-	text = mailer.messages[-1][2]
-	match = re.search(r"(/v1/user/confirm-email\?token=[\w~-]+)", text)
-	assert match, f"no confirmation link in: {text!r}"
-	return match.group(1)
-
-
-async def _signed_in_client(
-	data_dir: Path, mailer: MailSender | None
-) -> tuple[httpx.AsyncClient, str]:
-	upgrade_registry(data_dir)
-	await enable_dev_mail(data_dir)
-	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=mailer))
-	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
-	await client.post(
-		"/v1/user/register",
-		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
-	)
-	if mailer is not None:
-		await client.get(_confirm_link(mailer))
-	login = await client.post(
-		"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
-	)
-	return client, login.json()["csrf"]
 
 
 def test_secondary_email_lifecycle(tmp_path: Path) -> None:
@@ -53,7 +15,7 @@ def test_secondary_email_lifecycle(tmp_path: Path) -> None:
 
 	async def scenario() -> None:
 		mailer = FakeMailer()
-		client, csrf = await _signed_in_client(tmp_path, mailer)
+		client, csrf = await signed_in_client(tmp_path, mailer)
 		headers = {"X-CSRF-Token": csrf}
 		try:
 			added = await client.post(
@@ -68,7 +30,7 @@ def test_secondary_email_lifecycle(tmp_path: Path) -> None:
 			assert backup["primary"] is False
 			assert backup["confirmed"] is False
 
-			await client.get(_confirm_link(mailer))
+			await client.get(confirm_link(mailer))
 			me = (await client.get("/v1/user/me")).json()["user"]
 			backup = next(e for e in me["emails"] if e["address"] == "backup@example.com")
 			assert backup["confirmed"] is True

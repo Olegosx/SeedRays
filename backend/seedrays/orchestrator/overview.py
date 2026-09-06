@@ -2,21 +2,24 @@
 
 Amounts leave this module as exact decimal strings computed with integer
 arithmetic from the minimal units (never floats) — the same principle as
-the Application API (ADR-0011).
+the Application API (ADR-0011). Database access goes through the storage
+layer (ADR-0006); status semantics come from its single point of truth.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from seedrays.storage.schema_registry import assets
-from seedrays.storage.schema_user import applications, balances, bindings, transactions, wallets
+from seedrays.orchestrator.operations import OperationError
+from seedrays.storage import registry as registry_ops
+from seedrays.storage import user_views
+from seedrays.storage.user_store import HISTORY_STATUS_FILTERS, classify_transaction
 
 HISTORY_LIMIT_DEFAULT = 50
-_STATUSES = ("confirmed", "pending", "failed", "all")
+# Размер блока «последние операции» на дашборде.
+OVERVIEW_RECENT_LIMIT = 5
 
 
 def format_amount(minimal_units: int, decimals: int) -> str:
@@ -30,25 +33,16 @@ def format_amount(minimal_units: int, decimals: int) -> str:
 
 
 async def _asset_infos(registry: AsyncEngine, asset_ids: set[int]) -> dict[int, dict]:
-	if not asset_ids:
-		return {}
-	async with registry.connect() as conn:
-		rows = (await conn.execute(select(assets).where(assets.c.id.in_(asset_ids)))).all()
+	"""asset id → the fields the cabinet screens need."""
+	records = await registry_ops.get_assets_by_ids(registry, asset_ids)
 	return {
-		row.id: {"network": row.network, "symbol": row.symbol, "decimals": row.decimals}
-		for row in rows
+		asset_id: {
+			"network": record.network,
+			"symbol": record.symbol,
+			"decimals": record.decimals,
+		}
+		for asset_id, record in records.items()
 	}
-
-
-async def _wallet_by_address(engine: AsyncEngine) -> tuple[dict[str, int], dict[int, str]]:
-	"""(address → wallet id, wallet id → display name)."""
-	async with engine.connect() as conn:
-		binding_rows = (
-			await conn.execute(select(bindings.c.address, bindings.c.wallet_id))
-		).all()
-		wallet_rows = (await conn.execute(select(wallets))).all()
-	names = {w.id: (w.label or w.family.upper()) for w in wallet_rows}
-	return {b.address: b.wallet_id for b in binding_rows}, names
 
 
 @dataclass(frozen=True)
@@ -80,22 +74,15 @@ async def history(
 	Raises:
 		OperationError: invalid_status / invalid_limit.
 	"""
-	from seedrays.orchestrator.operations import OperationError
-
-	if status not in _STATUSES:
-		raise OperationError("invalid_status", f"status must be one of {', '.join(_STATUSES)}")
+	if status not in HISTORY_STATUS_FILTERS:
+		raise OperationError(
+			"invalid_status", f"status must be one of {', '.join(HISTORY_STATUS_FILTERS)}"
+		)
 	if limit < 0:
 		raise OperationError("invalid_limit", "limit must be non-negative (0 means all)")
 
-	address_to_wallet, wallet_names = await _wallet_by_address(engine)
-	async with engine.connect() as conn:
-		rows = (
-			await conn.execute(
-				select(transactions)
-				.where(transactions.c.direction == "in")
-				.order_by(transactions.c.block_number.desc(), transactions.c.id.desc())
-			)
-		).all()
+	address_to_wallet, wallet_names = await user_views.wallet_display_map(engine)
+	rows = await user_views.list_incoming(engine)
 	infos = await _asset_infos(registry, {row.asset_id for row in rows})
 
 	result: list[HistoryRow] = []
@@ -103,12 +90,6 @@ async def history(
 		info = infos.get(row.asset_id)
 		if info is None:
 			continue
-		if row.status == "failed":
-			row_status = "failed"
-		elif row.balance_applied_at is not None:
-			row_status = "confirmed"
-		else:
-			row_status = "pending"
 		row_wallet_id = address_to_wallet.get(row.address)
 		entry = HistoryRow(
 			time=row.tx_time.isoformat(sep=" ", timespec="minutes") if row.tx_time else None,
@@ -118,7 +99,7 @@ async def history(
 			asset=info["symbol"],
 			amount=format_amount(int(row.amount), info["decimals"]),
 			txid=row.txid,
-			status=row_status,
+			status=classify_transaction(row.status, row.balance_applied_at),
 		)
 		if wallet_id is not None and entry.wallet_id != wallet_id:
 			continue
@@ -147,24 +128,9 @@ class Overview:
 
 async def overview(engine: AsyncEngine, registry: AsyncEngine) -> Overview:
 	"""Counters, receipts per network+asset and the freshest operations."""
-	async with engine.connect() as conn:
-		wallet_count = (await conn.execute(select(func.count()).select_from(wallets))).scalar()
-		app_count = (
-			await conn.execute(select(func.count()).select_from(applications))
-		).scalar()
-		address_count = (
-			await conn.execute(select(func.count()).select_from(bindings))
-		).scalar()
-		balance_rows = (await conn.execute(select(balances))).all()
-		pending_rows = (
-			await conn.execute(
-				select(transactions.c.asset_id, transactions.c.amount).where(
-					transactions.c.direction == "in",
-					transactions.c.status == "success",
-					transactions.c.balance_applied_at.is_(None),
-				)
-			)
-		).all()
+	wallet_count, app_count, address_count = await user_views.overview_counters(engine)
+	balance_rows = await user_views.list_balances(engine)
+	pending_rows = await user_views.pending_incoming(engine)
 
 	asset_ids = {row.asset_id for row in balance_rows} | {row.asset_id for row in pending_rows}
 	infos = await _asset_infos(registry, asset_ids)
@@ -192,11 +158,11 @@ async def overview(engine: AsyncEngine, registry: AsyncEngine) -> Overview:
 		)
 	receipts.sort(key=lambda r: (r["network"], r["asset"]))
 
-	recent = await history(engine, registry, limit=5)
+	recent = await history(engine, registry, limit=OVERVIEW_RECENT_LIMIT)
 	return Overview(
-		wallets=wallet_count or 0,
-		applications=app_count or 0,
-		addresses=address_count or 0,
+		wallets=wallet_count,
+		applications=app_count,
+		addresses=address_count,
 		receipts=receipts,
 		recent=recent,
 	)

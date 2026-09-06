@@ -1,40 +1,21 @@
 """User API tests: registration, email confirmation, sessions, CSRF."""
 
 import asyncio
-import re
 from pathlib import Path
 
 import httpx
 
 from seedrays.api.app_api import create_app
 from seedrays.mail.base import MailSender
-from seeding import enable_dev_mail
+from seeding import FakeMailer, confirm_link, enable_dev_mail
 from seedrays.storage.migrations.runner import upgrade_registry
 
 GOOD_USER = {"username": "alice", "email": "Alice@Example.com", "password": "correct-horse"}
 
 
-class FakeMailer(MailSender):
-	"""Captures outgoing messages instead of sending them."""
-
-	def __init__(self) -> None:
-		self.messages: list[tuple[str, str, str]] = []
-
-	async def send(self, to: str, subject: str, text: str) -> None:
-		self.messages.append((to, subject, text))
-
-
 def _client(data_dir: Path, mailer: MailSender | None) -> httpx.AsyncClient:
 	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=mailer))
 	return httpx.AsyncClient(transport=transport, base_url="https://gw")
-
-
-def _confirm_link(mailer: FakeMailer) -> str:
-	"""The confirmation path from the last captured message."""
-	text = mailer.messages[-1][2]
-	match = re.search(r"(/v1/user/confirm-email\?token=[\w~-]+)", text)
-	assert match, f"no confirmation link in: {text!r}"
-	return match.group(1)
 
 
 def test_register_confirm_login_me_logout(tmp_path: Path) -> None:
@@ -58,7 +39,7 @@ def test_register_confirm_login_me_logout(tmp_path: Path) -> None:
 			assert early.status_code == 403
 			assert early.json()["error"]["code"] == "email_not_confirmed"
 
-			confirm = await client.get(_confirm_link(mailer))
+			confirm = await client.get(confirm_link(mailer))
 			assert confirm.status_code == 303
 			assert "confirmed=1" in confirm.headers["location"]
 

@@ -5,18 +5,47 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.storage.engine import unique_violation
 from seedrays.storage.schema_user import balances, bindings, transactions
 
-# Допустимые доменные значения строк транзакций (ADR-0017). Проверяются до
-# вставки: на финансовом пути записи нарушение CHECK-ограничения не должно
-# быть неотличимо от конфликта ключа идемпотентности.
-DIRECTIONS = ("in", "out")
-STATUSES = ("success", "failed")
+# Доменные значения финансовой модели (ADR-0017) — единственная точка
+# правды для сравнений и записи; голые литералы в потребителях запрещены.
+DIRECTION_IN = "in"
+DIRECTION_OUT = "out"
+DIRECTIONS = (DIRECTION_IN, DIRECTION_OUT)
+STATUS_SUCCESS = "success"
+STATUS_FAILED = "failed"
+STATUSES = (STATUS_SUCCESS, STATUS_FAILED)
+
+# Статусы, которыми операция показывается потребителям (API и кабинет),
+# и допустимые значения фильтра истории.
+API_STATUS_CONFIRMED = "confirmed"
+API_STATUS_PENDING = "pending"
+API_STATUS_FAILED = "failed"
+HISTORY_STATUS_FILTERS = (
+	API_STATUS_CONFIRMED,
+	API_STATUS_PENDING,
+	API_STATUS_FAILED,
+	"all",
+)
+
+
+def classify_transaction(status: str, balance_applied_at: datetime | None) -> str:
+	"""The consumer-facing status of one row (ADR-0017, single point of truth).
+
+	``confirmed`` — успешна и учтена в балансе; ``pending`` — записана, но
+	ещё не учтена (включая предварительные строки ADR-0021); ``failed`` —
+	исполнение провалилось.
+	"""
+	if status == STATUS_FAILED:
+		return API_STATUS_FAILED
+	if balance_applied_at is not None:
+		return API_STATUS_CONFIRMED
+	return API_STATUS_PENDING
 
 
 @dataclass(frozen=True)
@@ -35,6 +64,99 @@ async def list_binding_addresses(engine: AsyncEngine) -> list[BindingAddress]:
 			await conn.execute(select(bindings.c.network, bindings.c.address, bindings.c.memo))
 		).all()
 	return [BindingAddress(network=r.network, address=r.address, memo=r.memo) for r in rows]
+
+
+async def get_binding(
+	engine: AsyncEngine, *, network: str, application_id: int, app_user_id: int
+):
+	"""The binding row of one owner in one network, or None."""
+	async with engine.connect() as conn:
+		return (
+			await conn.execute(
+				select(bindings).where(
+					bindings.c.network == network,
+					bindings.c.application_id == application_id,
+					bindings.c.app_user_id == app_user_id,
+				)
+			)
+		).first()
+
+
+async def reused_derivation_index(
+	engine: AsyncEngine, *, wallet_id: int, application_id: int, app_user_id: int
+) -> int | None:
+	"""The owner's index in another network of the same wallet, if any.
+
+	Переиспользование индекса — осознанное свойство модели: та же связка
+	«кошелёк + приложение + пользователь приложения» в другой сети даёт
+	плательщику тот же адрес (EVM-свойство).
+	"""
+	async with engine.connect() as conn:
+		row = (
+			await conn.execute(
+				select(bindings.c.derivation_index)
+				.where(
+					bindings.c.wallet_id == wallet_id,
+					bindings.c.application_id == application_id,
+					bindings.c.app_user_id == app_user_id,
+				)
+				.limit(1)
+			)
+		).first()
+	return None if row is None else row.derivation_index
+
+
+async def next_derivation_index(engine: AsyncEngine, wallet_id: int) -> int:
+	"""The wallet's next free derivation index."""
+	async with engine.connect() as conn:
+		max_index = (
+			await conn.execute(
+				select(func.max(bindings.c.derivation_index)).where(
+					bindings.c.wallet_id == wallet_id
+				)
+			)
+		).scalar()
+	return 0 if max_index is None else max_index + 1
+
+
+async def insert_binding(
+	engine: AsyncEngine,
+	*,
+	wallet_id: int,
+	network: str,
+	address: str,
+	application_id: int,
+	app_user_id: int,
+	derivation_index: int,
+) -> None:
+	"""Insert one binding row.
+
+	Raises:
+		IntegrityError: On a uniqueness conflict — the caller resolves it
+			(the allocation is serialized above this layer).
+	"""
+	async with engine.begin() as conn:
+		await conn.execute(
+			insert(bindings).values(
+				wallet_id=wallet_id,
+				network=network,
+				address=address,
+				application_id=application_id,
+				app_user_id=app_user_id,
+				derivation_index=derivation_index,
+			)
+		)
+
+
+async def list_bindings_of_app_user(
+	engine: AsyncEngine, app_user_id: int, *, network: str | None = None
+) -> list:
+	"""Binding rows of one application user, optionally scoped to a network."""
+	query = select(bindings).where(bindings.c.app_user_id == app_user_id)
+	if network is not None:
+		query = query.where(bindings.c.network == network)
+	async with engine.connect() as conn:
+		return (await conn.execute(query)).all()
 
 
 async def record_transaction(
@@ -160,7 +282,7 @@ async def apply_finalized(
 				select(transactions).where(
 					transactions.c.balance_applied_at.is_(None),
 					transactions.c.finalized_at.is_not(None),
-					transactions.c.status == "success",
+					transactions.c.status == STATUS_SUCCESS,
 					transactions.c.asset_id.in_(asset_ids),
 				)
 			)
@@ -180,7 +302,7 @@ async def apply_finalized(
 			else:
 				current, received = int(balance_row.balance), int(balance_row.total_received)
 				last_deposit = balance_row.last_deposit_at
-			if row.direction == "in":
+			if row.direction == DIRECTION_IN:
 				current += amount
 				received += amount
 				# Максимум, а не последняя строка выборки: порядок выдачи

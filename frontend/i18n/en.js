@@ -34,6 +34,7 @@ export const en = {
 	"errors.no_families": "Check at least one family.",
 	"errors.invalid_name": "The name is 1 to 64 characters.",
 	"errors.unknown_application": "No such application.",
+	"errors.unknown_wallet": "No such wallet — refresh the wallet list.",
 	"errors.wallet_missing": "No such wallet.",
 	"errors.unknown_email": "No such email on this account.",
 	"errors.cannot_remove_primary": "The primary email cannot be removed.",

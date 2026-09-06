@@ -1,7 +1,8 @@
 """Orchestrator operations: the business core behind the API layers (ADR-0011).
 
 The HTTP layer stays a thin adapter: every rule about bindings, balances
-and history lives here.
+and history lives here. Database access goes through the storage layer
+(ADR-0006) — this module never sees SQL.
 """
 
 from __future__ import annotations
@@ -11,23 +12,15 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from sqlalchemy import func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.derivation.derive import derive_address
 from seedrays.families import Family
+from seedrays.storage import registry as registry_ops
+from seedrays.storage import user_apps, user_store, user_views, user_wallets
 from seedrays.storage.engine import create_sqlite_engine, user_db_path
-from seedrays.storage.schema_registry import api_keys, assets, users
-from seedrays.storage.schema_user import (
-	app_networks,
-	app_users,
-	applications,
-	balances,
-	bindings,
-	transactions,
-	wallets,
-)
+from seedrays.storage.user_store import HISTORY_STATUS_FILTERS, classify_transaction
 
 DEFAULT_PAGE_LIMIT = 10
 
@@ -69,90 +62,54 @@ async def resolve_application(
 	database gives the application (ADR-0008, ADR-0009).
 	"""
 	key_hash = hash_api_key(api_key)
-	async with registry.connect() as conn:
-		key_row = (
-			await conn.execute(select(api_keys).where(api_keys.c.key_hash == key_hash))
-		).first()
-		if key_row is None:
-			return None
-		user_row = (
-			await conn.execute(select(users).where(users.c.id == key_row.user_id))
-		).first()
-	if user_row is None or user_row.status != "active":
+	user = await registry_ops.resolve_api_key(registry, key_hash)
+	if user is None or user.status != "active":
 		return None
-	engine = create_sqlite_engine(user_db_path(data_dir, user_row.directory))
+	engine = create_sqlite_engine(user_db_path(data_dir, user.directory))
 	app_row = None
 	try:
-		async with engine.connect() as conn:
-			app_row = (
-				await conn.execute(
-					select(applications).where(applications.c.key_hash == key_hash)
-				)
-			).first()
+		app_row = await user_apps.find_application_by_key_hash(engine, key_hash)
 	finally:
 		if app_row is None:
 			await engine.dispose()
 	if app_row is None:
 		return None
 	return AppContext(
-		user_id=user_row.id,
+		user_id=user.id,
 		application_id=app_row.id,
 		application_name=app_row.name,
 		engine=engine,
 	)
 
 
-async def _network_wallets(ctx: AppContext) -> dict[str, int]:
-	"""The application's configured "network → wallet" mapping."""
-	async with ctx.engine.connect() as conn:
-		rows = (
-			await conn.execute(
-				select(app_networks).where(app_networks.c.application_id == ctx.application_id)
-			)
-		).all()
-	return {row.network: row.wallet_id for row in rows}
-
-
 async def _get_or_create_app_user(ctx: AppContext, external_id: str) -> int:
 	"""Implicit application-user registration (ADR-0011)."""
-	lookup = select(app_users.c.id).where(
-		app_users.c.application_id == ctx.application_id,
-		app_users.c.external_id == external_id,
+	found = await user_apps.get_app_user_id(
+		ctx.engine, app_id=ctx.application_id, external_id=external_id
 	)
-	async with ctx.engine.connect() as conn:
-		row = (await conn.execute(lookup)).first()
-	if row is not None:
-		return row.id
+	if found is not None:
+		return found
 	try:
-		async with ctx.engine.begin() as conn:
-			result = await conn.execute(
-				insert(app_users).values(
-					application_id=ctx.application_id, external_id=external_id
-				)
-			)
-			return result.inserted_primary_key[0]
+		return await user_apps.insert_app_user(
+			ctx.engine, app_id=ctx.application_id, external_id=external_id
+		)
 	except IntegrityError:
-		async with ctx.engine.connect() as conn:
-			row = (await conn.execute(lookup)).first()
-		if row is None:
+		found = await user_apps.get_app_user_id(
+			ctx.engine, app_id=ctx.application_id, external_id=external_id
+		)
+		if found is None:
 			raise RuntimeError(f"app user {external_id!r} vanished after insert") from None
-		return row.id
+		return found
 
 
 async def _find_app_user(ctx: AppContext, external_id: str) -> int:
 	"""The application user's internal id, or an unknown-user error."""
-	async with ctx.engine.connect() as conn:
-		row = (
-			await conn.execute(
-				select(app_users.c.id).where(
-					app_users.c.application_id == ctx.application_id,
-					app_users.c.external_id == external_id,
-				)
-			)
-		).first()
-	if row is None:
+	found = await user_apps.get_app_user_id(
+		ctx.engine, app_id=ctx.application_id, external_id=external_id
+	)
+	if found is None:
 		raise OperationError("unknown_app_user", f"application user {external_id!r} is unknown")
-	return row.id
+	return found
 
 
 async def ensure_bindings(
@@ -172,7 +129,7 @@ async def ensure_bindings(
 		OperationError: If a requested network is not configured for the
 			application, or nothing is configured at all.
 	"""
-	mapping = await _network_wallets(ctx)
+	mapping = await user_apps.network_wallet_map(ctx.engine, ctx.application_id)
 	if networks == "all":
 		targets = sorted(mapping)
 	else:
@@ -208,83 +165,70 @@ def _binding_lock(user_id: int) -> asyncio.Lock:
 	return _binding_locks.setdefault(user_id, asyncio.Lock())
 
 
+def _binding_json(row) -> dict:
+	return {"network": row.network, "address": row.address, "memo": row.memo}
+
+
 async def _ensure_one_binding(
 	ctx: AppContext, network: str, wallet_id: int, app_user_id: int
 ) -> dict:
 	"""One idempotent binding: reuse, or derive the address and insert."""
-	existing_q = select(bindings).where(
-		bindings.c.network == network,
-		bindings.c.application_id == ctx.application_id,
-		bindings.c.app_user_id == app_user_id,
+	row = await user_store.get_binding(
+		ctx.engine, network=network, application_id=ctx.application_id, app_user_id=app_user_id
 	)
-	async with ctx.engine.connect() as conn:
-		row = (await conn.execute(existing_q)).first()
 	if row is not None:
-		return {"network": row.network, "address": row.address, "memo": row.memo}
+		return _binding_json(row)
 
 	async with _binding_lock(ctx.user_id):
 		# Перечитать под замком: привязка могла появиться, пока ждали очередь.
-		async with ctx.engine.connect() as conn:
-			row = (await conn.execute(existing_q)).first()
+		row = await user_store.get_binding(
+			ctx.engine,
+			network=network,
+			application_id=ctx.application_id,
+			app_user_id=app_user_id,
+		)
 		if row is not None:
-			return {"network": row.network, "address": row.address, "memo": row.memo}
+			return _binding_json(row)
 
-		async with ctx.engine.connect() as conn:
-			wallet = (
-				await conn.execute(select(wallets).where(wallets.c.id == wallet_id))
-			).first()
-			if wallet is None:
-				raise OperationError("wallet_missing", f"wallet {wallet_id} does not exist")
-			# Переиспользование индекса: та же связка «кошелёк + пользователь
-			# приложения» в другой сети даёт тот же адрес (развилка 2, EVM-свойство).
-			reuse = (
-				await conn.execute(
-					select(bindings.c.derivation_index)
-					.where(
-						bindings.c.wallet_id == wallet_id,
-						bindings.c.application_id == ctx.application_id,
-						bindings.c.app_user_id == app_user_id,
-					)
-					.limit(1)
-				)
-			).first()
-			if reuse is not None:
-				index = reuse.derivation_index
-			else:
-				max_index = (
-					await conn.execute(
-						select(func.max(bindings.c.derivation_index)).where(
-							bindings.c.wallet_id == wallet_id
-						)
-					)
-				).scalar()
-				index = 0 if max_index is None else max_index + 1
+		wallet = await user_wallets.get_wallet(ctx.engine, wallet_id)
+		if wallet is None:
+			raise OperationError("wallet_missing", f"wallet {wallet_id} does not exist")
+		index = await user_store.reused_derivation_index(
+			ctx.engine,
+			wallet_id=wallet_id,
+			application_id=ctx.application_id,
+			app_user_id=app_user_id,
+		)
+		if index is None:
+			index = await user_store.next_derivation_index(ctx.engine, wallet_id)
 
 		address = derive_address(Family(wallet.family), wallet.xpub, index)
 		try:
-			async with ctx.engine.begin() as conn:
-				await conn.execute(
-					insert(bindings).values(
-						wallet_id=wallet_id,
-						network=network,
-						address=address,
-						application_id=ctx.application_id,
-						app_user_id=app_user_id,
-						derivation_index=index,
-					)
-				)
+			await user_store.insert_binding(
+				ctx.engine,
+				wallet_id=wallet_id,
+				network=network,
+				address=address,
+				application_id=ctx.application_id,
+				app_user_id=app_user_id,
+				derivation_index=index,
+			)
 		except IntegrityError as exc:
 			# Под замком конфликт возможен только от внешнего по отношению
 			# к процессу писателя; идемпотентный исход — вернуть свою
 			# привязку, если её успели создать, иначе поднять с контекстом.
-			async with ctx.engine.connect() as conn:
-				row = (await conn.execute(existing_q)).first()
+			row = await user_store.get_binding(
+				ctx.engine,
+				network=network,
+				application_id=ctx.application_id,
+				app_user_id=app_user_id,
+			)
 			if row is None:
 				raise RuntimeError(
 					f"binding insert conflicted for network {network}, "
 					f"wallet {wallet_id}, index {index}: {exc.orig}"
 				) from exc
-			return {"network": row.network, "address": row.address, "memo": row.memo}
+			return _binding_json(row)
 	return {"network": network, "address": address, "memo": ""}
 
 
@@ -293,12 +237,10 @@ async def list_addresses(
 ) -> list[dict]:
 	"""The user's existing bindings; read-only counterpart of ensure_bindings."""
 	app_user_id = await _find_app_user(ctx, external_id)
-	query = select(bindings).where(bindings.c.app_user_id == app_user_id)
-	if network is not None:
-		query = query.where(bindings.c.network == network)
-	async with ctx.engine.connect() as conn:
-		rows = (await conn.execute(query)).all()
-	return [{"network": r.network, "address": r.address, "memo": r.memo} for r in rows]
+	rows = await user_store.list_bindings_of_app_user(
+		ctx.engine, app_user_id, network=network
+	)
+	return [_binding_json(row) for row in rows]
 
 
 async def _user_addresses(
@@ -306,31 +248,24 @@ async def _user_addresses(
 ) -> dict[str, str]:
 	"""address → network of the application user's bindings."""
 	app_user_id = await _find_app_user(ctx, external_id)
-	query = select(bindings.c.address, bindings.c.network).where(
-		bindings.c.app_user_id == app_user_id
+	rows = await user_store.list_bindings_of_app_user(
+		ctx.engine, app_user_id, network=network
 	)
-	if network is not None:
-		query = query.where(bindings.c.network == network)
-	async with ctx.engine.connect() as conn:
-		rows = (await conn.execute(query)).all()
 	return {row.address: row.network for row in rows}
 
 
 async def _asset_infos(registry: AsyncEngine, asset_ids: set[int]) -> dict[int, dict]:
-	"""asset id → description from the registry catalog."""
-	if not asset_ids:
-		return {}
-	async with registry.connect() as conn:
-		rows = (await conn.execute(select(assets).where(assets.c.id.in_(asset_ids)))).all()
+	"""asset id → description dict of the Application API responses."""
+	records = await registry_ops.get_assets_by_ids(registry, asset_ids)
 	return {
-		row.id: {
-			"network": row.network,
-			"contract_address": row.contract_address,
-			"symbol": row.symbol,
-			"decimals": row.decimals,
-			"kind": row.kind,
+		asset_id: {
+			"network": record.network,
+			"contract_address": record.contract_address,
+			"symbol": record.symbol,
+			"decimals": record.decimals,
+			"kind": record.kind,
 		}
-		for row in rows
+		for asset_id, record in records.items()
 	}
 
 
@@ -358,24 +293,8 @@ async def get_balances(
 	if not addresses:
 		return []
 	address_list = list(addresses)
-	async with ctx.engine.connect() as conn:
-		balance_rows = (
-			await conn.execute(select(balances).where(balances.c.address.in_(address_list)))
-		).all()
-		pending_rows = (
-			await conn.execute(
-				select(
-					transactions.c.address,
-					transactions.c.asset_id,
-					transactions.c.amount,
-				).where(
-					transactions.c.address.in_(address_list),
-					transactions.c.direction == "in",
-					transactions.c.status == "success",
-					transactions.c.balance_applied_at.is_(None),
-				)
-			)
-		).all()
+	balance_rows = await user_views.list_balances(ctx.engine, addresses=address_list)
+	pending_rows = await user_views.pending_incoming(ctx.engine, addresses=address_list)
 
 	totals: dict[tuple[str, int], dict[str, int]] = {}
 	for row in balance_rows:
@@ -404,9 +323,6 @@ async def get_balances(
 	return result
 
 
-_HISTORY_STATUSES = ("confirmed", "pending", "failed", "all")
-
-
 async def get_history(
 	registry: AsyncEngine,
 	ctx: AppContext,
@@ -421,37 +337,16 @@ async def get_history(
 	Status semantics (ADR-0017): ``confirmed`` — applied to the balance;
 	``pending`` — recorded but not applied yet; ``failed`` — execution failed.
 	"""
-	if status not in _HISTORY_STATUSES:
+	if status not in HISTORY_STATUS_FILTERS:
 		raise OperationError(
-			"invalid_status", f"status must be one of {', '.join(_HISTORY_STATUSES)}"
+			"invalid_status", f"status must be one of {', '.join(HISTORY_STATUS_FILTERS)}"
 		)
 	if limit < 0:
 		raise OperationError("invalid_limit", "limit must be non-negative (0 means all)")
 	addresses = await _user_addresses(ctx, external_id, network)
 	if not addresses:
 		return []
-	query = (
-		select(transactions)
-		.where(
-			transactions.c.address.in_(list(addresses)),
-			transactions.c.direction == "in",
-		)
-		.order_by(transactions.c.block_number.desc(), transactions.c.id.desc())
-	)
-	if status == "confirmed":
-		query = query.where(
-			transactions.c.status == "success",
-			transactions.c.balance_applied_at.is_not(None),
-		)
-	elif status == "pending":
-		query = query.where(
-			transactions.c.status == "success",
-			transactions.c.balance_applied_at.is_(None),
-		)
-	elif status == "failed":
-		query = query.where(transactions.c.status == "failed")
-	async with ctx.engine.connect() as conn:
-		rows = (await conn.execute(query)).all()
+	rows = await user_views.list_incoming(ctx.engine, addresses=list(addresses))
 
 	infos = await _asset_infos(registry, {row.asset_id for row in rows})
 	result = []
@@ -459,12 +354,9 @@ async def get_history(
 		info = infos.get(row.asset_id)
 		if info is None or not _asset_matches(info, asset):
 			continue
-		if row.status == "failed":
-			api_status = "failed"
-		elif row.balance_applied_at is not None:
-			api_status = "confirmed"
-		else:
-			api_status = "pending"
+		api_status = classify_transaction(row.status, row.balance_applied_at)
+		if status != "all" and api_status != status:
+			continue
 		result.append(
 			{
 				"txid": row.txid,
@@ -486,15 +378,7 @@ async def list_app_users(ctx: AppContext, limit: int = DEFAULT_PAGE_LIMIT) -> li
 	"""The application's users, paginated (ADR-0011: default 10, 0 — all)."""
 	if limit < 0:
 		raise OperationError("invalid_limit", "limit must be non-negative (0 means all)")
-	query = (
-		select(app_users)
-		.where(app_users.c.application_id == ctx.application_id)
-		.order_by(app_users.c.id)
-	)
-	if limit:
-		query = query.limit(limit)
-	async with ctx.engine.connect() as conn:
-		rows = (await conn.execute(query)).all()
+	rows = await user_apps.list_app_users(ctx.engine, ctx.application_id, limit=limit)
 	return [
 		{
 			"external_id": row.external_id,

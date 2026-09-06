@@ -6,15 +6,13 @@ from pathlib import Path
 
 import httpx
 
-from seedrays.api.app_api import create_app
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub
 from seedrays.orchestrator.overview import format_amount
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_store
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
-from seeding import enable_dev_mail
-from seedrays.storage.migrations.runner import upgrade_registry
+from seeding import signed_in_client
 
 TEST_MNEMONIC = (
 	"abandon abandon abandon abandon abandon abandon "
@@ -34,18 +32,7 @@ def test_format_amount_is_exact() -> None:
 
 async def _prepared_client(data_dir: Path) -> tuple[httpx.AsyncClient, str, str]:
 	"""A signed-in client with a wallet, an app, a mapping and one binding."""
-	upgrade_registry(data_dir)
-	await enable_dev_mail(data_dir)
-	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=None))
-	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
-	await client.post(
-		"/v1/user/register",
-		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
-	)
-	login = await client.post(
-		"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
-	)
-	csrf = login.json()["csrf"]
+	client, csrf = await signed_in_client(data_dir)
 	headers = {"X-CSRF-Token": csrf}
 	xpub = account_xpub(TEST_MNEMONIC, Family.TRON)
 	wallet = await client.post(

@@ -34,6 +34,7 @@ export const ru = {
 	"errors.no_families": "Отметьте хотя бы одно семейство.",
 	"errors.invalid_name": "Название: от 1 до 64 знаков.",
 	"errors.unknown_application": "Такого приложения нет.",
+	"errors.unknown_wallet": "Такого кошелька нет — обновите список кошельков.",
 	"errors.wallet_missing": "Такого кошелька нет.",
 	"errors.unknown_email": "Такой почты на учётной записи нет.",
 	"errors.cannot_remove_primary": "Основную почту удалить нельзя.",

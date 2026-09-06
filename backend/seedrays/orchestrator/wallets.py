@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass
-from datetime import datetime
 
-from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_address
@@ -20,19 +18,12 @@ from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, generate_mnemonic
 from seedrays.orchestrator.operations import OperationError
 from seedrays.storage import registry as registry_ops
-from seedrays.storage.schema_user import bindings, wallets
+from seedrays.storage import user_wallets
+from seedrays.storage.user_wallets import WalletRecord
 
-
-@dataclass(frozen=True)
-class WalletInfo:
-	"""One wallet of the user, with its bound address count."""
-
-	id: int
-	family: str
-	xpub: str
-	label: str
-	created_at: datetime | None
-	addresses: int
+# Доменная запись кошелька живёт в слое хранения (ADR-0006);
+# здесь — прежнее имя для потребителей оркестратора.
+WalletInfo = WalletRecord
 
 
 def _parse_family(value: str) -> Family:
@@ -47,27 +38,7 @@ def _parse_family(value: str) -> Family:
 
 async def list_wallets(engine: AsyncEngine) -> list[WalletInfo]:
 	"""The user's wallets with per-wallet bound address counts."""
-	async with engine.connect() as conn:
-		rows = (await conn.execute(select(wallets).order_by(wallets.c.id))).all()
-		counts = dict(
-			(
-				await conn.execute(
-					select(bindings.c.wallet_id, func.count())
-					.group_by(bindings.c.wallet_id)
-				)
-			).all()
-		)
-	return [
-		WalletInfo(
-			id=row.id,
-			family=row.family,
-			xpub=row.xpub,
-			label=row.label,
-			created_at=row.created_at,
-			addresses=counts.get(row.id, 0),
-		)
-		for row in rows
-	]
+	return await user_wallets.list_wallets(engine)
 
 
 async def attach_wallet(
@@ -117,11 +88,9 @@ async def attach_wallet(
 		# что и невалидный ключ, — факт «xpub уже подключён» не раскрывается.
 		raise OperationError("invalid_xpub", "the xpub was not accepted")
 	try:
-		async with engine.begin() as conn:
-			result = await conn.execute(
-				insert(wallets).values(family=parsed.value, xpub=cleaned, label=label.strip())
-			)
-			wallet_id = result.inserted_primary_key[0]
+		wallet_id = await user_wallets.add_wallet(
+			engine, family=parsed.value, xpub=cleaned, label=label.strip()
+		)
 	except BaseException:
 		# Компенсация: запись в базу владельца не состоялась — резерв в
 		# индексе реестра снимается, иначе xpub заблокирован навсегда.

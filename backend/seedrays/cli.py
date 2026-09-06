@@ -14,6 +14,9 @@ from seedrays.derivation.derive import derive_address
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, generate_mnemonic
 
+# Адрес привязки API по умолчанию (переопределяется SEEDRAYS_BIND, ADR-0016).
+DEFAULT_BIND = "127.0.0.1:8080"
+
 _SEED_WARNING = (
 	"WARNING: the seed phrase below is shown ONCE and is not stored anywhere.\n"
 	"Anyone who knows it controls the funds. Write it down and keep it offline."
@@ -101,18 +104,26 @@ def _cmd_derive(args: argparse.Namespace) -> int:
 	return 0
 
 
+def _service_prologue() -> Path | None:
+	"""Common start of the service commands: the data dir and logging setup."""
+	data_dir = os.environ.get("SEEDRAYS_DATA_DIR")
+	if not data_dir:
+		print("error: SEEDRAYS_DATA_DIR is not set (see ADR-0016)", file=sys.stderr)
+		return None
+	logging.basicConfig(
+		level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+	)
+	return Path(data_dir)
+
+
 def _cmd_watch() -> int:
 	"""Run one watcher pass over the gateway data directory."""
 	from seedrays.watcher.single_pass import run_pass
 
-	data_dir = os.environ.get("SEEDRAYS_DATA_DIR")
-	if not data_dir:
-		print("error: SEEDRAYS_DATA_DIR is not set (see ADR-0016)", file=sys.stderr)
+	data_dir = _service_prologue()
+	if data_dir is None:
 		return 2
-	logging.basicConfig(
-		level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-	)
-	stats = asyncio.run(run_pass(Path(data_dir)))
+	stats = asyncio.run(run_pass(data_dir))
 	print(
 		f"pass done: networks={stats.networks_scanned}"
 		f" matched={stats.transfers_matched} recorded={stats.rows_recorded}"
@@ -127,18 +138,14 @@ def _cmd_serve() -> int:
 	from seedrays.orchestrator.supervisor import run
 	from seedrays.storage.migrations.runner import upgrade_all
 
-	data_dir = os.environ.get("SEEDRAYS_DATA_DIR")
-	if not data_dir:
-		print("error: SEEDRAYS_DATA_DIR is not set (see ADR-0016)", file=sys.stderr)
+	data_dir = _service_prologue()
+	if data_dir is None:
 		return 2
-	bind = os.environ.get("SEEDRAYS_BIND", "127.0.0.1:8080")
+	bind = os.environ.get("SEEDRAYS_BIND", DEFAULT_BIND)
 	host, _, port_raw = bind.rpartition(":")
 	if not host or not port_raw.isdigit():
 		print(f"error: SEEDRAYS_BIND is malformed: {bind!r}", file=sys.stderr)
 		return 2
-	logging.basicConfig(
-		level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-	)
 	# Каталог статики фронта: переменная окружения (развёрточный уровень,
 	# ADR-0016) или frontend/ рядом с пакетом при запуске из репозитория.
 	frontend_raw = os.environ.get("SEEDRAYS_FRONTEND_DIR")
@@ -147,9 +154,9 @@ def _cmd_serve() -> int:
 	else:
 		repo_frontend = Path(__file__).resolve().parents[2] / "frontend"
 		frontend_dir = repo_frontend if repo_frontend.is_dir() else None
-	upgrade_all(Path(data_dir))
+	upgrade_all(data_dir)
 	try:
-		asyncio.run(run(Path(data_dir), host, int(port_raw), frontend_dir))
+		asyncio.run(run(data_dir, host, int(port_raw), frontend_dir))
 	except KeyboardInterrupt:
 		print("gateway stopped")
 	return 0
@@ -173,8 +180,8 @@ def main(argv: list[str] | None = None) -> int:
 		return _cmd_watch()
 	if args.command == "serve":
 		return _cmd_serve()
-	print(f"seedrays {args.command}: not implemented yet", file=sys.stderr)
-	return 1
+	# argparse с required=True не пропустит незарегистрированную команду.
+	raise AssertionError(f"unhandled command {args.command!r}")
 
 
 if __name__ == "__main__":

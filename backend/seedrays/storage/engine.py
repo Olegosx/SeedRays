@@ -1,12 +1,22 @@
-"""Database engine management: file layout, async engines, SQLite pragmas."""
+"""Database engine management: file layout, async engines, SQLite pragmas.
+
+Also the storage layer's time convention: every datetime stored in the
+databases is naive UTC, produced by :func:`now_utc`.
+"""
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import event
+from sqlalchemy import Table, event, insert, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+
+
+def now_utc() -> datetime:
+	"""Naive UTC "now" — the single time convention of the storage layer."""
+	return datetime.now(timezone.utc).replace(tzinfo=None)
 
 REGISTRY_DB_FILENAME = "registry.db"
 USER_DB_FILENAME = "user.db"
@@ -49,6 +59,25 @@ def unique_violation(exc: IntegrityError) -> str | None:
 	if marker not in message:
 		return None
 	return message.split(marker, 1)[1]
+
+
+async def upsert(conn: AsyncConnection, table: Table, match: dict, values: dict) -> None:
+	"""Create or replace one row: update, insert on miss, survive the race.
+
+	Переносимый «создать-или-заменить» одной точкой: конкурентная вставка
+	того же ключа двумя задачами не должна ронять операцию.
+	"""
+	condition = [table.c[name] == value for name, value in match.items()]
+	result = await conn.execute(update(table).where(*condition).values(**values))
+	if result.rowcount:
+		return
+	try:
+		await conn.execute(insert(table).values(**match, **values))
+	except IntegrityError as exc:
+		if unique_violation(exc) is None:
+			raise
+		# Параллельная вставка успела первой — дописываем значения поверх.
+		await conn.execute(update(table).where(*condition).values(**values))
 
 
 def sqlite_sync_url(path: Path) -> str:

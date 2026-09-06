@@ -29,7 +29,7 @@ from seedrays.orchestrator import overview as overview_ops
 from seedrays.orchestrator import wallets as wallet_ops
 from seedrays.orchestrator.ratelimit import RateLimiter
 from seedrays.storage import registry as registry_ops
-from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
+from seedrays.storage.engine import create_sqlite_engine, now_utc, registry_db_path, user_db_path
 
 logger = logging.getLogger(__name__)
 
@@ -210,7 +210,7 @@ def register_user_routes(
 	MutatingSessionDep = Depends(mutating_session)
 
 	def _set_session_cookie(response: Response, signed: auth.SignedIn) -> None:
-		max_age = int((signed.expires_at - auth._now()).total_seconds())
+		max_age = int((signed.expires_at - now_utc()).total_seconds())
 		# Secure: токен сессии не должен уходить по нешифрованному каналу
 		# (threat-model требует «HTTPS only»); локальная разработка не
 		# страдает — localhost браузеры считают доверенным источником.
@@ -248,7 +248,9 @@ def register_user_routes(
 		}
 
 	@app.get("/v1/user/confirm-email")
-	async def confirm_email(token: str, registry: AsyncEngine = RegistryDep):
+	async def confirm_email(
+		token: str, registry: AsyncEngine = RegistryDep
+	) -> RedirectResponse:
 		"""Landing point of the link from the confirmation email."""
 		confirmed = await auth.confirm_email(registry, token)
 		flag = "1" if confirmed else "0"

@@ -3,13 +3,9 @@
 import asyncio
 from pathlib import Path
 
-import httpx
-
-from seedrays.api.app_api import create_app
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, validate_mnemonic
-from seeding import enable_dev_mail
-from seedrays.storage.migrations.runner import upgrade_registry
+from seeding import signed_in_client
 
 TEST_MNEMONIC = (
 	"abandon abandon abandon abandon abandon abandon "
@@ -17,27 +13,11 @@ TEST_MNEMONIC = (
 )
 
 
-async def _signed_in_client(data_dir: Path) -> tuple[httpx.AsyncClient, str]:
-	"""A client with a live session; returns (client, csrf token)."""
-	upgrade_registry(data_dir)
-	await enable_dev_mail(data_dir)
-	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=None))
-	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
-	await client.post(
-		"/v1/user/register",
-		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
-	)
-	login = await client.post(
-		"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
-	)
-	return client, login.json()["csrf"]
-
-
 def test_attach_and_list_wallets(tmp_path: Path) -> None:
 	"""A valid xpub attaches; a broken one is rejected; the list reflects it."""
 
 	async def scenario() -> None:
-		client, csrf = await _signed_in_client(tmp_path)
+		client, csrf = await signed_in_client(tmp_path)
 		try:
 			empty = await client.get("/v1/user/wallets")
 			assert empty.json()["wallets"] == []
@@ -85,7 +65,7 @@ def test_generate_returns_valid_material_and_stores_nothing(tmp_path: Path) -> N
 	"""Generation yields a valid phrase and matching xpubs without touching the DB."""
 
 	async def scenario() -> None:
-		client, csrf = await _signed_in_client(tmp_path)
+		client, csrf = await signed_in_client(tmp_path)
 		try:
 			result = await client.post(
 				"/v1/user/wallets/generate",
@@ -132,7 +112,7 @@ def test_attach_rejects_private_key(tmp_path: Path) -> None:
 	"""An extended PRIVATE key is refused with a warning code, never stored."""
 
 	async def scenario() -> None:
-		client, csrf = await _signed_in_client(tmp_path)
+		client, csrf = await signed_in_client(tmp_path)
 		try:
 			from bip_utils import Bip39SeedGenerator, Bip44, Bip44Coins
 
@@ -159,7 +139,7 @@ def test_attach_rejects_duplicate_xpub_neutrally(tmp_path: Path) -> None:
 	"""A duplicate xpub — same or another user — gets the same neutral error."""
 
 	async def scenario() -> None:
-		client, csrf = await _signed_in_client(tmp_path)
+		client, csrf = await signed_in_client(tmp_path)
 		try:
 			xpub = account_xpub(TEST_MNEMONIC, Family.TRON)
 			first = await client.post(
@@ -207,7 +187,7 @@ def test_generated_phrase_never_persisted_or_logged(tmp_path: Path, caplog) -> N
 	import logging
 
 	async def scenario() -> str:
-		client, csrf = await _signed_in_client(tmp_path)
+		client, csrf = await signed_in_client(tmp_path)
 		try:
 			result = await client.post(
 				"/v1/user/wallets/generate",

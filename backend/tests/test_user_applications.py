@@ -3,13 +3,9 @@
 import asyncio
 from pathlib import Path
 
-import httpx
-
-from seedrays.api.app_api import create_app
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub
-from seeding import enable_dev_mail
-from seedrays.storage.migrations.runner import upgrade_registry
+from seeding import signed_in_client
 
 TEST_MNEMONIC = (
 	"abandon abandon abandon abandon abandon abandon "
@@ -17,26 +13,11 @@ TEST_MNEMONIC = (
 )
 
 
-async def _signed_in_client(data_dir: Path) -> tuple[httpx.AsyncClient, str]:
-	upgrade_registry(data_dir)
-	await enable_dev_mail(data_dir)
-	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=None))
-	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
-	await client.post(
-		"/v1/user/register",
-		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
-	)
-	login = await client.post(
-		"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
-	)
-	return client, login.json()["csrf"]
-
-
 def test_application_lifecycle_and_key_bridge(tmp_path: Path) -> None:
 	"""Create → map network → the key opens the Application API; revoke closes it."""
 
 	async def scenario() -> None:
-		client, csrf = await _signed_in_client(tmp_path)
+		client, csrf = await signed_in_client(tmp_path)
 		headers = {"X-CSRF-Token": csrf}
 		try:
 			created = await client.post(
@@ -116,7 +97,7 @@ def test_application_errors(tmp_path: Path) -> None:
 	"""Unknown ids, bad names and a missing wallet get machine codes."""
 
 	async def scenario() -> None:
-		client, csrf = await _signed_in_client(tmp_path)
+		client, csrf = await signed_in_client(tmp_path)
 		headers = {"X-CSRF-Token": csrf}
 		try:
 			assert (
@@ -136,7 +117,9 @@ def test_application_errors(tmp_path: Path) -> None:
 				json={"network": "tron", "wallet_id": 42},
 				headers=headers,
 			)
-			assert bad_wallet.json()["error"]["code"] == "wallet_missing"
+			# Ошибка ввода пользователя — клиентский статус, не 500.
+			assert bad_wallet.status_code == 400
+			assert bad_wallet.json()["error"]["code"] == "unknown_wallet"
 
 			# Изменяющие запросы без CSRF отбиваются.
 			refused = await client.post("/v1/user/applications", json={"name": "X"})

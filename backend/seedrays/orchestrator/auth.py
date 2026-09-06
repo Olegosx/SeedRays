@@ -13,7 +13,8 @@ import logging
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
@@ -22,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from seedrays.mail.base import MailError, MailSender
 from seedrays.orchestrator.operations import OperationError
 from seedrays.storage import registry as registry_ops
+from seedrays.storage.engine import now_utc
 
 logger = logging.getLogger(__name__)
 
@@ -36,11 +38,6 @@ _MIN_PASSWORD_LEN = 8
 SESSION_DAYS = 7
 SESSION_DAYS_REMEMBER = 30
 CONFIRM_TOKEN_HOURS = 24
-
-
-def _now() -> datetime:
-	"""Naive UTC, как во всём слое хранения."""
-	return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _sha256(value: str) -> str:
@@ -79,7 +76,7 @@ class CurrentUser:
 
 async def register(
 	registry: AsyncEngine,
-	data_dir,
+	data_dir: Path,
 	*,
 	username: str,
 	email: str,
@@ -121,59 +118,92 @@ async def register(
 	except ValueError as exc:
 		raise OperationError("username_taken", "this username is already taken") from exc
 
-	if mailer is None:
-		if not dev_autoconfirm:
-			raise OperationError(
-				"mail_not_configured",
-				"registration is unavailable until the operator configures "
-				"outgoing mail (or enables the development auto-confirm mode)",
-			)
-		# Явный режим разработки: почта авто-подтверждается с предупреждением.
-		logger.warning("development mail mode: email %s auto-confirmed", email)
-		await registry_ops.add_user_email(
-			registry,
-			user_id=user.id,
-			address=email,
-			is_primary=True,
-			confirm_token_hash=None,
-			confirm_expires_at=None,
-			confirmed_at=_now(),
-		)
-		return RegisteredUser(
-			user_id=user.id, username=user.login, email=email, confirmation_required=False
-		)
-
-	token = secrets.token_urlsafe(32)
-	await registry_ops.add_user_email(
+	required = await _attach_email(
 		registry,
 		user_id=user.id,
 		address=email,
 		is_primary=True,
+		mailer=mailer,
+		confirm_base_url=confirm_base_url,
+		dev_autoconfirm=dev_autoconfirm,
+		message_intro="Follow the link to confirm your email and finish the registration:",
+	)
+	return RegisteredUser(
+		user_id=user.id, username=user.login, email=email, confirmation_required=required
+	)
+
+
+async def _attach_email(
+	registry: AsyncEngine,
+	*,
+	user_id: int,
+	address: str,
+	is_primary: bool,
+	mailer: MailSender | None,
+	confirm_base_url: str,
+	dev_autoconfirm: bool,
+	message_intro: str,
+) -> bool:
+	"""Attach one address: the single confirmation scenario of both flows.
+
+	Без отправителя исход явный: режим разработки авто-подтверждает адрес
+	с предупреждением в журнале, иначе операция отклоняется. С отправителем
+	пишется отпечаток токена и уходит письмо со ссылкой подтверждения.
+
+	Returns:
+		True when confirmation by email is required.
+
+	Raises:
+		OperationError: mail_not_configured / mail_failed.
+	"""
+	if mailer is None:
+		if not dev_autoconfirm:
+			raise OperationError(
+				"mail_not_configured",
+				"outgoing mail is not configured; ask the operator to set it up "
+				"(or to enable the development auto-confirm mode)",
+			)
+		# Явный режим разработки: почта авто-подтверждается с предупреждением.
+		logger.warning("development mail mode: email %s auto-confirmed", address)
+		await registry_ops.add_user_email(
+			registry,
+			user_id=user_id,
+			address=address,
+			is_primary=is_primary,
+			confirm_token_hash=None,
+			confirm_expires_at=None,
+			confirmed_at=now_utc(),
+		)
+		return False
+
+	token = secrets.token_urlsafe(32)
+	await registry_ops.add_user_email(
+		registry,
+		user_id=user_id,
+		address=address,
+		is_primary=is_primary,
 		confirm_token_hash=_sha256(token),
-		confirm_expires_at=_now() + timedelta(hours=CONFIRM_TOKEN_HOURS),
+		confirm_expires_at=now_utc() + timedelta(hours=CONFIRM_TOKEN_HOURS),
 	)
 	link = f"{confirm_base_url.rstrip('/')}/v1/user/confirm-email?token={token}"
 	try:
 		await mailer.send(
-			email,
+			address,
 			"SeedRays: confirm your email",
-			"Follow the link to confirm your email and finish the registration:\n"
-			f"{link}\n\nThe link is valid for {CONFIRM_TOKEN_HOURS} hours.",
+			f"{message_intro}\n{link}\n\nThe link is valid for {CONFIRM_TOKEN_HOURS} hours.",
 		)
 	except MailError as exc:
-		logger.error("confirmation email to %s failed: %s", email, exc)
+		logger.error("confirmation email to %s failed: %s", address, exc)
 		raise OperationError(
 			"mail_failed", "could not send the confirmation email; try again later"
 		) from exc
-	return RegisteredUser(
-		user_id=user.id, username=user.login, email=email, confirmation_required=True
-	)
+	return True
 
 
 async def confirm_email(registry: AsyncEngine, token: str) -> bool:
 	"""Confirm an email by its token; False when the token is unknown/expired."""
 	record = await registry_ops.confirm_email_by_token_hash(
-		registry, _sha256(token), now=_now()
+		registry, _sha256(token), now=now_utc()
 	)
 	return record is not None
 
@@ -186,7 +216,7 @@ async def sign_in(
 	Raises:
 		OperationError: invalid_credentials / email_not_confirmed.
 	"""
-	await registry_ops.delete_expired_sessions(registry, now=_now())
+	await registry_ops.delete_expired_sessions(registry, now=now_utc())
 
 	identifier = identifier.strip()
 	user = await registry_ops.get_user_by_login(registry, identifier)
@@ -214,7 +244,7 @@ async def sign_in(
 	token = secrets.token_urlsafe(32)
 	csrf = secrets.token_urlsafe(32)
 	days = SESSION_DAYS_REMEMBER if remember else SESSION_DAYS
-	expires = _now() + timedelta(days=days)
+	expires = now_utc() + timedelta(days=days)
 	await registry_ops.create_session(
 		registry,
 		user_id=user.id,
@@ -234,7 +264,7 @@ async def sign_in(
 async def resolve_session(registry: AsyncEngine, session_token: str) -> CurrentUser | None:
 	"""The session's user, or None when the token is unknown or expired."""
 	session = await registry_ops.get_session_by_token_hash(
-		registry, _sha256(session_token), now=_now()
+		registry, _sha256(session_token), now=now_utc()
 	)
 	if session is None:
 		return None
@@ -274,48 +304,16 @@ async def add_email(
 	if await registry_ops.get_email_by_address(registry, address) is not None:
 		raise OperationError("email_taken", "this email is already attached to an account")
 
-	if mailer is None:
-		if not dev_autoconfirm:
-			raise OperationError(
-				"mail_not_configured",
-				"adding an email is unavailable until the operator configures "
-				"outgoing mail (or enables the development auto-confirm mode)",
-			)
-		logger.warning("development mail mode: email %s auto-confirmed", address)
-		await registry_ops.add_user_email(
-			registry,
-			user_id=user_id,
-			address=address,
-			is_primary=False,
-			confirm_token_hash=None,
-			confirm_expires_at=None,
-			confirmed_at=_now(),
-		)
-		return False
-
-	token = secrets.token_urlsafe(32)
-	await registry_ops.add_user_email(
+	return await _attach_email(
 		registry,
 		user_id=user_id,
 		address=address,
 		is_primary=False,
-		confirm_token_hash=_sha256(token),
-		confirm_expires_at=_now() + timedelta(hours=CONFIRM_TOKEN_HOURS),
+		mailer=mailer,
+		confirm_base_url=confirm_base_url,
+		dev_autoconfirm=dev_autoconfirm,
+		message_intro="Follow the link to confirm this email address:",
 	)
-	link = f"{confirm_base_url.rstrip('/')}/v1/user/confirm-email?token={token}"
-	try:
-		await mailer.send(
-			address,
-			"SeedRays: confirm your email",
-			"Follow the link to confirm this email address:\n"
-			f"{link}\n\nThe link is valid for {CONFIRM_TOKEN_HOURS} hours.",
-		)
-	except MailError as exc:
-		logger.error("confirmation email to %s failed: %s", address, exc)
-		raise OperationError(
-			"mail_failed", "could not send the confirmation email; try again later"
-		) from exc
-	return True
 
 
 async def remove_email(registry: AsyncEngine, *, user_id: int, email_id: int) -> None:

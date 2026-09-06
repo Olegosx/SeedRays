@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from seedrays.orchestrator.operations import OperationError
+
+logger = logging.getLogger(__name__)
 
 
 class ApiError(Exception):
@@ -23,6 +27,7 @@ class ApiError(Exception):
 _OPERATION_STATUS = {
 	"unknown_app_user": 404,
 	"network_not_configured": 400,
+	"unknown_wallet": 400,
 	"wallet_missing": 500,
 	"invalid_status": 400,
 	"invalid_limit": 400,
@@ -59,8 +64,22 @@ def register_error_handlers(app: FastAPI) -> None:
 		return JSONResponse(status_code=exc.status, content=_body(exc.code, exc.message))
 
 	@app.exception_handler(OperationError)
-	async def _operation_error(_request: Request, exc: OperationError) -> JSONResponse:
-		status = _OPERATION_STATUS.get(exc.code, 400)
+	async def _operation_error(request: Request, exc: OperationError) -> JSONResponse:
+		status = _OPERATION_STATUS.get(exc.code)
+		if status is None:
+			# Код не внесён в таблицу — расхождение слоёв, о нём надо знать.
+			logger.warning("operation error code %r has no HTTP status mapping", exc.code)
+			status = 400
+		if status >= 500:
+			# Серверная ошибка обязана оставить след на стороне шлюза,
+			# а не только уйти клиенту.
+			logger.error(
+				"operation failed with %s on %s %s: %s",
+				exc.code,
+				request.method,
+				request.url.path,
+				exc.message,
+			)
 		return JSONResponse(status_code=status, content=_body(exc.code, exc.message))
 
 	@app.exception_handler(RequestValidationError)

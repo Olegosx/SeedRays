@@ -78,6 +78,9 @@ user_emails = Table(
 	Column("id", Integer, primary_key=True),
 	Column("user_id", Integer, ForeignKey("users.id"), nullable=False),
 	Column("address", String(255), nullable=False, unique=True),
+	# Integer вместо Boolean сознательно: без генерируемых CHECK-ограничений
+	# схема одинаково переносится между SQLite/PostgreSQL/MySQL (ADR-0013);
+	# преобразование в bool делает слой операций.
 	Column("is_primary", Integer, nullable=False, server_default="0"),
 	Column("confirmed_at", DateTime),
 	Column("confirm_token_hash", String(128)),
