@@ -37,6 +37,7 @@ export const en = {
 	"errors.unknown_wallet": "No such wallet — refresh the wallet list.",
 	"errors.wallet_missing": "No such wallet.",
 	"errors.unknown_email": "No such email on this account.",
+	"errors.invalid_token": "The link is invalid or expired — request a new reset.",
 	"errors.cannot_remove_primary": "The primary email cannot be removed.",
 
 	"register.pageTitle": "Sign up — SeedRays",
@@ -62,7 +63,6 @@ export const en = {
 	"reset.email": "Email",
 	"reset.emailPlaceholder": "you@example.com",
 	"reset.submit": "Send the link",
-	"reset.inDevelopment": "Password reset is under development — it will work once reset emails are wired up.",
 	"reset.back": "Back to sign-in",
 	"reset.sentTitle": "Email sent",
 	"reset.sentText": "If this email is registered, a password reset link is on its way.",

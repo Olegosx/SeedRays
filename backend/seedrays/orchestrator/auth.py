@@ -38,6 +38,7 @@ _MIN_PASSWORD_LEN = 8
 SESSION_DAYS = 7
 SESSION_DAYS_REMEMBER = 30
 CONFIRM_TOKEN_HOURS = 24
+RESET_TOKEN_HOURS = 1
 
 
 def _sha256(value: str) -> str:
@@ -328,6 +329,85 @@ async def remove_email(registry: AsyncEngine, *, user_id: int, email_id: int) ->
 	if record.is_primary:
 		raise OperationError("cannot_remove_primary", "the primary email cannot be removed")
 	await registry_ops.delete_user_email(registry, email_id)
+
+
+async def request_password_reset(
+	registry: AsyncEngine,
+	*,
+	email: str,
+	mailer: MailSender | None,
+	reset_base_url: str,
+) -> None:
+	"""Send a password-reset link to a registered, confirmed email.
+
+	Ответ наружу всегда одинаковый (маршрут не раскрывает, существует ли
+	адрес), поэтому «адрес неизвестен» и «адрес не подтверждён» завершаются
+	молча — с отметкой в журнале. Токен одноразовый, живёт
+	:data:`RESET_TOKEN_HOURS` часов; новый запрос вытесняет прежний токен.
+
+	Raises:
+		OperationError: mail_not_configured / mail_failed — сбои шлюза,
+			не раскрывающие ничего об адресе.
+	"""
+	if mailer is None:
+		# Сброс без письма невозможен по сути: подтверждать личность нечем.
+		# Явный отказ и в режиме разработки — «сбросить кому угодно» дырой
+		# быть не должно.
+		raise OperationError(
+			"mail_not_configured",
+			"outgoing mail is not configured; ask the operator to set it up",
+		)
+	address = email.strip().lower()
+	record = await registry_ops.get_email_by_address(registry, address)
+	if record is None:
+		logger.info("password reset requested for an unknown email")
+		return
+	if record.confirmed_at is None:
+		# Неподтверждённый адрес мог вписать кто угодно — писать на него нельзя.
+		logger.info("password reset requested for an unconfirmed email, ignored")
+		return
+
+	token = secrets.token_urlsafe(32)
+	await registry_ops.set_password_reset(
+		registry,
+		user_id=record.user_id,
+		token_hash=_sha256(token),
+		expires_at=now_utc() + timedelta(hours=RESET_TOKEN_HOURS),
+	)
+	link = f"{reset_base_url.rstrip('/')}/password-new.html?token={token}"
+	try:
+		await mailer.send(
+			address,
+			"SeedRays: password reset",
+			"Follow the link to set a new password:\n"
+			f"{link}\n\nThe link is valid for {RESET_TOKEN_HOURS} hour(s). "
+			"If you did not request a reset, ignore this message.",
+		)
+	except MailError as exc:
+		logger.error("password reset email to %s failed: %s", address, exc)
+		raise OperationError(
+			"mail_failed", "could not send the reset email; try again later"
+		) from exc
+
+
+async def reset_password(registry: AsyncEngine, *, token: str, new_password: str) -> None:
+	"""Set a new password by a one-time reset token; drops every session.
+
+	Raises:
+		OperationError: weak_password / invalid_token.
+	"""
+	if len(new_password) < _MIN_PASSWORD_LEN:
+		raise OperationError(
+			"weak_password", f"password must be at least {_MIN_PASSWORD_LEN} characters"
+		)
+	user_id = await registry_ops.consume_password_reset(
+		registry, _sha256(token), now=now_utc()
+	)
+	if user_id is None:
+		raise OperationError("invalid_token", "the reset link is invalid or expired")
+	await registry_ops.set_user_password(registry, user_id, _hasher.hash(new_password))
+	# Пароль сброшен из-за потери доступа — все прежние сессии гасятся.
+	await registry_ops.delete_user_sessions(registry, user_id)
 
 
 async def change_password(

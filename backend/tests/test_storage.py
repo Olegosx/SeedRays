@@ -24,6 +24,7 @@ REGISTRY_TABLES = {
 	"watcher_state",
 	"user_emails",
 	"sessions",
+	"password_resets",
 }
 USER_TABLES = {
 	"wallets",

@@ -49,6 +49,7 @@ _OPERATION_STATUS = {
 	"unknown_application": 404,
 	"unknown_email": 404,
 	"cannot_remove_primary": 400,
+	"invalid_token": 400,
 }
 
 

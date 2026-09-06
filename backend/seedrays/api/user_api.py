@@ -48,6 +48,8 @@ LOGIN_LIMIT = 10
 LOGIN_WINDOW_SECONDS = 15 * 60
 REGISTER_LIMIT = 10
 REGISTER_WINDOW_SECONDS = 60 * 60
+RESET_LIMIT = 5
+RESET_WINDOW_SECONDS = 60 * 60
 
 
 class RegisterRequest(BaseModel):
@@ -80,6 +82,19 @@ class GenerateWalletRequest(BaseModel):
 	words: int
 	families: list[str] = Field(min_length=1, max_length=8)
 	passphrase: str = Field(default="", max_length=256)
+
+
+class ResetRequest(BaseModel):
+	"""Body of the password-reset request."""
+
+	email: str = Field(min_length=3, max_length=255)
+
+
+class ResetConfirmRequest(BaseModel):
+	"""Body of the password-reset confirmation."""
+
+	token: str = Field(min_length=1, max_length=128)
+	new_password: str = Field(min_length=1, max_length=1024)
 
 
 class AddEmailRequest(BaseModel):
@@ -140,6 +155,7 @@ def register_user_routes(
 	"""
 	login_limiter = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS)
 	register_limiter = RateLimiter(REGISTER_LIMIT, REGISTER_WINDOW_SECONDS)
+	reset_limiter = RateLimiter(RESET_LIMIT, RESET_WINDOW_SECONDS)
 
 	def _client_host(request: Request) -> str:
 		"""The caller's address for rate-limit keys."""
@@ -275,6 +291,31 @@ def register_user_routes(
 		)
 		_set_session_cookie(response, signed)
 		return {"user": {"username": signed.username}, "csrf": signed.csrf_token}
+
+	@app.post("/v1/user/password-reset")
+	async def request_password_reset(
+		body: ResetRequest, request: Request, registry: AsyncEngine = RegistryDep
+	) -> dict:
+		"""Send the reset link; the answer never reveals whether the email exists."""
+		if not reset_limiter.allow(_client_host(request)):
+			raise ApiError(429, "rate_limited", "too many reset requests; try again later")
+		active_mailer, base_url, _dev = await _mail_context(registry)
+		await auth.request_password_reset(
+			registry, email=body.email, mailer=active_mailer, reset_base_url=base_url
+		)
+		return {"ok": True}
+
+	@app.post("/v1/user/password-reset/confirm")
+	async def confirm_password_reset(
+		body: ResetConfirmRequest, request: Request, registry: AsyncEngine = RegistryDep
+	) -> dict:
+		"""Set a new password by the one-time token from the reset email."""
+		if not reset_limiter.allow(_client_host(request)):
+			raise ApiError(429, "rate_limited", "too many reset requests; try again later")
+		await auth.reset_password(
+			registry, token=body.token, new_password=body.new_password
+		)
+		return {"ok": True}
 
 	@app.post("/v1/user/logout")
 	async def logout(

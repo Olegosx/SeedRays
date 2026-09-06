@@ -37,6 +37,7 @@ export const ru = {
 	"errors.unknown_wallet": "Такого кошелька нет — обновите список кошельков.",
 	"errors.wallet_missing": "Такого кошелька нет.",
 	"errors.unknown_email": "Такой почты на учётной записи нет.",
+	"errors.invalid_token": "Ссылка недействительна или устарела — запросите сброс заново.",
 	"errors.cannot_remove_primary": "Основную почту удалить нельзя.",
 
 	"register.pageTitle": "Регистрация — SeedRays",
@@ -62,7 +63,6 @@ export const ru = {
 	"reset.email": "Почта",
 	"reset.emailPlaceholder": "you@example.com",
 	"reset.submit": "Отправить ссылку",
-	"reset.inDevelopment": "Сброс пароля в разработке — заработает, когда будут подключены письма сброса.",
 	"reset.back": "Вернуться ко входу",
 	"reset.sentTitle": "Письмо отправлено",
 	"reset.sentText":

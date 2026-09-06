@@ -22,6 +22,7 @@ from seedrays.storage.migrations.runner import upgrade_user_db
 from seedrays.storage.schema_registry import (
 	api_keys,
 	assets,
+	password_resets,
 	sessions,
 	settings,
 	user_emails,
@@ -327,6 +328,44 @@ async def delete_expired_sessions(registry: AsyncEngine, *, now: datetime) -> No
 	"""Hygiene: drop every expired session."""
 	async with registry.begin() as conn:
 		await conn.execute(delete(sessions).where(sessions.c.expires_at < now))
+
+
+async def set_password_reset(
+	registry: AsyncEngine, *, user_id: int, token_hash: str, expires_at: datetime
+) -> None:
+	"""Store the user's password-reset token; a new request replaces the old one."""
+	async with registry.begin() as conn:
+		await upsert(
+			conn,
+			password_resets,
+			{"user_id": user_id},
+			{"token_hash": token_hash, "expires_at": expires_at},
+		)
+
+
+async def consume_password_reset(
+	registry: AsyncEngine, token_hash: str, *, now: datetime
+) -> int | None:
+	"""Use up an unexpired reset token: returns its user id and drops the row.
+
+	Токен одноразовый: чтение и удаление — в одной транзакции, повторное
+	предъявление того же токена ничего не находит.
+	"""
+	async with registry.begin() as conn:
+		row = (
+			await conn.execute(
+				select(password_resets).where(
+					password_resets.c.token_hash == token_hash,
+					password_resets.c.expires_at >= now,
+				)
+			)
+		).first()
+		if row is None:
+			return None
+		await conn.execute(
+			delete(password_resets).where(password_resets.c.id == row.id)
+		)
+	return row.user_id
 
 
 # Виды активов каталога (ADR-0010) — единственная точка правды для сравнений.

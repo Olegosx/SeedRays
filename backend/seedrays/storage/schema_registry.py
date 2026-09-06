@@ -88,6 +88,19 @@ user_emails = Table(
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
 )
 
+# Токены сброса пароля: в письме — одноразовый токен, в базе — его отпечаток
+# SHA-256 со сроком действия. У пользователя живёт не больше одного действующего
+# токена: новый запрос вытесняет прежний.
+password_resets = Table(
+	"password_resets",
+	metadata,
+	Column("id", Integer, primary_key=True),
+	Column("user_id", Integer, ForeignKey("users.id"), nullable=False, unique=True),
+	Column("token_hash", String(128), nullable=False, unique=True),
+	Column("expires_at", DateTime, nullable=False),
+	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+)
+
 # Сессии кабинета: кука несёт случайный токен, в базе — его отпечаток.
 # csrf_token сверяется с заголовком X-CSRF-Token на изменяющих запросах.
 sessions = Table(
