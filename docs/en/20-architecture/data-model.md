@@ -25,7 +25,9 @@ memo, application, application user.
   level.
 - The derivation index is reused across networks for the same "wallet + application user"
   pair — an EVM-family wallet then gives the payer the same address in every network of
-  the family; otherwise the wallet's next free index is allocated.
+  the family; otherwise the wallet's next free index is allocated. Within one network an
+  index is unique per wallet (schema level), and allocation is serialized per user — two
+  payers can never receive one address.
 - No financial data.
 
 ### Applications
@@ -56,21 +58,23 @@ deposit.
 ### Transactions (on-chain)
 
 One table for transactions that made it into the chain
-(see [ADR-0017](decisions/0017-universal-tx-model.md)): address, transaction id, asset,
-direction, amount, **block number (required — on-chain means in a block)**, time,
-**execution status (success / failed)**, first-seen time, and a service marker
-**"applied to balance"** — set exactly once, in the same database transaction as the
-balance update. Rows are otherwise append-only.
+(see [ADR-0017](decisions/0017-universal-tx-model.md),
+[ADR-0021](decisions/0021-two-phase-scanning.md)): address, transaction id, asset,
+direction, event index, amount, **block number (required — on-chain means in a block)**,
+time, **execution status (success / failed)**, first-seen time, the **finalization
+marker** (set when the authoritative scan of the finalized zone confirms the row) and a
+service marker **"applied to balance"** — set exactly once, in the same database
+transaction as the balance update.
 
-- Confirmed / awaiting finality is **computed** against the network's finality boundary
-  (TRON: solidification) — never stored.
+- A row without the finalization marker is **provisional** — observed above the finality
+  boundary; it shows as pending, never touches balances, and is deleted if the finalized
+  chain does not confirm it (reorganization). Finalized rows are append-only.
 - Failed rows (in a block, execution failed — e.g. REVERT / out of energy) never affect
   balances; kept for dispute diagnostics.
 - Idempotency: re-scanning the same ranges must not duplicate rows — unique key
-  "transaction id + address + asset" (to be refined at implementation if one transaction
-  can carry several transfers of the same asset to the same address).
-- Provisional rows that never reach finality (chain reorganizations) are cleaned by a
-  policy defined at watcher implementation.
+  "transaction id + address + asset + direction + event index" (the direction covers a
+  transfer to self; the event index covers several transfers of one asset inside one
+  transaction, e.g. batch payouts).
 
 ### Mempool Queue
 
@@ -107,12 +111,21 @@ appears here — only concrete networks do. The catalog is filled automatically 
 watcher first observes a new asset: the gateway does not restrict the set of accepted
 assets — it honestly records everything that arrives, filtering is the consumer's business.
 
+### Wallet Xpub Index
+
+Gateway-wide uniqueness of attached xpubs (one xpub — one wallet), by analogy with the
+API-key index: the SHA-256 fingerprint of the xpub and the owning user. The xpub itself
+lives only in the owner's database; a duplicate attachment is rejected with the same
+neutral error as a broken key, so the response does not reveal that the xpub is already
+attached elsewhere.
+
 ### Watcher Service State
 
-Per network: the height of the last processed block and the time of the last scan — the
-range cursor of [ADR-0018](decisions/0018-range-scanning.md); scanning resumes from it
-with an overlap, and duplicates are extinguished by the transactions unique key. Not
-financial data.
+Per network: the cursors of the authoritative finalized scan
+(see [ADR-0018](decisions/0018-range-scanning.md),
+[ADR-0021](decisions/0021-two-phase-scanning.md)) — the last finalized block processed
+and the time cursor of the token scan; scanning resumes from them with an overlap, and
+duplicates are extinguished by the transactions unique key. Not financial data.
 
 ## Related
 

@@ -24,12 +24,18 @@ ranges, not by addresses (see [ADR-0018](../decisions/0018-range-scanning.md)):
 
 - Before a pass it collects the binding set of all users, each entry tagged with its owner
   (user, wallet) and network. This set is the **local match filter**.
-- Per network the pass fetches the head and the finality boundary once, then all token
-  Transfer events of the active contracts and the native-transfer block range since the
-  cursor — a cost independent of the number of addresses — and matches transfers against
-  the binding set locally. The provider never learns the gateway's address set.
-- Matched rows land in the transactions table; a success row crossing the finality
-  boundary is applied to the balance in one database transaction with its marker.
+- Per network the pass fetches the head and the finality boundary once, then scans in
+  two phases (see [ADR-0021](../decisions/0021-two-phase-scanning.md)) — a cost
+  independent of the number of addresses; transfers are matched against the binding set
+  locally, and the provider never learns the gateway's address set:
+  - the **authoritative scan** reads only the finalized zone (native blocks up to the
+    boundary, confirmed-only token events) from its cursors; its rows carry the
+    finalization marker and are the only source of balance changes — a finalized success
+    row is applied to the balance in one database transaction with its marker;
+  - the **provisional preview** reads the zone above the boundary so a payment shows up
+    as pending immediately; its rows are provisional, and when the finalized zone later
+    covers their blocks they are either promoted or — if the reorganized chain never
+    confirmed them — deleted with a warning in the log.
 - Per-address indexed queries remain for targeted tasks: the initial history of a new
   binding, spot reconciliation.
 - Failures are isolated within the pass and logged; a provider "slow down" answer pauses
@@ -41,10 +47,12 @@ ranges, not by addresses (see [ADR-0018](../decisions/0018-range-scanning.md)):
 All blockchain access goes through the [Chain Abstraction](chain-abstraction.md): public
 provider APIs first, a self-hosted node (RPC) later — without changes to watcher logic.
 
-The watcher keeps its service state — the height of the last processed block per network —
-in the shared registry database: it is both the scan resume point after a stop and the
-height from which confirmation counts are computed
-(see [ADR-0010](../decisions/0010-networks-assets-financial-data.md)).
+The watcher keeps its service state — the cursors of the authoritative scan per network
+(the last finalized block processed and the time cursor of the token scan) — in the
+shared registry database: it is the scan resume point after a stop
+(see [ADR-0010](../decisions/0010-networks-assets-financial-data.md),
+[ADR-0021](../decisions/0021-two-phase-scanning.md)). The preview zone has no cursor —
+it is rescanned in full every pass.
 
 ## Interfaces
 
@@ -66,4 +74,5 @@ height from which confirmation counts are computed
 - [Chain Abstraction](chain-abstraction.md)
 - [Storage Layer](storage.md)
 - [Orchestrator](orchestrator.md)
+- [ADR-0021: Two-Phase Scanning](../decisions/0021-two-phase-scanning.md)
 - [Monitoring](../../40-operations/monitoring.md)

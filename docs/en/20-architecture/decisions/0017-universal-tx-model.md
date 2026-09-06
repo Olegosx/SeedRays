@@ -2,7 +2,7 @@
 
 # ADR-0017: Universal Transaction Model — Two Tables by Physical Location
 
-**Status:** accepted
+**Status:** accepted, refined by [ADR-0021](0021-two-phase-scanning.md)
 
 ## Context
 
@@ -28,7 +28,8 @@ must be universal across all chains.
     never stored.
   - Failed rows never affect balances; they are kept for dispute diagnostics
     ("I paid, here is the hash" — the hash shows a failed execution).
-  - Idempotency: unique key "transaction id + address + asset".
+  - Idempotency: unique key "transaction id + address + asset"; refined by
+    [ADR-0021](0021-two-phase-scanning.md) to include the direction and the event index.
 - **`mempool_queue`** — observations of queued transactions: no block number; rows may
   linger or vanish. A universal entity of the model: it is populated only when the
   network's data source can see the queue (TRON's indexed providers cannot; EVM sources
@@ -52,7 +53,8 @@ must be universal across all chains.
   rewritten — no deployment exists anywhere).
 - The watcher classifies rows against the boundary instead of moving them between tables.
 - Provisional rows that never reach finality (chain reorganizations) need a cleanup
-  policy — defined at watcher implementation.
+  policy — defined in [ADR-0021](0021-two-phase-scanning.md): the authoritative scan of
+  the finalized zone promotes confirmed rows and deletes the unconfirmed ones.
 
 ## Related
 

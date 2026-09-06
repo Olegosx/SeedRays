@@ -25,10 +25,11 @@ considered, the choice made and its consequences.
 | [ADR-0014](0014-key-standards.md) | Key Generation and Derivation Standards | accepted |
 | [ADR-0015](0015-tron-provider.md) | TRON Data Provider — TronGrid; Chain Source Interface | accepted, extended by ADR-0018 |
 | [ADR-0016](0016-config-layers.md) | Configuration Layers | accepted |
-| [ADR-0017](0017-universal-tx-model.md) | Universal Transaction Model — Two Tables by Physical Location | accepted |
-| [ADR-0018](0018-range-scanning.md) | Range Scanning as the Watcher's Primary Acquisition | accepted |
+| [ADR-0017](0017-universal-tx-model.md) | Universal Transaction Model — Two Tables by Physical Location | accepted, refined by ADR-0021 |
+| [ADR-0018](0018-range-scanning.md) | Range Scanning as the Watcher's Primary Acquisition | accepted, refined by ADR-0021 |
 | [ADR-0019](0019-frontend-localization.md) | Frontend Localization — Client-Side Dictionaries | accepted |
 | [ADR-0020](0020-mail-provider.md) | Outgoing Mail — a Third-Party Service Behind an Abstraction | accepted |
+| [ADR-0021](0021-two-phase-scanning.md) | Two-Phase Scanning — Finalized Authority with a Provisional Preview | accepted |
 
 ## Related
 

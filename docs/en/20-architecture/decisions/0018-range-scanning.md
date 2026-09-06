@@ -2,7 +2,7 @@
 
 # ADR-0018: Range Scanning as the Watcher's Primary Acquisition
 
-**Status:** accepted
+**Status:** accepted, refined by [ADR-0021](0021-two-phase-scanning.md)
 
 ## Context
 

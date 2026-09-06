@@ -123,11 +123,15 @@ A password change drops every other session of the user (the current one stays).
   owner" index; the raw key is returned exactly once at creation and reissue; revocation
   clears the fingerprint and drops the index row — the application's access closes
   immediately.
-- Wallets: attaching validates the xpub by deriving address zero; in-gateway generation
-  (ADR-0002) is **stateless** — the phrase is created in the request's memory and
-  returned exactly once together with each family's xpub, nothing is written; after the
-  write-down check the browser attaches the wallets through the regular "family + xpub"
-  path, so the seed never travels over the network again.
+- Wallets: attaching validates the xpub by deriving address zero. An extended PRIVATE
+  key is refused with the dedicated `private_key_rejected` code — the user is warned to
+  treat it as compromised. An xpub already attached anywhere on the gateway is refused
+  with the same neutral `invalid_xpub` answer as a broken key (the response must not
+  reveal that the key is in use). In-gateway generation (ADR-0002) is **stateless** —
+  the phrase is created in the request's memory and returned exactly once together with
+  each family's xpub, nothing is written; after the write-down check the browser attaches
+  the wallets through the regular "family + xpub" path, so the seed never travels over
+  the network again.
 - The static frontend may be served by the gateway process itself (ADR-0012): `/`
   redirects to the sign-in page, the files come from the `frontend/` directory
   (overridable with `SEEDRAYS_FRONTEND_DIR`, the bootstrap layer of ADR-0016).

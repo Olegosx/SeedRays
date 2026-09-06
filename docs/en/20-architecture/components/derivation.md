@@ -17,7 +17,10 @@ Derives payment addresses from the extended public key (xpub) per the HD wallet 
 ## Interfaces
 
 - Module: payment address by (family, account-level xpub, index) — soft derivation steps
-  only, no secrets required or obtainable.
+  only, no secrets required or obtainable. Library errors never leak: a malformed key
+  raises the module's own error, and a key carrying private material raises a dedicated
+  one — the caller warns the user that such a key must be treated as compromised
+  (the watch-only guarantee of [ADR-0002](../decisions/0002-watch-only-online-part.md)).
 - Console command `seedrays derive --family … --xpub … [--index N] [--count K]`.
 - Paths follow BIP44 with SLIP-0044 coin codes (TRON 195, EVM 60), account 0 — fixed in
   [ADR-0014](../decisions/0014-key-standards.md).
