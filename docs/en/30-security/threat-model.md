@@ -17,9 +17,13 @@ risks exist and are accepted by the user explicitly:
 - At the moment of generation the secret (seed phrase, private key) exists in backend memory.
 - The secret travels over the network to the user's browser for the one-time display.
 
-Mitigations required from the implementation: HTTPS only; the secret is never written to logs,
-the database or stored responses; memory is cleared right after the display; the guarantees
-are covered by tests (see [Key Generator](../20-architecture/components/key-generator.md)).
+Mitigations required from the implementation: HTTPS only (the session cookie is marked
+Secure); the secret is never written to logs, the database or stored responses, and no
+reference to it is kept beyond the one generating request. A reliable memory wipe is
+technically unattainable for Python strings — the residual window until garbage
+collection is part of the accepted risk above. The no-persistence guarantee is covered
+by a test: the generated phrase appears in the one-time response only, never in the
+databases or the log (see [Key Generator](../20-architecture/components/key-generator.md)).
 
 ## Related
 

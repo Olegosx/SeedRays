@@ -22,7 +22,9 @@ See [ADR-0002](../decisions/0002-watch-only-online-part.md).
 
 - HTTPS only; the secret must never be written to logs, the database or any stored API
   responses.
-- Memory holding the secret is cleared right after the one-time display.
+- No reference to the secret outlives the one generating request (a reliable memory wipe
+  is unattainable for Python strings; the residual window until garbage collection is an
+  accepted risk of the [Threat Model](../../30-security/threat-model.md)).
 - The "shown once, never stored" promise must be verifiable in code and covered by tests.
 - The residual risks are recorded in the [Threat Model](../../30-security/threat-model.md).
 

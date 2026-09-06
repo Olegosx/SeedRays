@@ -108,13 +108,20 @@ POST   /v1/user/password     body: {"current_password", "new_password"}
 
 A password change drops every other session of the user (the current one stays).
 
-- **The session** is an HttpOnly cookie (SameSite=Lax); the database stores the token's
-  fingerprint. Mutating requests must carry the `X-CSRF-Token` header issued at sign-in
-  and by `/me`.
+- **The session** is an HttpOnly, Secure cookie (SameSite=Lax); the database stores the
+  token's fingerprint. Mutating requests must carry the `X-CSRF-Token` header issued at
+  sign-in and by `/me`; the check is a single structural dependency of every mutating
+  route (constant-time comparison), so a new route cannot forget it.
 - Registration: the username is 3–64 characters without spaces or `@`; the password is
   8+ characters; the email is lowercased. The confirmation email goes through the mail
-  sender ([ADR-0020](../decisions/0020-mail-provider.md)); with no mail configured —
-  development mode with auto-confirmation.
+  sender ([ADR-0020](../decisions/0020-mail-provider.md)); the confirmation link is built
+  from the `gateway.base_url` setting only (the Host header is never trusted), and a
+  configured sender without that setting stays disabled. With no mail configured the
+  outcome is explicit: registration answers `mail_not_configured` unless the operator
+  turned on the development auto-confirm mode (`mail.dev_autoconfirm`).
+- Brute-force brake: sign-in and registration are rate-limited by in-process sliding
+  windows (per client + identifier for sign-in, per client for registration); over the
+  limit the answer is 429 `rate_limited`.
 - Sign-in: one identifier field (username or email); until the primary email is
   confirmed, sign-in is closed (`email_not_confirmed`); "no such user" and "wrong
   password" produce the same `invalid_credentials` answer.
