@@ -22,7 +22,10 @@ Service layer of the backend: owns the business logic and coordinates the functi
   networks of one wallet), addresses, balances (received + pending), incoming history,
   application users.
 - Supervisor — one process (ADR-0003): the API server and the watcher loop run as parallel
-  tasks; a crash of either is logged and restarted without taking down the other.
+  tasks; a crash of either is logged and the component restarts (a fresh server instance
+  each time) without taking down the other. The supervisor owns the process lifecycle: a
+  stop signal (SIGTERM / SIGINT) is distinct from a crash — the API server finishes its
+  open connections, the watcher is cancelled between passes, the gateway exits cleanly.
 - Console command `seedrays serve` — migrates the databases and runs the gateway; the data
   directory and the bind address come from `SEEDRAYS_DATA_DIR` and `SEEDRAYS_BIND`
   (the bootstrap layer of [ADR-0016](../decisions/0016-config-layers.md)).

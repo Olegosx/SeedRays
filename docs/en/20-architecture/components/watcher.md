@@ -38,8 +38,15 @@ ranges, not by addresses (see [ADR-0018](../decisions/0018-range-scanning.md)):
     confirmed them — deleted with a warning in the log.
 - Per-address indexed queries remain for targeted tasks: the initial history of a new
   binding, spot reconciliation.
-- Failures are isolated within the pass and logged; a provider "slow down" answer pauses
-  that network's scan until the next pass.
+- Catch-up after downtime is bounded per pass: the native scan by a block cap, the token
+  scan by a time window — the cursors advance in bounded steps, so one pass's provider
+  traffic and memory stay predictable and progress is committed every pass (while the
+  token scan is catching up, the reorg cleanup of token rows is deferred — their
+  confirmation is still ahead).
+- Failures are isolated within the pass and logged: a provider "slow down" answer pauses
+  that network's scan until the next pass; a failing user database excludes that owner
+  for the rest of the pass without stopping the others; a broken numeric/date setting
+  degrades to its default with an error log.
 - Results are written to each owner's database via the [Storage Layer](storage.md).
 
 ## Data Access
