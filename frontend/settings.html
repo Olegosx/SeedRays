@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-title-key="settings.pageTitle">
+<html lang="en" data-title-key="settings.pageTitle">
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,6 +9,7 @@
 	<link rel="stylesheet" href="css/app.css">
 	<script type="module" src="js/i18n.js"></script>
 	<script type="module" src="js/auth-guard.js"></script>
+	<script type="module" src="js/layout.js"></script>
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body>
@@ -65,91 +66,21 @@
 			} catch (e) { this.passError = this._message(e); }
 		},
 		_message(e) {
-			const known = this.$store.i18n.t('errors.' + e.code);
-			return known !== 'errors.' + e.code ? known : e.message;
+			return this.$store.i18n.errorText(e);
 		},
-		init() { this.loadEmails(); },
+		loadError: '',
+		async init() {
+			try {
+				await this.loadEmails();
+			} catch (e) {
+				this.loadError = this._message(e);
+			}
+		},
 	}">
-		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
-		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
-			<div class="container-fluid">
-				<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
-					data-bs-target="#sidebar-menu" aria-expanded="false">
-					<span class="navbar-toggler-icon"></span>
-				</button>
-				<div class="navbar-brand navbar-brand-autodark">
-					<a href="dashboard.html" class="text-decoration-none fs-2 fw-bold">SeedRays</a>
-				</div>
-				<div class="collapse navbar-collapse" id="sidebar-menu">
-					<ul class="navbar-nav pt-lg-3">
-						<li class="nav-item">
-							<a class="nav-link" href="dashboard.html">
-								<span class="nav-link-icon"><i class="ti ti-home"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.dashboard')"></span>
-							</a>
-						</li>
-						<li class="nav-item">
-							<a class="nav-link" href="wallets.html">
-								<span class="nav-link-icon"><i class="ti ti-wallet"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.wallets')"></span>
-							</a>
-						</li>
-						<li class="nav-item">
-							<a class="nav-link" href="applications.html">
-								<span class="nav-link-icon"><i class="ti ti-plug-connected"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.apps')"></span>
-							</a>
-						</li>
-						<li class="nav-item">
-							<a class="nav-link" href="history.html">
-								<span class="nav-link-icon"><i class="ti ti-history"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.history')"></span>
-							</a>
-						</li>
-						<li class="nav-item active">
-							<a class="nav-link" href="settings.html">
-								<span class="nav-link-icon"><i class="ti ti-settings"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.settings')"></span>
-							</a>
-						</li>
-					</ul>
-				</div>
-			</div>
-		</aside>
+		<div data-layout="sidebar" data-active="settings"></div>
 
 		<div class="page-wrapper">
-			<!-- Верхняя панель: язык и меню пользователя; состав дополняется (сводка и т.п.) -->
-			<header class="navbar navbar-expand-md d-print-none">
-				<div class="container-xl justify-content-end">
-					<div class="navbar-nav flex-row align-items-center">
-						<div class="nav-item dropdown me-2">
-							<a href="#" class="nav-link px-2" data-bs-toggle="dropdown">
-								<i class="ti ti-world me-1"></i>
-								<span x-text="$store.i18n.lang.toUpperCase()"></span>
-							</a>
-							<div class="dropdown-menu dropdown-menu-end">
-								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'ru' }" href="#"
-									@click.prevent="$store.i18n.set('ru')">Русский</a>
-								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'en' }" href="#"
-									@click.prevent="$store.i18n.set('en')">English</a>
-							</div>
-						</div>
-						<div class="nav-item dropdown">
-							<!-- Подставные данные макета: имя вошедшего пользователя -->
-							<a href="#" class="nav-link d-flex lh-1 px-2" data-bs-toggle="dropdown">
-								<span class="avatar avatar-sm"><i class="ti ti-user"></i></span>
-								<span class="ps-2" data-username>user1</span>
-							</a>
-							<div class="dropdown-menu dropdown-menu-end">
-								<a class="dropdown-item" href="settings.html"
-									x-text="$store.i18n.t('menu.settings')"></a>
-								<a class="dropdown-item" href="login.html" data-logout
-									x-text="$store.i18n.t('menu.logout')"></a>
-							</div>
-						</div>
-					</div>
-				</div>
-			</header>
+			<div data-layout="topbar"></div>
 			<div class="page-header d-print-none">
 				<div class="container-xl">
 					<div class="row g-2 align-items-center">
@@ -163,6 +94,7 @@
 				<div class="container-xl">
 					<!-- Одна колонка ограниченной ширины, по центру -->
 					<div class="row row-cards mx-auto" style="max-width: 40rem">
+						<div class="alert alert-danger" x-show="loadError" x-text="loadError"></div>
 						<!-- Профиль: имя (неизменно) и почтовые адреса -->
 						<div class="col-12">
 							<div class="card">

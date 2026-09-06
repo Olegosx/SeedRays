@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-title-key="register.pageTitle">
+<html lang="en" data-title-key="register.pageTitle">
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,6 +8,7 @@
 	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
 	<link rel="stylesheet" href="css/app.css">
 	<script type="module" src="js/i18n.js"></script>
+	<script type="module" src="js/layout.js"></script>
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body class="d-flex flex-column">
@@ -26,27 +27,11 @@
 					location.href = 'login.html?registered=1';
 				}
 			} catch (e) {
-				const known = this.$store.i18n.t('errors.' + e.code);
-				this.error = known !== 'errors.' + e.code ? known : e.message;
+				this.error = this.$store.i18n.errorText(e);
 			}
 		},
 	}">
-		<!-- Верхняя панель страниц входа: переключатель языка -->
-		<div class="position-absolute top-0 end-0 p-3">
-			<template x-if="$store.i18n.lang !== 'ru'">
-				<a href="#" class="link-secondary" @click.prevent="$store.i18n.set('ru')">Русский</a>
-			</template>
-			<template x-if="$store.i18n.lang === 'ru'">
-				<span class="text-secondary">Русский</span>
-			</template>
-			<span class="text-secondary mx-1">·</span>
-			<template x-if="$store.i18n.lang !== 'en'">
-				<a href="#" class="link-secondary" @click.prevent="$store.i18n.set('en')">English</a>
-			</template>
-			<template x-if="$store.i18n.lang === 'en'">
-				<span class="text-secondary">English</span>
-			</template>
-		</div>
+		<div data-layout="lang-corner"></div>
 		<div class="container container-tight py-4">
 			<div class="text-center mb-4">
 				<span class="fs-1 fw-bold">SeedRays</span>

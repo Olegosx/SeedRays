@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ru" data-title-key="history.pageTitle">
+<html lang="en" data-title-key="history.pageTitle">
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,113 +9,57 @@
 	<link rel="stylesheet" href="css/app.css">
 	<script type="module" src="js/i18n.js"></script>
 	<script type="module" src="js/auth-guard.js"></script>
+	<script type="module" src="js/layout.js"></script>
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
 </head>
 <body>
 	<div class="page" x-cloak x-data="{
 		rows: [],
+		// Потолок одной выборки; вопрос пагинации в документации открыт.
+		limit: 200,
 		filter: { wallet: '', network: '', asset: '', status: '' },
-		async init() {
+		wallets: [],
+		networks: [],
+		assetOptions: [],
+		statuses: ['confirmed', 'pending', 'failed'],
+		loadError: '',
+		async load() {
+			// Фильтрует сервер: клиентская фильтрация усечённой выборки
+			// прятала бы операции старше первых строк.
 			const { api } = await import('/js/api.js');
-			this.rows = (await api('GET', '/v1/user/history?limit=200')).history;
+			const params = new URLSearchParams({ limit: this.limit });
+			if (this.filter.wallet) { params.set('wallet_id', this.filter.wallet); }
+			if (this.filter.network) { params.set('network', this.filter.network); }
+			if (this.filter.asset) { params.set('asset', this.filter.asset); }
+			if (this.filter.status) { params.set('status', this.filter.status); }
+			this.rows = (await api('GET', '/v1/user/history?' + params)).history;
 		},
-		options(field) {
-			return [...new Set(this.rows.map((r) => r[field]))];
+		async reload() {
+			this.loadError = '';
+			try {
+				await this.load();
+			} catch (e) {
+				this.loadError = this.$store.i18n.errorText(e);
+			}
 		},
-		filtered() {
-			return this.rows.filter((r) =>
-				(!this.filter.wallet || r.wallet === this.filter.wallet)
-				&& (!this.filter.network || r.network === this.filter.network)
-				&& (!this.filter.asset || r.asset === this.filter.asset)
-				&& (!this.filter.status || r.status === this.filter.status));
-		},
-		statusClass(s) {
-			return { confirmed: 'bg-green-lt', pending: 'bg-yellow-lt', failed: 'bg-red-lt' }[s];
-		},
-		statusText(s) {
-			return this.$store.i18n.t('history.status' + s.charAt(0).toUpperCase() + s.slice(1));
+		async init() {
+			try {
+				const { api } = await import('/js/api.js');
+				this.wallets = (await api('GET', '/v1/user/wallets')).wallets;
+				this.networks = (await api('GET', '/v1/user/networks')).networks
+					.map((n) => n.network);
+				await this.load();
+				// Варианты фильтра активов — из первой (нефильтрованной) выборки.
+				this.assetOptions = [...new Set(this.rows.map((r) => r.asset))];
+			} catch (e) {
+				this.loadError = this.$store.i18n.errorText(e);
+			}
 		},
 	}">
-		<!-- Боковое меню кабинета (см. docs, «Структура кабинета») -->
-		<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
-			<div class="container-fluid">
-				<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
-					data-bs-target="#sidebar-menu" aria-expanded="false">
-					<span class="navbar-toggler-icon"></span>
-				</button>
-				<div class="navbar-brand navbar-brand-autodark">
-					<a href="dashboard.html" class="text-decoration-none fs-2 fw-bold">SeedRays</a>
-				</div>
-				<div class="collapse navbar-collapse" id="sidebar-menu">
-					<ul class="navbar-nav pt-lg-3">
-						<li class="nav-item">
-							<a class="nav-link" href="dashboard.html">
-								<span class="nav-link-icon"><i class="ti ti-home"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.dashboard')"></span>
-							</a>
-						</li>
-						<li class="nav-item">
-							<a class="nav-link" href="wallets.html">
-								<span class="nav-link-icon"><i class="ti ti-wallet"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.wallets')"></span>
-							</a>
-						</li>
-						<li class="nav-item">
-							<a class="nav-link" href="applications.html">
-								<span class="nav-link-icon"><i class="ti ti-plug-connected"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.apps')"></span>
-							</a>
-						</li>
-						<li class="nav-item active">
-							<a class="nav-link" href="history.html">
-								<span class="nav-link-icon"><i class="ti ti-history"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.history')"></span>
-							</a>
-						</li>
-						<li class="nav-item">
-							<a class="nav-link" href="settings.html">
-								<span class="nav-link-icon"><i class="ti ti-settings"></i></span>
-								<span class="nav-link-title" x-text="$store.i18n.t('menu.settings')"></span>
-							</a>
-						</li>
-					</ul>
-				</div>
-			</div>
-		</aside>
+		<div data-layout="sidebar" data-active="history"></div>
 
 		<div class="page-wrapper">
-			<!-- Верхняя панель: язык и меню пользователя; состав дополняется (сводка и т.п.) -->
-			<header class="navbar navbar-expand-md d-print-none">
-				<div class="container-xl justify-content-end">
-					<div class="navbar-nav flex-row align-items-center">
-						<div class="nav-item dropdown me-2">
-							<a href="#" class="nav-link px-2" data-bs-toggle="dropdown">
-								<i class="ti ti-world me-1"></i>
-								<span x-text="$store.i18n.lang.toUpperCase()"></span>
-							</a>
-							<div class="dropdown-menu dropdown-menu-end">
-								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'ru' }" href="#"
-									@click.prevent="$store.i18n.set('ru')">Русский</a>
-								<a class="dropdown-item" :class="{ active: $store.i18n.lang === 'en' }" href="#"
-									@click.prevent="$store.i18n.set('en')">English</a>
-							</div>
-						</div>
-						<div class="nav-item dropdown">
-							<!-- Подставные данные макета: имя вошедшего пользователя -->
-							<a href="#" class="nav-link d-flex lh-1 px-2" data-bs-toggle="dropdown">
-								<span class="avatar avatar-sm"><i class="ti ti-user"></i></span>
-								<span class="ps-2" data-username>user1</span>
-							</a>
-							<div class="dropdown-menu dropdown-menu-end">
-								<a class="dropdown-item" href="settings.html"
-									x-text="$store.i18n.t('menu.settings')"></a>
-								<a class="dropdown-item" href="login.html" data-logout
-									x-text="$store.i18n.t('menu.logout')"></a>
-							</div>
-						</div>
-					</div>
-				</div>
-			</header>
+			<div data-layout="topbar"></div>
 			<div class="page-header d-print-none">
 				<div class="container-xl">
 					<div class="row g-2 align-items-center">
@@ -127,42 +71,46 @@
 			</div>
 			<div class="page-body">
 				<div class="container-xl">
+					<div class="alert alert-danger" x-show="loadError" x-text="loadError"></div>
+					<div class="alert alert-info" x-show="rows.length >= limit"
+						x-text="$store.i18n.t('history.truncated')"></div>
 					<div class="card">
 						<div class="card-body border-bottom py-3">
 							<div class="row g-2">
 								<div class="col-auto">
-									<select class="form-select" x-model="filter.wallet">
+									<select class="form-select" x-model="filter.wallet" @change="reload()">
 										<option value=""
 											x-text="$store.i18n.t('history.colWallet') + ': ' + $store.i18n.t('history.filterAll')"></option>
-										<template x-for="option in options('wallet')">
-											<option :value="option" x-text="option"></option>
+										<template x-for="wallet in wallets">
+											<option :value="wallet.id"
+												x-text="wallet.label || wallet.family.toUpperCase()"></option>
 										</template>
 									</select>
 								</div>
 								<div class="col-auto">
-									<select class="form-select" x-model="filter.network">
+									<select class="form-select" x-model="filter.network" @change="reload()">
 										<option value=""
 											x-text="$store.i18n.t('history.colNetwork') + ': ' + $store.i18n.t('history.filterAll')"></option>
-										<template x-for="option in options('network')">
+										<template x-for="option in networks">
 											<option :value="option" x-text="option"></option>
 										</template>
 									</select>
 								</div>
 								<div class="col-auto">
-									<select class="form-select" x-model="filter.asset">
+									<select class="form-select" x-model="filter.asset" @change="reload()">
 										<option value=""
 											x-text="$store.i18n.t('history.colAsset') + ': ' + $store.i18n.t('history.filterAll')"></option>
-										<template x-for="option in options('asset')">
+										<template x-for="option in assetOptions">
 											<option :value="option" x-text="option"></option>
 										</template>
 									</select>
 								</div>
 								<div class="col-auto">
-									<select class="form-select" x-model="filter.status">
+									<select class="form-select" x-model="filter.status" @change="reload()">
 										<option value=""
 											x-text="$store.i18n.t('history.colStatus') + ': ' + $store.i18n.t('history.filterAll')"></option>
-										<template x-for="option in options('status')">
-											<option :value="option" x-text="statusText(option)"></option>
+										<template x-for="option in statuses">
+											<option :value="option" x-text="$store.fmt.statusText(option)"></option>
 										</template>
 									</select>
 								</div>
@@ -182,7 +130,7 @@
 									</tr>
 								</thead>
 								<tbody>
-									<template x-for="row in filtered()">
+									<template x-for="row in rows">
 										<tr>
 											<td class="text-secondary" x-text="row.time"></td>
 											<td x-text="row.wallet"></td>
@@ -194,12 +142,12 @@
 													x-text="row.txid.slice(0, 8) + '…'"></a>
 											</td>
 											<td>
-												<span class="badge" :class="statusClass(row.status)"
-													x-text="statusText(row.status)"></span>
+												<span class="badge" :class="$store.fmt.statusClass(row.status)"
+													x-text="$store.fmt.statusText(row.status)"></span>
 											</td>
 										</tr>
 									</template>
-									<tr x-show="!filtered().length">
+									<tr x-show="!rows.length">
 										<td colspan="7" class="text-center text-secondary"
 											x-text="$store.i18n.t('history.empty')"></td>
 									</tr>

@@ -61,6 +61,7 @@ export const en = {
 	"reset.email": "Email",
 	"reset.emailPlaceholder": "you@example.com",
 	"reset.submit": "Send the link",
+	"reset.inDevelopment": "Password reset is under development — it will work once reset emails are wired up.",
 	"reset.back": "Back to sign-in",
 	"reset.sentTitle": "Email sent",
 	"reset.sentText": "If this email is registered, a password reset link is on its way.",
@@ -166,6 +167,7 @@ export const en = {
 	"appkey.warning":
 		"The key is shown only once: the gateway stores its fingerprint, not the key itself. Copy the key now and hand it to your application.",
 	"appkey.copy": "Copy",
+	"appkey.copyFailed": "Could not copy automatically — select the key and copy it manually.",
 	"appkey.copied": "Copied",
 	"appkey.done": "Done",
 
@@ -204,6 +206,7 @@ export const en = {
 	"history.statusConfirmed": "confirmed",
 	"history.statusPending": "pending",
 	"history.statusFailed": "failed",
+	"history.truncated": "Only the most recent operations are shown — narrow the filters to see older ones.",
 	"history.empty": "No operations match the chosen filters.",
 
 	"settings.pageTitle": "Settings — SeedRays",

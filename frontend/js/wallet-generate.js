@@ -3,11 +3,14 @@
 // после проверки трёх слов кошельки прикрепляются обычным путём
 // «семейство + xpub» — сид повторно по сети не передаётся.
 
+import { errorText } from "./i18n.js";
+
 document.addEventListener("alpine:init", () => {
 	window.Alpine.data("genFlow", () => ({
 		step: 1,
 		words: null, // 12 | 24 — явный выбор, значения по умолчанию нет
-		families: { tron: false, evm: false },
+		familyOptions: [], // список семейств отдаёт бэкенд
+		families: {},
 		usePassphrase: false,
 		passphrase: "",
 		phrase: [],
@@ -18,9 +21,18 @@ document.addEventListener("alpine:init", () => {
 		mismatch: false,
 		error: "",
 
+		async init() {
+			try {
+				const { api } = await import("./api.js");
+				this.familyOptions = (await api("GET", "/v1/user/networks")).families;
+			} catch (e) {
+				this.error = this._message(e);
+			}
+		},
+
 		canGenerate() {
 			return (this.words === 12 || this.words === 24)
-				&& (this.families.tron || this.families.evm);
+				&& this.selectedFamilies().length > 0;
 		},
 
 		selectedFamilies() {
@@ -65,19 +77,19 @@ document.addEventListener("alpine:init", () => {
 			this.error = "";
 			try {
 				const { api } = await import("/js/api.js");
-				const created = [];
-				for (const wallet of this.material) {
+				// Созданное сразу вычёркивается: повтор после частичного сбоя
+				// досоздаёт только недостающие семейства, без дублей.
+				for (const wallet of [...this.material]) {
 					const result = await api("POST", "/v1/user/wallets", {
 						family: wallet.family,
 						xpub: wallet.xpub,
 						label: "",
 					});
-					created.push(result.wallet);
+					this.created.push(result.wallet);
+					this.material = this.material.filter((w) => w.family !== wallet.family);
 				}
-				this.created = created;
 				// Фраза больше не нужна — убираем её из состояния страницы.
 				this.phrase = [];
-				this.material = [];
 				this.step = 4;
 			} catch (e) {
 				this.error = this._message(e);
@@ -92,8 +104,7 @@ document.addEventListener("alpine:init", () => {
 		},
 
 		_message(e) {
-			const known = this.$store.i18n.t("errors." + e.code);
-			return known !== "errors." + e.code ? known : e.message;
+			return errorText(e);
 		},
 	}));
 });

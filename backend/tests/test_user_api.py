@@ -245,3 +245,26 @@ def test_validation_error_does_not_echo_input(tmp_path: Path) -> None:
 			assert "password" in response.json()["error"]["message"]
 
 	asyncio.run(scenario())
+
+
+def test_networks_and_families_come_from_backend(tmp_path: Path) -> None:
+	"""The cabinet's pickers read networks/families from the API, not from markup."""
+
+	async def scenario() -> None:
+		upgrade_registry(tmp_path)
+		await enable_dev_mail(tmp_path)
+		async with _client(tmp_path, None) as client:
+			refused = await client.get("/v1/user/networks")
+			assert refused.status_code == 401  # только для вошедших
+
+			await client.post("/v1/user/register", json=GOOD_USER)
+			await client.post(
+				"/v1/user/login",
+				json={"identifier": "alice", "password": GOOD_USER["password"]},
+			)
+			data = (await client.get("/v1/user/networks")).json()
+			assert {n["network"] for n in data["networks"]} == {"tron", "tron-nile"}
+			assert all(n["family"] == "tron" for n in data["networks"])
+			assert set(data["families"]) == {"tron", "evm"}
+
+	asyncio.run(scenario())

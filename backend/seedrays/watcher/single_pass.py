@@ -23,6 +23,7 @@ from typing import Callable
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from seedrays import chains
 from seedrays.chains import tron
 from seedrays.chains.base import ChainDataSource, ChainDataSourceError, RangeTransfer, RateLimitedError
 from seedrays.storage import registry as registry_ops
@@ -158,7 +159,7 @@ async def run_pass(
 				match_index.setdefault(binding.network, {})[binding.address] = engine
 
 		for network, addresses in sorted(match_index.items()):
-			if network not in tron.NETWORK_BASE_URLS:
+			if network not in chains.supported_networks():
 				logger.warning("network %s: no data source implementation, skipping", network)
 				continue
 			try:

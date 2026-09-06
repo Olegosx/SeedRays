@@ -19,6 +19,8 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.api.errors import ApiError
+from seedrays.chains import supported_networks
+from seedrays.families import Family
 from seedrays.mail.base import MailSender
 from seedrays.mail.resend import ResendSender
 from seedrays.orchestrator import apps as app_ops
@@ -302,6 +304,21 @@ def register_user_routes(
 			"label": wallet.label,
 			"addresses": wallet.addresses,
 			"created_at": wallet.created_at.isoformat() if wallet.created_at else None,
+		}
+
+	@app.get("/v1/user/networks")
+	async def list_networks(ctx: UserContext = SessionDep) -> dict:
+		"""Supported networks and wallet families for the cabinet's pickers.
+
+		Единая точка правды — бэкенд: фронтенд не держит собственных списков
+		сетей и семейств, чтобы новая цепочка не требовала правок разметки.
+		"""
+		return {
+			"networks": [
+				{"network": network, "family": family.value}
+				for network, family in sorted(supported_networks().items())
+			],
+			"families": [family.value for family in Family],
 		}
 
 	@app.get("/v1/user/wallets")

@@ -27,6 +27,13 @@ export function t(key) {
 	return DICTS[lang][key] ?? DICTS[FALLBACK][key] ?? key;
 }
 
+// Текст ошибки API: перевод по машинному коду, иначе — сообщение сервера.
+export function errorText(error) {
+	const key = "errors." + error.code;
+	const known = t(key);
+	return known !== key ? known : error.message;
+}
+
 export function setLang(code) {
 	if (!DICTS[code] || code === lang) {
 		return;
@@ -49,5 +56,5 @@ if (titleKey) {
 // Модульные скрипты исполняются до отложенного (defer) alpine.min.js,
 // поэтому подписка на alpine:init успевает всегда.
 document.addEventListener("alpine:init", () => {
-	window.Alpine.store("i18n", { lang, t, set: setLang });
+	window.Alpine.store("i18n", { lang, t, set: setLang, errorText });
 });

@@ -61,6 +61,7 @@ export const ru = {
 	"reset.email": "Почта",
 	"reset.emailPlaceholder": "you@example.com",
 	"reset.submit": "Отправить ссылку",
+	"reset.inDevelopment": "Сброс пароля в разработке — заработает, когда будут подключены письма сброса.",
 	"reset.back": "Вернуться ко входу",
 	"reset.sentTitle": "Письмо отправлено",
 	"reset.sentText":
@@ -168,6 +169,7 @@ export const ru = {
 	"appkey.warning":
 		"Ключ показывается только один раз: шлюз хранит не сам ключ, а его отпечаток. Скопируйте ключ сейчас и передайте его приложению.",
 	"appkey.copy": "Скопировать",
+	"appkey.copyFailed": "Не удалось скопировать автоматически — выделите ключ и скопируйте вручную.",
 	"appkey.copied": "Скопировано",
 	"appkey.done": "Готово",
 
@@ -206,6 +208,7 @@ export const ru = {
 	"history.statusConfirmed": "подтверждена",
 	"history.statusPending": "ожидает",
 	"history.statusFailed": "провал",
+	"history.truncated": "Показаны только последние операции — сузьте фильтры, чтобы увидеть более старые.",
 	"history.empty": "По выбранным фильтрам операций нет.",
 
 	"settings.pageTitle": "Настройки — SeedRays",
