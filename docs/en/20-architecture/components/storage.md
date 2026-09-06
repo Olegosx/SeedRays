@@ -13,6 +13,15 @@ See [ADR-0006](../decisions/0006-storage-abstraction.md). This mirrors the princ
 [Chain Abstraction](chain-abstraction.md): components above the interface do not know what
 is underneath.
 
+The interface also carries **screen-shaped read operations** — one wide, purpose-named
+read per screen or API read path (the dashboard summary, the history page) — instead of
+generic query building (the ADR-0006 addendum). The layer is organized by domain:
+registry operations; user-database operations for the financial path (transactions,
+balances, bindings), wallets, applications and the screen reads. The financial-model
+semantics — allowed directions and statuses, the consumer-facing classification of a
+transaction — live in one place inside the layer and are the single point of truth for
+every consumer.
+
 ## Per-User Storage
 
 Each user has their own database and working directory
@@ -41,10 +50,10 @@ data — wallets, addresses, bindings and operations live only in the user datab
 
 ## Migrations
 
-Schema migrations run across all user databases in a loop; the migration tooling must
-support this from the start. The choice of implementation (SQLAlchemy Core + Alembic vs a
-hand-rolled thin layer) is an open question, to be decided in a dedicated ADR at
-implementation time (new dependencies require approval).
+Schema migrations run on SQLAlchemy Core + Alembic
+(see [ADR-0013](../decisions/0013-backend-stack.md)) in two streams — the registry and
+the user databases; the user stream loops over every user database found on disk and
+stops at the first failure, naming the broken file. Each migrated database is logged.
 
 ## Related
 

@@ -28,6 +28,7 @@ Service layer of the backend: owns the business logic and coordinates the functi
   open connections, the watcher is cancelled between passes, the gateway exits cleanly.
 - Console command `seedrays serve` — migrates the databases and runs the gateway; the data
   directory and the bind address come from `SEEDRAYS_DATA_DIR` and `SEEDRAYS_BIND`
+  (default `127.0.0.1:8080`)
   (the bootstrap layer of [ADR-0016](../decisions/0016-config-layers.md)).
 
 ## Related

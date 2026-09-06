@@ -41,6 +41,20 @@ user, WAL journal mode); PostgreSQL and MySQL follow.
 - Storage operations are testable against an in-memory or temporary SQLite backend.
 - The storage interface is the single place where the schema is known.
 
+## Addendum (2026-09-06)
+
+The code audit found the orchestrator bypassing the interface with direct SQL; the
+decision is confirmed and enforced — every orchestrator module now goes through the
+storage layer. Two clarifications, so the layer does not degenerate into a mirror of its
+callers:
+
+- Operations are named and shaped by **domain meaning** ("record a transaction",
+  "allocate the next derivation index"), never by the SQL they happen to contain.
+- The interface legitimately includes **screen-shaped read operations** — one wide,
+  purpose-named read per screen or API read path (the dashboard summary, the history
+  page). A need the layer cannot express is a reason to extend the layer or open a new
+  ADR — never to bypass it.
+
 ## Related
 
 - [Storage Layer](../components/storage.md)
