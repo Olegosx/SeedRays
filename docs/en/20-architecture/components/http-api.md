@@ -105,9 +105,19 @@ GET    /v1/user/overview     (counters, receipts by asset, recent operations)
 POST   /v1/user/emails       body: {"address"}   (a second email, confirmed by a message)
 DELETE /v1/user/emails/{id}                      (the primary one cannot be removed)
 POST   /v1/user/password     body: {"current_password", "new_password"}
+POST   /v1/user/password-reset          body: {"email"}
+POST   /v1/user/password-reset/confirm  body: {"token", "new_password"}
 ```
 
 A password change drops every other session of the user (the current one stays).
+
+Password reset: the request answer is always the same — the address's existence is not
+revealed; the message goes only to a confirmed email. The token from the message is
+one-time (the database keeps its fingerprint, the lifetime is 1 hour, a new request
+replaces the previous token), the link leads to the new-password page; a successful
+reset drops every session of the user. With no mail configured — `mail_not_configured`
+even in the development mode: a reset without a message does not exist. Requests go
+through the same brute-force brake.
 
 - **The session** is an HttpOnly, Secure cookie (SameSite=Lax); the database stores the
   token's fingerprint. Mutating requests must carry the `X-CSRF-Token` header issued at
