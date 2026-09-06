@@ -35,6 +35,10 @@ _NATIVE_SYMBOL = "TRX"
 _NATIVE_DECIMALS = 6
 # Потолок диапазона одного запроса getblockbylimitnext (ограничение java-tron).
 _BLOCK_CHUNK = 100
+# Потолок страниц одного пагинированного вызова: защита от бесконечного
+# fingerprint-курсора сбойного/враждебного провайдера и от разрастания памяти.
+# Окно догона ограничивает watcher, так что легитимные вызовы сюда не упираются.
+_MAX_PAGES = 500
 
 
 def _hex_to_base58(hex_address: str) -> str:
@@ -147,15 +151,24 @@ class TronGridSource(ChainDataSource):
 		return params
 
 	async def _paginate(self, path: str, params: dict[str, Any]) -> list[dict]:
-		"""Collect all pages of a v1 endpoint via the fingerprint cursor."""
+		"""Collect the pages of a v1 endpoint via the fingerprint cursor.
+
+		Raises:
+			ChainDataSourceError: When the page count exceeds the safety
+				cap — a sound provider never returns that many pages for
+				the bounded windows the watcher asks for.
+		"""
 		items: list[dict] = []
-		while True:
+		for _ in range(_MAX_PAGES):
 			data = await self._request("GET", path, params=params)
 			items.extend(data.get("data") or [])
 			fingerprint = (data.get("meta") or {}).get("fingerprint")
 			if not fingerprint:
 				return items
 			params = dict(params, fingerprint=fingerprint)
+		raise ChainDataSourceError(
+			f"pagination exceeded {_MAX_PAGES} pages on {path}; aborting the call"
+		)
 
 	async def _trc20_transfers(
 		self, address: str, since: datetime | None, only_confirmed: bool | None
@@ -276,12 +289,14 @@ class TronGridSource(ChainDataSource):
 		since: datetime | None,
 		*,
 		confirmed: bool,
+		until: datetime | None = None,
 	) -> list[RangeTransfer]:
 		"""Transfer events of one token contract (range scan, ADR-0021).
 
 		``confirmed=True`` asks the provider for solidified events only (the
 		authoritative scan); ``confirmed=False`` — for events above the
-		finality boundary (the provisional preview).
+		finality boundary (the provisional preview). ``until`` bounds the
+		window from above — the watcher's catch-up limiter.
 		"""
 		path = f"/v1/contracts/{contract}/events"
 		params: dict[str, Any] = {
@@ -292,6 +307,8 @@ class TronGridSource(ChainDataSource):
 		}
 		if since is not None:
 			params["min_block_timestamp"] = int(since.timestamp() * 1000)
+		if until is not None:
+			params["max_block_timestamp"] = int(until.timestamp() * 1000)
 		transfers = []
 		for item in await self._paginate(path, params):
 			if item.get("event_name") != "Transfer":

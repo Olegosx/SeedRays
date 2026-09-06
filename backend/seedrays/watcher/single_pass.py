@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.chains import tron
@@ -40,6 +41,10 @@ DEFAULT_RATE_PER_SEC = 3.0
 DEFAULT_OVERLAP_MINUTES = 10
 # Предохранитель на догон нативного сканирования за один проход (~1 час цепочки TRON).
 MAX_BLOCKS_PER_PASS = 1200
+# Предохранитель на догон токен-событий: окно авторитетного скана за один проход.
+# После простоя шлюза курсор двигается такими шагами — объём одного вызова
+# ограничен и предсказуем, а прогресс фиксируется каждым проходом.
+MAX_TOKEN_MINUTES_PER_PASS = 60
 
 SourceFactory = Callable[[str, str | None, float], ChainDataSource]
 
@@ -59,6 +64,37 @@ def _naive_utc(moment: datetime | None) -> datetime | None:
 def _aware_utc(moment: datetime) -> datetime:
 	"""Interpret a naive database datetime as UTC."""
 	return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+
+
+async def read_float_setting(registry: AsyncEngine, key: str, default: float) -> float:
+	"""Read a numeric setting; an invalid value degrades to the default with a log.
+
+	The single pattern for settings the watcher must survive: a broken
+	value in the registry must never crash the scanning loop (the same
+	policy as the watched-contracts setting).
+	"""
+	raw = await registry_ops.get_setting(registry, key)
+	if raw is None:
+		return default
+	try:
+		return float(raw)
+	except ValueError:
+		logger.error("invalid %s setting %r ignored, using %s", key, raw, default)
+		return default
+
+
+async def read_datetime_setting(
+	registry: AsyncEngine, key: str, default: datetime
+) -> datetime:
+	"""Read an ISO-datetime setting; an invalid value degrades to the default with a log."""
+	raw = await registry_ops.get_setting(registry, key)
+	if raw is None:
+		return default
+	try:
+		return _aware_utc(datetime.fromisoformat(raw))
+	except ValueError:
+		logger.error("invalid %s setting %r ignored, using %s", key, raw, default)
+		return default
 
 
 @dataclass
@@ -94,20 +130,15 @@ async def run_pass(
 		if api_key is None:
 			# ВРЕМЕННЫЙ обход до панели оператора: ключ из окружения (ADR-0016).
 			api_key = os.environ.get("TRONGRID_API_KEY")
-		rate = float(await registry_ops.get_setting(registry, SETTING_RATE) or DEFAULT_RATE_PER_SEC)
+		rate = await read_float_setting(registry, SETTING_RATE, DEFAULT_RATE_PER_SEC)
 		interval = 1.0 / rate if rate > 0 else 0.0
 		overlap = timedelta(
-			minutes=float(
-				await registry_ops.get_setting(registry, SETTING_OVERLAP)
-				or DEFAULT_OVERLAP_MINUTES
-			)
+			minutes=await read_float_setting(registry, SETTING_OVERLAP, DEFAULT_OVERLAP_MINUTES)
 		)
-		scan_start_raw = await registry_ops.get_setting(registry, SETTING_SCAN_START)
-		scan_start = (
-			_aware_utc(datetime.fromisoformat(scan_start_raw)) if scan_start_raw else pass_started
-		)
+		scan_start = await read_datetime_setting(registry, SETTING_SCAN_START, pass_started)
 
 		# Локальный фильтр сопоставления: сеть → адрес → база владельца (ADR-0018).
+		# Сбой базы одного пользователя не срывает проход по остальным (ADR-0007).
 		match_index: dict[str, dict[str, AsyncEngine]] = {}
 		for user in await registry_ops.list_users(registry):
 			db_path = user_db_path(data_dir, user.directory)
@@ -116,7 +147,14 @@ async def run_pass(
 				continue
 			engine = create_sqlite_engine(db_path)
 			user_engines.append(engine)
-			for binding in await user_store.list_binding_addresses(engine):
+			try:
+				user_bindings = await user_store.list_binding_addresses(engine)
+			except SQLAlchemyError:
+				logger.exception(
+					"user %s: database unreadable, skipping this pass", user.login
+				)
+				continue
+			for binding in user_bindings:
 				match_index.setdefault(binding.network, {})[binding.address] = engine
 
 		for network, addresses in sorted(match_index.items()):
@@ -180,9 +218,20 @@ async def _scan_network(
 		contracts = await _watched_contracts(registry, network)
 
 		# Фаза 1: авторитетное сканирование финализированной зоны.
-		final_since = (
+		token_cursor = (
 			_aware_utc(state.last_scan_at) if state and state.last_scan_at else since_default
-		) - overlap
+		)
+		# Окно догона: после простоя курсор двигается шагами ограниченной
+		# длины — объём одного прохода предсказуем, прогресс фиксируется.
+		token_until = token_cursor + timedelta(minutes=MAX_TOKEN_MINUTES_PER_PASS)
+		token_caught_up = token_until >= pass_started
+		if not token_caught_up:
+			logger.warning(
+				"network %s: token scan %s behind, catching up %d minutes per pass",
+				network,
+				pass_started - token_cursor,
+				MAX_TOKEN_MINUTES_PER_PASS,
+			)
 		confirmed: list[RangeTransfer] = []
 		for contract in contracts:
 			confirmed.extend(
@@ -190,8 +239,9 @@ async def _scan_network(
 					contract["contract"],
 					contract["symbol"],
 					int(contract["decimals"]),
-					final_since,
+					token_cursor - overlap,
 					confirmed=True,
+					until=None if token_caught_up else token_until,
 				)
 			)
 		final_start = state.last_block + 1 if state else boundary.block_number + 1
@@ -205,41 +255,58 @@ async def _scan_network(
 			)
 		if final_start <= final_end:
 			confirmed.extend(await source.native_transfers(final_start, final_end))
+		failed_engines: set[AsyncEngine] = set()
 		matched, recorded = await _record_transfers(
-			confirmed, addresses, registry, finalized_at=_naive_utc(pass_started)
+			confirmed,
+			addresses,
+			registry,
+			finalized_at=_naive_utc(pass_started),
+			failed_engines=failed_engines,
 		)
 
 		# Чистка: предварительные строки внутри уже просканированной
 		# финализированной зоны, которые она не подтвердила, — жертвы
-		# перестройки цепи (политика ADR-0021).
+		# перестройки цепи (политика ADR-0021). Пока токен-скан догоняет,
+		# токен-строки не трогаем: их подтверждение ещё впереди.
 		scanned_final = final_end if final_start <= final_end else (
 			state.last_block if state else boundary.block_number
 		)
-		asset_ids = {a.id for a in await registry_ops.list_assets(registry, network)}
+		catalog = await registry_ops.list_assets(registry, network)
+		asset_ids = {a.id for a in catalog}
+		cleanup_ids = {
+			a.id for a in catalog if a.kind == "native" or token_caught_up
+		}
 		deleted = 0
-		for engine in set(addresses.values()):
-			for txid in await user_store.delete_unfinalized(
-				engine, asset_ids=asset_ids, up_to_block=scanned_final
-			):
-				logger.warning(
-					"network %s: provisional tx %s not confirmed by the finalized "
-					"chain (reorg), removed",
-					network,
-					txid,
-				)
-				deleted += 1
-
 		applied = 0
-		for engine in set(addresses.values()):
-			applied += await user_store.apply_finalized(
-				engine, asset_ids=asset_ids, applied_at=_naive_utc(pass_started)
-			)
+		for engine in set(addresses.values()) - failed_engines:
+			try:
+				for txid in await user_store.delete_unfinalized(
+					engine, asset_ids=cleanup_ids, up_to_block=scanned_final
+				):
+					logger.warning(
+						"network %s: provisional tx %s not confirmed by the finalized "
+						"chain (reorg), removed",
+						network,
+						txid,
+					)
+					deleted += 1
+				applied += await user_store.apply_finalized(
+					engine, asset_ids=asset_ids, applied_at=_naive_utc(pass_started)
+				)
+			except SQLAlchemyError:
+				# Сбой базы одного владельца не срывает проход по остальным
+				# (ADR-0007); его строки доработает следующий проход.
+				failed_engines.add(engine)
+				logger.exception(
+					"network %s: user database failed on apply, skipping this owner",
+					network,
+				)
 
 		await registry_ops.set_watcher_state(
 			registry,
 			network,
 			last_block=scanned_final,
-			last_scan_at=_naive_utc(pass_started),
+			last_scan_at=_naive_utc(pass_started if token_caught_up else token_until),
 		)
 
 		# Фаза 2: предпросмотр зоны выше границы финальности — чтобы платёж
@@ -265,7 +332,11 @@ async def _scan_network(
 					)
 				)
 			preview_matched, preview_recorded = await _record_transfers(
-				preview, addresses, registry, finalized_at=None
+				preview,
+				addresses,
+				registry,
+				finalized_at=None,
+				failed_engines=failed_engines,
 			)
 			matched += preview_matched
 			recorded += preview_recorded
@@ -295,11 +366,14 @@ async def _record_transfers(
 	registry: AsyncEngine,
 	*,
 	finalized_at: datetime | None,
+	failed_engines: set[AsyncEngine],
 ) -> tuple[int, int]:
 	"""Match transfers against tracked addresses and store the hits.
 
 	Both legs of a transfer are checked: an address may be the recipient,
-	the sender, or both (a self-transfer records two rows).
+	the sender, or both (a self-transfer records two rows). A failing user
+	database excludes that owner for the rest of the pass
+	(``failed_engines``) without stopping the others (ADR-0007).
 
 	Returns:
 		(transfers matched, rows recorded).
@@ -311,7 +385,7 @@ async def _record_transfers(
 			(transfer.from_address, "out"),
 		):
 			engine = addresses.get(address)
-			if engine is None:
+			if engine is None or engine in failed_engines:
 				continue
 			matched += 1
 			asset = await registry_ops.get_or_create_asset(
@@ -322,19 +396,28 @@ async def _record_transfers(
 				symbol=transfer.asset.symbol,
 				decimals=transfer.asset.decimals,
 			)
-			inserted = await user_store.record_transaction(
-				engine,
-				address=address,
-				txid=transfer.txid,
-				asset_id=asset.id,
-				direction=direction,
-				amount=transfer.amount,
-				block_number=transfer.block_number,
-				tx_time=_naive_utc(transfer.timestamp),
-				status=transfer.status.value,
-				event_index=transfer.event_index,
-				finalized_at=finalized_at,
-			)
+			try:
+				inserted = await user_store.record_transaction(
+					engine,
+					address=address,
+					txid=transfer.txid,
+					asset_id=asset.id,
+					direction=direction,
+					amount=transfer.amount,
+					block_number=transfer.block_number,
+					tx_time=_naive_utc(transfer.timestamp),
+					status=transfer.status.value,
+					event_index=transfer.event_index,
+					finalized_at=finalized_at,
+				)
+			except SQLAlchemyError:
+				failed_engines.add(engine)
+				logger.exception(
+					"user database write failed for tx %s, skipping this owner "
+					"for the rest of the pass",
+					transfer.txid,
+				)
+				continue
 			recorded += int(inserted)
 	return matched, recorded
 

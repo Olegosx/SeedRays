@@ -10,9 +10,8 @@ import asyncio
 import logging
 from pathlib import Path
 
-from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path
-from seedrays.watcher.single_pass import PassStats, run_pass
+from seedrays.watcher.single_pass import PassStats, read_float_setting, run_pass
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +20,12 @@ DEFAULT_INTERVAL_SECONDS = 60.0
 
 
 async def _interval(data_dir: Path) -> float:
-	"""Read the pass interval from the registry settings."""
+	"""Read the pass interval from the registry settings; degrade to the default."""
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	try:
-		raw = await registry_ops.get_setting(registry, SETTING_INTERVAL)
+		return await read_float_setting(registry, SETTING_INTERVAL, DEFAULT_INTERVAL_SECONDS)
 	finally:
 		await registry.dispose()
-	return float(raw) if raw else DEFAULT_INTERVAL_SECONDS
 
 
 async def run_forever(data_dir: Path) -> None:
@@ -52,4 +50,13 @@ async def run_forever(data_dir: Path) -> None:
 			raise
 		except Exception:
 			logger.exception("watcher pass failed; continuing")
-		await asyncio.sleep(await _interval(data_dir))
+		try:
+			interval = await _interval(data_dir)
+		except asyncio.CancelledError:
+			raise
+		except Exception:
+			# Недоступный реестр не должен ронять цикл: пауза по умолчанию,
+			# следующая итерация попробует снова.
+			logger.exception("failed to read the pass interval; using the default")
+			interval = DEFAULT_INTERVAL_SECONDS
+		await asyncio.sleep(interval)

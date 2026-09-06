@@ -3,7 +3,7 @@
 import asyncio
 import json
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import insert, select
@@ -89,7 +89,7 @@ class FakeSource(ChainDataSource):
 	async def transfers(self, address, since=None, only_confirmed=None):
 		return []
 
-	async def token_transfers(self, contract, symbol, decimals, since, *, confirmed):
+	async def token_transfers(self, contract, symbol, decimals, since, *, confirmed, until=None):
 		if self._rate_limited:
 			raise RateLimitedError("fake 429")
 		# Как у провайдера: confirmed — события не выше границы финальности,
@@ -333,5 +333,105 @@ def test_asset_autocatalog(tmp_path: Path) -> None:
 		await registry.dispose()
 		contracts = sorted(a.contract_address for a in catalog)
 		assert contracts == [USDT]
+
+	asyncio.run(scenario())
+
+
+def test_token_catchup_window_and_cleanup_guard(tmp_path: Path) -> None:
+	"""Catch-up moves the token cursor in bounded steps; token cleanup waits for it."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		# Первый проход заводит курсоры.
+		await run_pass(tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=100, head=100))
+
+		# Предварительная токен-строка в финализированной зоне (блок 50):
+		# при догоняющем токен-скане её чистить рано.
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		asset = await registry_ops.get_or_create_asset(
+			registry, network=NETWORK, kind="token", contract_address=USDT,
+			symbol="USDT", decimals=6,
+		)
+		user = create_sqlite_engine(user_db_path(tmp_path, "u1"))
+		from seedrays.storage import user_store
+
+		await user_store.record_transaction(
+			user,
+			address=OUR_ADDRESS,
+			txid="t-limbo",
+			asset_id=asset.id,
+			direction="in",
+			amount=1,
+			block_number=50,
+			tx_time=None,
+			status="success",
+		)
+		await user.dispose()
+
+		# Курсор токенов откатываем на 5 часов назад — имитация простоя.
+		state = await registry_ops.get_watcher_state(registry, NETWORK)
+		old_cursor = state.last_scan_at - timedelta(hours=5)
+		await registry_ops.set_watcher_state(
+			registry, NETWORK, last_block=state.last_block, last_scan_at=old_cursor
+		)
+
+		await run_pass(tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=120, head=121))
+		after = await registry_ops.get_watcher_state(registry, NETWORK)
+		# Догоняющий шаг: курсор продвинулся ровно на окно, а не до «сейчас».
+		assert after.last_scan_at == old_cursor + timedelta(minutes=60)
+		rows = await _user_rows(tmp_path, schema_user.transactions)
+		assert [r.txid for r in rows] == ["t-limbo"]  # токен-чистка отложена
+
+		# Догоняем до конца (5 часов = 5 шагов) — после этого чистка срабатывает.
+		for _ in range(5):
+			await run_pass(
+				tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=120, head=121)
+			)
+		assert await _user_rows(tmp_path, schema_user.transactions) == []
+		await registry.dispose()
+
+	asyncio.run(scenario())
+
+
+def test_invalid_settings_degrade_to_defaults(tmp_path: Path) -> None:
+	"""Broken registry settings are logged and defaulted, never crash the pass."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		await registry_ops.set_setting(registry, "watcher.overlap_minutes", "junk")
+		await registry_ops.set_setting(registry, "provider.trongrid.rate_per_sec", "fast")
+		await registry_ops.set_setting(registry, "watcher.scan_start", "not-a-date")
+		await registry.dispose()
+
+		stats = await run_pass(
+			tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=100, head=100)
+		)
+		assert stats.networks_scanned == 1
+
+	asyncio.run(scenario())
+
+
+def test_one_broken_user_db_does_not_stop_the_pass(tmp_path: Path) -> None:
+	"""A corrupt user database is skipped; other users are still scanned (ADR-0007)."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		await registry_ops.create_user(registry, tmp_path, "bob", "hash")
+		await registry.dispose()
+		# Портим базу второго пользователя: это больше не SQLite-файл.
+		user_db_path(tmp_path, "u2").write_bytes(b"garbage, not a database")
+
+		await run_pass(tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=100, head=100))
+		deposit = _usdt("t-alive", OUR_ADDRESS, 1_000_000, block=95)
+		stats = await run_pass(
+			tmp_path,
+			source_factory=lambda n, k, i: FakeSource(boundary=100, head=101, tokens=[deposit]),
+		)
+		assert stats.networks_scanned == 1
+		assert stats.rows_recorded == 1  # платёж первого пользователя записан
+		rows = await _user_rows(tmp_path, schema_user.transactions)
+		assert [r.txid for r in rows] == ["t-alive"]
 
 	asyncio.run(scenario())

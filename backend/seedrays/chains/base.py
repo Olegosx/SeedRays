@@ -129,6 +129,7 @@ class ChainDataSource(ABC):
 		since: datetime | None,
 		*,
 		confirmed: bool,
+		until: datetime | None = None,
 	) -> "list[RangeTransfer]":
 		"""Return transfers of one token contract (range scan, ADR-0021).
 
@@ -141,6 +142,8 @@ class ChainDataSource(ABC):
 			confirmed: True — only transfers at or below the finality
 				boundary (the authoritative scan); False — only transfers
 				above it (the provisional preview).
+			until: Upper time bound, when given — the watcher's catch-up
+				limiter bounds one pass's window with it.
 
 		Raises:
 			ChainDataSourceError: On request failure or unusable response.

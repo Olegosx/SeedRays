@@ -361,3 +361,41 @@ def test_native_transfers_range_chunks() -> None:
 	assert transfers[0].status == TransferStatus.SUCCESS
 	assert transfers[1].status == TransferStatus.FAILED
 	assert transfers[0].block_number == 1
+
+
+def test_pagination_page_cap(monkeypatch) -> None:
+	"""An endless fingerprint cursor aborts the call instead of looping forever."""
+	from seedrays.chains import tron
+	from seedrays.chains.base import ChainDataSourceError
+
+	monkeypatch.setattr(tron.trongrid, "_MAX_PAGES", 3)
+	calls = {"n": 0}
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		calls["n"] += 1
+		return httpx.Response(200, json={"data": [], "meta": {"fingerprint": "again"}})
+
+	with pytest.raises(ChainDataSourceError, match="pagination exceeded"):
+		asyncio.run(
+			_make_source(handler).token_transfers(USDT_CONTRACT, "USDT", 6, None, confirmed=True)
+		)
+	assert calls["n"] == 3
+
+
+def test_token_transfers_until_bound() -> None:
+	"""The catch-up limiter's upper bound reaches the provider as max_block_timestamp."""
+	seen_params: list[dict] = []
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		seen_params.append(dict(request.url.params))
+		return httpx.Response(200, json={"data": [], "meta": {}})
+
+	since = datetime.fromtimestamp(1699999000, tz=timezone.utc)
+	until = datetime.fromtimestamp(1699999600, tz=timezone.utc)
+	asyncio.run(
+		_make_source(handler).token_transfers(
+			USDT_CONTRACT, "USDT", 6, since, confirmed=True, until=until
+		)
+	)
+	assert seen_params[0]["min_block_timestamp"] == "1699999000000"
+	assert seen_params[0]["max_block_timestamp"] == "1699999600000"
