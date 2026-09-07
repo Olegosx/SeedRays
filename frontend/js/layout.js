@@ -24,6 +24,19 @@ const MENU_OPERATOR = [
 	["settings", "operator-settings.html", "ti-settings", "op.menuSettings"],
 ];
 
+// Постоянно раскрытое подменю приложений под пунктом «Приложения (API)»:
+// штатное состояние Tabler «dropdown-menu show» без переключателя —
+// родительский пункт остаётся обычной ссылкой на общий список.
+// Список приходит асинхронно в $store.nav.apps (см. ниже).
+const APPS_SUBMENU = `
+						<div class="dropdown-menu show">
+							<template x-for="app in $store.nav.apps" :key="app.id">
+								<a class="dropdown-item"
+									:class="{ active: app.id === $store.nav.activeAppId }"
+									:href="'application.html?id=' + app.id" x-text="app.name"></a>
+							</template>
+						</div>`;
+
 function sidebar(active, menu = MENU) {
 	const items = menu.map(
 		([key, href, icon, labelKey]) => `
@@ -31,7 +44,7 @@ function sidebar(active, menu = MENU) {
 						<a class="nav-link" href="${href}">
 							<span class="nav-link-icon"><i class="ti ${icon}"></i></span>
 							<span class="nav-link-title" x-text="$store.i18n.t('${labelKey}')"></span>
-						</a>
+						</a>${key === "apps" && menu === MENU ? APPS_SUBMENU : ""}
 					</li>`,
 	).join("");
 	return `<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
@@ -110,16 +123,45 @@ const TEMPLATES = {
 	"lang-corner": () => langCorner(),
 };
 
+let cabinetSidebar = false;
 for (const el of document.querySelectorAll("[data-layout]")) {
 	const render = TEMPLATES[el.dataset.layout];
 	if (render) {
+		cabinetSidebar = cabinetSidebar || el.dataset.layout === "sidebar";
 		el.outerHTML = render(el);
 	}
+}
+
+// Наполнение подменю приложений. Список грузится параллельно со страницей;
+// Alpine мог ещё не стартовать, поэтому данные кладутся в переменную,
+// а store подхватывает их при инициализации (или сразу, если уже жив).
+let apps = [];
+if (cabinetSidebar) {
+	import("./api.js")
+		.then(({ api }) => api("GET", "/v1/user/applications"))
+		.then((result) => {
+			apps = result.applications;
+			const nav = window.Alpine && window.Alpine.store("nav");
+			if (nav) {
+				nav.apps = apps;
+			}
+		})
+		.catch(() => {
+			// Меню — не место для баннеров: об ошибках (сеть, 401) честно
+			// сообщают сама страница и auth-guard, подменю просто пустое.
+		});
 }
 
 // Общие помощники отображения (статусы операций, даты) — одна точка
 // вместо копий в каждой странице.
 document.addEventListener("alpine:init", () => {
+	window.Alpine.store("nav", {
+		apps,
+		// Подсветка подпункта: id приложения из адреса страницы приложения.
+		activeAppId: location.pathname.endsWith("/application.html")
+			? Number(new URLSearchParams(location.search).get("id"))
+			: null,
+	});
 	window.Alpine.store("fmt", {
 		statusClass(status) {
 			return { confirmed: "bg-green-lt", pending: "bg-yellow-lt", failed: "bg-red-lt" }[status];
