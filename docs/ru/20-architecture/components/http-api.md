@@ -90,7 +90,7 @@ GET    /v1/user/confirm-email     ?token=…   (ссылка из письма; 
 POST   /v1/user/login             тело: {"identifier", "password", "remember"}
 POST   /v1/user/logout
 GET    /v1/user/me
-GET    /v1/user/networks          (поддерживаемые сети и семейства для выпадающих списков)
+GET    /v1/user/networks          (сети, семейства и шаблоны ссылок на обозреватель блоков)
 GET    /v1/user/wallets
 POST   /v1/user/wallets           тело: {"family", "xpub", "label"}
 POST   /v1/user/wallets/generate  тело: {"words", "families", "passphrase"}

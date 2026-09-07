@@ -169,7 +169,9 @@ opened; a forgotten passphrase means permanently lost access to the funds.
 - Filters above the table: wallet, network, asset, status.
 - Pagination is a "Show more" button: the next batch loads by a cursor strictly past
   the last shown row (new operations on top never shift anything).
-- Open question: linking a transaction to the network's block explorer.
+- The transaction id is a link to the network's block explorer (opens in a new tab);
+  the link templates come from the backend together with the network list, and networks
+  without a described explorer show plain text.
 
 ## Settings
 

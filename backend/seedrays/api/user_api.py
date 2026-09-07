@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.api.errors import ApiError
-from seedrays.chains import supported_networks
+from seedrays.chains import explorer_tx_url, supported_networks
 from seedrays.families import Family
 from seedrays.mail.base import MailSender
 from seedrays.mail.resend import ResendSender
@@ -358,7 +358,11 @@ def register_user_routes(
 		"""
 		return {
 			"networks": [
-				{"network": network, "family": family.value}
+				{
+					"network": network,
+					"family": family.value,
+					"explorer_tx": explorer_tx_url(network),
+				}
 				for network, family in sorted(supported_networks().items())
 			],
 			"families": [family.value for family in Family],

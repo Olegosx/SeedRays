@@ -247,5 +247,7 @@ def test_networks_and_families_come_from_backend(tmp_path: Path) -> None:
 			assert {n["network"] for n in data["networks"]} == {"tron", "tron-nile"}
 			assert all(n["family"] == "tron" for n in data["networks"])
 			assert set(data["families"]) == {"tron", "evm"}
+			# Шаблон ссылки на обозреватель блоков — с бэкенда, с местом под txid.
+			assert all("{txid}" in n["explorer_tx"] for n in data["networks"])
 
 	asyncio.run(scenario())

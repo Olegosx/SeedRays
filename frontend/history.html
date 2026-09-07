@@ -21,9 +21,15 @@
 		filter: { wallet: '', network: '', asset: '', status: '' },
 		wallets: [],
 		networks: [],
+		explorers: {},
 		assetOptions: [],
 		statuses: ['confirmed', 'pending', 'failed'],
 		loadError: '',
+		txUrl(row) {
+			// Шаблон обозревателя отдаёт бэкенд; без шаблона — просто текст.
+			const template = this.explorers[row.network];
+			return template ? template.replace('{txid}', row.txid) : null;
+		},
 		async load(cursor) {
 			// Фильтрует сервер: клиентская фильтрация усечённой выборки
 			// прятала бы операции старше первых строк.
@@ -58,8 +64,10 @@
 			try {
 				const { api } = await import('/js/api.js');
 				this.wallets = (await api('GET', '/v1/user/wallets')).wallets;
-				this.networks = (await api('GET', '/v1/user/networks')).networks
-					.map((n) => n.network);
+				const nets = (await api('GET', '/v1/user/networks')).networks;
+				this.networks = nets.map((n) => n.network);
+				this.explorers = Object.fromEntries(
+					nets.map((n) => [n.network, n.explorer_tx]));
 				await this.load();
 				// Варианты фильтра активов — из первой (нефильтрованной) выборки.
 				this.assetOptions = [...new Set(this.rows.map((r) => r.asset))];
@@ -148,8 +156,11 @@
 											<td x-text="row.asset"></td>
 											<td class="text-end font-monospace" x-text="row.amount"></td>
 											<td>
-												<a href="#" class="font-monospace"
+												<a x-show="txUrl(row)" :href="txUrl(row)" target="_blank"
+													rel="noopener" class="font-monospace"
 													x-text="row.txid.slice(0, 8) + '…'"></a>
+												<span x-show="!txUrl(row)" class="font-monospace text-secondary"
+													x-text="row.txid.slice(0, 8) + '…'"></span>
 											</td>
 											<td>
 												<span class="badge" :class="$store.fmt.statusClass(row.status)"

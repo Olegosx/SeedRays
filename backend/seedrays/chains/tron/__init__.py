@@ -14,6 +14,13 @@ NETWORK_BASE_URLS = {
 	"tron-nile": "https://nile.trongrid.io",
 }
 
+# Шаблоны ссылок на транзакцию в обозревателе блоков (Tronscan);
+# {txid} подставляет потребитель.
+EXPLORER_TX_URLS = {
+	"tron": "https://tronscan.org/#/transaction/{txid}",
+	"tron-nile": "https://nile.tronscan.org/#/transaction/{txid}",
+}
+
 
 def create_source(
 	network: str,

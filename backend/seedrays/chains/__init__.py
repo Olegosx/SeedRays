@@ -18,3 +18,12 @@ def supported_networks() -> dict[str, Family]:
 	использования — активные сети выбирает оператор (ADR-0015).
 	"""
 	return {network: Family.TRON for network in tron.NETWORK_BASE_URLS}
+
+
+def explorer_tx_url(network: str) -> str | None:
+	"""The network's block-explorer transaction link template (``{txid}``).
+
+	None — обозреватель для сети не описан; потребитель показывает
+	идентификатор без ссылки.
+	"""
+	return tron.EXPLORER_TX_URLS.get(network)
