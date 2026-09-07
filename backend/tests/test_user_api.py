@@ -6,7 +6,7 @@ from pathlib import Path
 import httpx
 
 from seedrays.api.app_api import create_app
-from seedrays.mail.base import MailSender
+from seedrays.mail.base import MailError, MailSender
 from seeding import FakeMailer, confirm_link, enable_dev_mail
 from seedrays.storage.migrations.runner import upgrade_registry
 
@@ -224,6 +224,32 @@ def test_validation_error_does_not_echo_input(tmp_path: Path) -> None:
 			assert response.json()["error"]["code"] == "validation"
 			assert "very-secret-password" not in response.text
 			assert "password" in response.json()["error"]["message"]
+
+	asyncio.run(scenario())
+
+
+class BrokenMailer(MailSender):
+	"""Always fails — models an outage of the mail provider."""
+
+	async def send(self, to: str, subject: str, text: str) -> None:
+		raise MailError("provider is down")
+
+
+def test_failed_registration_mail_is_compensated(tmp_path: Path) -> None:
+	"""A mail outage does not leave a dead half-registered account behind."""
+
+	async def scenario() -> None:
+		upgrade_registry(tmp_path)
+		async with _client(tmp_path, BrokenMailer()) as client:
+			failed = await client.post("/v1/user/register", json=GOOD_USER)
+			assert failed.status_code == 502
+			assert failed.json()["error"]["code"] == "mail_failed"
+
+		# Повтор после починки почты: ни логин, ни адрес не заняты.
+		await enable_dev_mail(tmp_path)
+		async with _client(tmp_path, None) as client:
+			retried = await client.post("/v1/user/register", json=GOOD_USER)
+			assert retried.status_code == 200, retried.text
 
 	asyncio.run(scenario())
 

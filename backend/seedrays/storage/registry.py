@@ -128,6 +128,13 @@ async def get_user_by_id(registry: AsyncEngine, user_id: int) -> UserRecord | No
 	return _user_record(row)
 
 
+async def delete_user_record(registry: AsyncEngine, user_id: int) -> None:
+	"""Remove a user row with their email rows (compensation of a failed registration)."""
+	async with registry.begin() as conn:
+		await conn.execute(delete(user_emails).where(user_emails.c.user_id == user_id))
+		await conn.execute(delete(users).where(users.c.id == user_id))
+
+
 async def set_user_password(registry: AsyncEngine, user_id: int, password_hash: str) -> None:
 	"""Replace the user's password hash."""
 	async with registry.begin() as conn:

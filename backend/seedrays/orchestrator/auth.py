@@ -119,16 +119,23 @@ async def register(
 	except ValueError as exc:
 		raise OperationError("username_taken", "this username is already taken") from exc
 
-	required = await _attach_email(
-		registry,
-		user_id=user.id,
-		address=email,
-		is_primary=True,
-		mailer=mailer,
-		confirm_base_url=confirm_base_url,
-		dev_autoconfirm=dev_autoconfirm,
-		message_intro="Follow the link to confirm your email and finish the registration:",
-	)
+	try:
+		required = await _attach_email(
+			registry,
+			user_id=user.id,
+			address=email,
+			is_primary=True,
+			mailer=mailer,
+			confirm_base_url=confirm_base_url,
+			dev_autoconfirm=dev_autoconfirm,
+			message_intro="Follow the link to confirm your email and finish the registration:",
+		)
+	except BaseException:
+		# Компенсация: без подтверждаемой почты учётка мертва (вход закрыт),
+		# а логин и адрес остались бы занятыми навсегда. Пустой каталог
+		# пользователя на диске остаётся сиротой — это безвредно.
+		await registry_ops.delete_user_record(registry, user.id)
+		raise
 	return RegisteredUser(
 		user_id=user.id, username=user.login, email=email, confirmation_required=required
 	)
