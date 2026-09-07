@@ -25,6 +25,7 @@ REGISTRY_TABLES = {
 	"user_emails",
 	"sessions",
 	"password_resets",
+	"operator_sessions",
 }
 USER_TABLES = {
 	"wallets",

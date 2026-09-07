@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en" data-title-key="op.usersPageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script type="module" src="js/operator-guard.js"></script>
+	<script type="module" src="js/layout.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		users: [],
+		loadError: '',
+		error: '',
+		confirmAction: '',
+		confirmUser: null,
+		tempPassword: null,
+		async load() {
+			const { api } = await import('/js/api.js');
+			this.users = (await api('GET', '/v1/operator/users')).users;
+		},
+		async init() {
+			try {
+				await this.load();
+			} catch (e) { this.loadError = this.$store.i18n.errorText(e); }
+		},
+		askConfirm(action, user) {
+			// Блокировка и сброс пароля — только через подтверждающий диалог.
+			this.confirmAction = action;
+			this.confirmUser = user;
+			new window.tabler.Modal(document.getElementById('modal-confirm')).show();
+		},
+		async confirmProceed() {
+			window.tabler.Modal.getOrCreateInstance(
+				document.getElementById('modal-confirm')).hide();
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				if (this.confirmAction === 'block') {
+					await api('POST', '/v1/operator/users/' + this.confirmUser.id + '/status',
+						{ status: 'blocked' });
+				} else if (this.confirmAction === 'reset') {
+					const result = await api('POST',
+						'/v1/operator/users/' + this.confirmUser.id + '/password-reset');
+					this.tempPassword = result.password;
+					new window.tabler.Modal(document.getElementById('modal-password')).show();
+				}
+				await this.load();
+			} catch (e) { this.error = this.$store.i18n.errorText(e); }
+			this.confirmAction = '';
+		},
+		async unblock(user) {
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api('POST', '/v1/operator/users/' + user.id + '/status',
+					{ status: 'active' });
+				await this.load();
+			} catch (e) { this.error = this.$store.i18n.errorText(e); }
+		},
+	}">
+		<div data-layout="op-sidebar" data-active="users"></div>
+
+		<div class="page-wrapper">
+			<div data-layout="op-topbar"></div>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<h2 class="page-title" x-text="$store.i18n.t('op.usersTitle')"></h2>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<div class="alert alert-danger" x-show="loadError" x-text="loadError"></div>
+					<div class="alert alert-danger" x-show="error" x-text="error"></div>
+					<div class="card">
+						<div class="table-responsive">
+							<table class="table table-vcenter card-table">
+								<thead>
+									<tr>
+										<th x-text="$store.i18n.t('op.colUser')"></th>
+										<th x-text="$store.i18n.t('op.colEmails')"></th>
+										<th x-text="$store.i18n.t('op.colStatus')"></th>
+										<th x-text="$store.i18n.t('op.colWallets')"></th>
+										<th x-text="$store.i18n.t('op.colCreated')"></th>
+										<th></th>
+									</tr>
+								</thead>
+								<tbody>
+									<template x-for="user in users" :key="user.id">
+										<tr>
+											<td class="font-monospace" x-text="user.username"></td>
+											<td>
+												<template x-for="email in user.emails">
+													<div>
+														<span x-text="email.address"></span>
+														<span class="badge bg-yellow-lt ms-1" x-show="!email.confirmed"
+															x-text="$store.i18n.t('settings.emailUnconfirmed')"></span>
+													</div>
+												</template>
+											</td>
+											<td>
+												<span class="badge"
+													:class="user.status === 'active' ? 'bg-green-lt' : 'bg-red-lt'"
+													x-text="user.status === 'active'
+														? $store.i18n.t('op.statusActive')
+														: $store.i18n.t('op.statusBlocked')"></span>
+											</td>
+											<td x-text="user.wallets === null ? '—' : user.wallets"></td>
+											<td class="text-secondary"
+												x-text="user.created_at ? user.created_at.slice(0, 10) : ''"></td>
+											<td class="text-end">
+												<div class="btn-list flex-nowrap justify-content-end">
+													<button type="button" class="btn btn-sm btn-outline-danger"
+														x-show="user.status === 'active'"
+														@click="askConfirm('block', user)"
+														x-text="$store.i18n.t('op.block')"></button>
+													<button type="button" class="btn btn-sm btn-outline-primary"
+														x-show="user.status !== 'active'" @click="unblock(user)"
+														x-text="$store.i18n.t('op.unblock')"></button>
+													<button type="button" class="btn btn-sm btn-outline-secondary"
+														@click="askConfirm('reset', user)"
+														x-text="$store.i18n.t('op.resetPassword')"></button>
+												</div>
+											</td>
+										</tr>
+									</template>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Подтверждение опасных действий над пользователем -->
+		<div class="modal" id="modal-confirm" tabindex="-1">
+			<div class="modal-dialog modal-sm modal-dialog-centered" role="document">
+				<div class="modal-content">
+					<div class="modal-status bg-danger"></div>
+					<div class="modal-body text-center py-4">
+						<i class="ti ti-alert-triangle text-danger mb-2" style="font-size: 3rem;"></i>
+						<h3 x-text="confirmAction === 'block'
+							? $store.i18n.t('op.confirmBlockTitle')
+							: $store.i18n.t('op.confirmResetTitle')"></h3>
+						<div class="mb-2 font-monospace"
+							x-text="confirmUser ? confirmUser.username : ''"></div>
+						<div class="text-secondary" x-text="confirmAction === 'block'
+							? $store.i18n.t('op.confirmBlockText')
+							: $store.i18n.t('op.confirmResetText')"></div>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal"
+							x-text="$store.i18n.t('confirm.cancel')"></button>
+						<button type="button" class="btn btn-danger" @click="confirmProceed()"
+							x-text="confirmAction === 'block'
+								? $store.i18n.t('op.confirmBlockGo')
+								: $store.i18n.t('op.confirmResetGo')"></button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Показ временного пароля (один раз) -->
+		<div class="modal" id="modal-password" tabindex="-1">
+			<div class="modal-dialog" role="document">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" x-text="$store.i18n.t('op.tempPasswordTitle')"></h5>
+					</div>
+					<div class="modal-body">
+						<div class="alert alert-warning" x-text="$store.i18n.t('op.tempPasswordText')"></div>
+						<input type="text" class="form-control font-monospace" :value="tempPassword" readonly>
+					</div>
+					<div class="modal-footer">
+						<button type="button" class="btn btn-primary" data-bs-dismiss="modal"
+							@click="tempPassword = null" x-text="$store.i18n.t('appkey.done')"></button>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script src="vendor/tabler/tabler.min.js" defer></script>
+</body>
+</html>

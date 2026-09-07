@@ -22,6 +22,8 @@ from seedrays.storage.migrations.runner import upgrade_user_db
 from seedrays.storage.schema_registry import (
 	api_keys,
 	assets,
+	operator_sessions,
+	operators,
 	password_resets,
 	sessions,
 	settings,
@@ -41,6 +43,7 @@ class UserRecord:
 	password_hash: str
 	status: str
 	directory: str
+	created_at: datetime | None = None
 
 
 async def create_user(
@@ -99,6 +102,7 @@ def _user_record(row) -> UserRecord:
 		password_hash=row.password_hash,
 		status=row.status,
 		directory=row.directory,
+		created_at=row.created_at,
 	)
 
 
@@ -373,6 +377,148 @@ async def consume_password_reset(
 			delete(password_resets).where(password_resets.c.id == row.id)
 		)
 	return row.user_id
+
+
+@dataclass(frozen=True)
+class OperatorRecord:
+	"""An operator row from the registry."""
+
+	id: int
+	login: str
+	password_hash: str
+	status: str
+
+
+def _operator_record(row) -> OperatorRecord:
+	return OperatorRecord(
+		id=row.id, login=row.login, password_hash=row.password_hash, status=row.status
+	)
+
+
+async def create_operator(registry: AsyncEngine, login: str, password_hash: str) -> int:
+	"""Create an operator account; returns its id.
+
+	Raises:
+		ValueError: If the login is already taken.
+	"""
+	try:
+		async with registry.begin() as conn:
+			result = await conn.execute(
+				insert(operators).values(login=login, password_hash=password_hash)
+			)
+	except IntegrityError as exc:
+		if unique_violation(exc) != "operators.login":
+			raise  # иная ошибка целостности — не «логин занят»
+		raise ValueError(f"operator login already taken: {login!r}") from exc
+	return result.inserted_primary_key[0]
+
+
+async def get_operator_by_login(registry: AsyncEngine, login: str) -> OperatorRecord | None:
+	"""Fetch an operator by login; None if unknown."""
+	async with registry.connect() as conn:
+		row = (await conn.execute(select(operators).where(operators.c.login == login))).first()
+	return None if row is None else _operator_record(row)
+
+
+async def get_operator_by_id(registry: AsyncEngine, operator_id: int) -> OperatorRecord | None:
+	"""Fetch an operator by id; None if unknown."""
+	async with registry.connect() as conn:
+		row = (
+			await conn.execute(select(operators).where(operators.c.id == operator_id))
+		).first()
+	return None if row is None else _operator_record(row)
+
+
+async def set_operator_password(
+	registry: AsyncEngine, operator_id: int, password_hash: str
+) -> None:
+	"""Replace the operator's password hash."""
+	async with registry.begin() as conn:
+		await conn.execute(
+			update(operators)
+			.where(operators.c.id == operator_id)
+			.values(password_hash=password_hash)
+		)
+
+
+async def create_operator_session(
+	registry: AsyncEngine,
+	*,
+	operator_id: int,
+	token_hash: str,
+	csrf_token: str,
+	expires_at: datetime,
+) -> None:
+	"""Store a new operator-panel session."""
+	async with registry.begin() as conn:
+		await conn.execute(
+			insert(operator_sessions).values(
+				operator_id=operator_id,
+				token_hash=token_hash,
+				csrf_token=csrf_token,
+				expires_at=expires_at,
+			)
+		)
+
+
+async def get_operator_session_by_token_hash(
+	registry: AsyncEngine, token_hash: str, *, now: datetime
+):
+	"""Resolve an unexpired operator session row; None otherwise."""
+	async with registry.connect() as conn:
+		return (
+			await conn.execute(
+				select(operator_sessions).where(
+					operator_sessions.c.token_hash == token_hash,
+					operator_sessions.c.expires_at >= now,
+				)
+			)
+		).first()
+
+
+async def delete_operator_session(registry: AsyncEngine, token_hash: str) -> None:
+	"""Drop one operator session (sign-out)."""
+	async with registry.begin() as conn:
+		await conn.execute(
+			delete(operator_sessions).where(operator_sessions.c.token_hash == token_hash)
+		)
+
+
+async def delete_operator_sessions(
+	registry: AsyncEngine, operator_id: int, *, keep_token_hash: str | None = None
+) -> None:
+	"""Drop the operator's sessions; optionally keep the current one."""
+	query = delete(operator_sessions).where(
+		operator_sessions.c.operator_id == operator_id
+	)
+	if keep_token_hash is not None:
+		query = query.where(operator_sessions.c.token_hash != keep_token_hash)
+	async with registry.begin() as conn:
+		await conn.execute(query)
+
+
+async def set_user_status(registry: AsyncEngine, user_id: int, status: str) -> None:
+	"""Set a gateway user's status (active / blocked)."""
+	async with registry.begin() as conn:
+		await conn.execute(update(users).where(users.c.id == user_id).values(status=status))
+
+
+async def list_emails_by_users(
+	registry: AsyncEngine, user_ids: list[int]
+) -> dict[int, list[EmailRecord]]:
+	"""user id → their email rows (the operator's user list)."""
+	if not user_ids:
+		return {}
+	async with registry.connect() as conn:
+		rows = (
+			await conn.execute(
+				select(user_emails).where(user_emails.c.user_id.in_(user_ids))
+			)
+		).all()
+	result: dict[int, list[EmailRecord]] = {}
+	for row in rows:
+		result.setdefault(row.user_id, []).append(_email_record(row))
+	return result
 
 
 # Виды активов каталога (ADR-0010) — единственная точка правды для сравнений.

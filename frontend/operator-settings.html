@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="en" data-title-key="op.settingsPageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script type="module" src="js/operator-guard.js"></script>
+	<script type="module" src="js/layout.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		values: {},
+		secretsSet: {},
+		devMode: false,
+		watcherRows: [],
+		loadError: '',
+		error: '',
+		saved: false,
+		pass: { current: '', next: '', repeat: '' },
+		passMismatch: false,
+		passChanged: false,
+		passError: '',
+		async init() {
+			try {
+				const { api } = await import('/js/api.js');
+				const data = await api('GET', '/v1/operator/settings');
+				for (const setting of data.settings) {
+					if (setting.secret) {
+						this.secretsSet[setting.key] = setting.set;
+						this.values[setting.key] = '';
+					} else {
+						this.values[setting.key] = setting.value;
+					}
+				}
+				this.devMode = this.values['mail.dev_autoconfirm'] === '1';
+				this.watcherRows = (await api('GET', '/v1/operator/watcher')).networks;
+			} catch (e) { this.loadError = this.$store.i18n.errorText(e); }
+		},
+		async save() {
+			this.error = '';
+			this.saved = false;
+			try {
+				const { api } = await import('/js/api.js');
+				this.values['mail.dev_autoconfirm'] = this.devMode ? '1' : '';
+				const data = await api('PUT', '/v1/operator/settings', { values: this.values });
+				for (const setting of data.settings) {
+					if (setting.secret) {
+						this.secretsSet[setting.key] = setting.set;
+						this.values[setting.key] = '';
+					}
+				}
+				this.saved = true;
+			} catch (e) { this.error = this.$store.i18n.errorText(e); }
+		},
+		async changePassword() {
+			this.passMismatch = this.pass.next !== this.pass.repeat;
+			this.passChanged = false;
+			this.passError = '';
+			if (this.passMismatch) { return; }
+			try {
+				const { api } = await import('/js/api.js');
+				await api('POST', '/v1/operator/password', {
+					current_password: this.pass.current,
+					new_password: this.pass.next,
+				});
+				this.passChanged = true;
+				this.pass = { current: '', next: '', repeat: '' };
+			} catch (e) { this.passError = this.$store.i18n.errorText(e); }
+		},
+	}">
+		<div data-layout="op-sidebar" data-active="settings"></div>
+
+		<div class="page-wrapper">
+			<div data-layout="op-topbar"></div>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<h2 class="page-title" x-text="$store.i18n.t('op.settingsTitle')"></h2>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<div class="alert alert-danger" x-show="loadError" x-text="loadError"></div>
+					<div class="row row-cards mx-auto" style="max-width: 44rem">
+						<!-- Настройки шлюза: провайдер, почта, watcher -->
+						<div class="col-12">
+							<form @submit.prevent="save()">
+								<div class="card mb-3">
+									<div class="card-header">
+										<h3 class="card-title" x-text="$store.i18n.t('op.secTron')"></h3>
+									</div>
+									<div class="card-body">
+										<div class="mb-3">
+											<label class="form-label">
+												<span x-text="$store.i18n.t('op.keyLabel')"></span>
+												<span class="badge ms-1"
+													:class="secretsSet['provider.trongrid.api_key']
+														? 'bg-green-lt' : 'bg-secondary-lt'"
+													x-text="secretsSet['provider.trongrid.api_key']
+														? $store.i18n.t('op.keySet') : $store.i18n.t('op.keyUnset')"></span>
+											</label>
+											<input type="password" class="form-control font-monospace"
+												x-model="values['provider.trongrid.api_key']"
+												:placeholder="$store.i18n.t('op.secretPlaceholder')" autocomplete="off">
+										</div>
+										<div class="mb-2">
+											<label class="form-label" x-text="$store.i18n.t('op.rateLabel')"></label>
+											<input type="text" class="form-control"
+												x-model="values['provider.trongrid.rate_per_sec']">
+										</div>
+									</div>
+								</div>
+
+								<div class="card mb-3">
+									<div class="card-header">
+										<h3 class="card-title" x-text="$store.i18n.t('op.secMail')"></h3>
+									</div>
+									<div class="card-body">
+										<div class="mb-3">
+											<label class="form-label">
+												<span x-text="$store.i18n.t('op.keyLabel')"></span>
+												<span class="badge ms-1"
+													:class="secretsSet['mail.resend.api_key']
+														? 'bg-green-lt' : 'bg-secondary-lt'"
+													x-text="secretsSet['mail.resend.api_key']
+														? $store.i18n.t('op.keySet') : $store.i18n.t('op.keyUnset')"></span>
+											</label>
+											<input type="password" class="form-control font-monospace"
+												x-model="values['mail.resend.api_key']"
+												:placeholder="$store.i18n.t('op.secretPlaceholder')" autocomplete="off">
+										</div>
+										<div class="mb-3">
+											<label class="form-label" x-text="$store.i18n.t('op.mailFrom')"></label>
+											<input type="text" class="form-control" x-model="values['mail.from']"
+												placeholder="SeedRays <no-reply@example.com>">
+										</div>
+										<div class="mb-3">
+											<label class="form-label" x-text="$store.i18n.t('op.baseUrl')"></label>
+											<input type="text" class="form-control"
+												x-model="values['gateway.base_url']" placeholder="https://gateway.example.com">
+										</div>
+										<label class="form-check">
+											<input type="checkbox" class="form-check-input" x-model="devMode">
+											<span class="form-check-label" x-text="$store.i18n.t('op.devMode')"></span>
+										</label>
+									</div>
+								</div>
+
+								<div class="card mb-3">
+									<div class="card-header">
+										<h3 class="card-title" x-text="$store.i18n.t('op.secWatcher')"></h3>
+									</div>
+									<div class="card-body">
+										<div class="mb-3">
+											<label class="form-label" x-text="$store.i18n.t('op.intervalLabel')"></label>
+											<input type="text" class="form-control"
+												x-model="values['watcher.interval_seconds']">
+										</div>
+										<div class="mb-2">
+											<label class="form-label" x-text="$store.i18n.t('op.overlapLabel')"></label>
+											<input type="text" class="form-control"
+												x-model="values['watcher.overlap_minutes']">
+										</div>
+									</div>
+								</div>
+
+								<div class="alert alert-danger" x-show="error" x-text="error"></div>
+								<div class="d-flex align-items-center gap-2 mb-3">
+									<button type="submit" class="btn btn-primary"
+										x-text="$store.i18n.t('op.save')"></button>
+									<span class="text-success" x-show="saved"
+										x-text="$store.i18n.t('op.saved')"></span>
+								</div>
+							</form>
+						</div>
+
+						<!-- Состояние watcher (только чтение) -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('op.secWatcherStatus')"></h3>
+								</div>
+								<div class="table-responsive">
+									<table class="table table-vcenter card-table">
+										<thead>
+											<tr>
+												<th x-text="$store.i18n.t('op.colNetwork')"></th>
+												<th x-text="$store.i18n.t('op.colLastBlock')"></th>
+												<th x-text="$store.i18n.t('op.colLastScan')"></th>
+											</tr>
+										</thead>
+										<tbody>
+											<template x-for="row in watcherRows">
+												<tr>
+													<td><span class="badge bg-blue-lt" x-text="row.network"></span></td>
+													<td x-text="row.last_block === null
+														? $store.i18n.t('op.never') : row.last_block"></td>
+													<td class="text-secondary" x-text="row.last_scan_at
+														|| $store.i18n.t('op.never')"></td>
+												</tr>
+											</template>
+										</tbody>
+									</table>
+								</div>
+							</div>
+						</div>
+
+						<!-- Смена пароля оператора -->
+						<div class="col-12">
+							<div class="card">
+								<div class="card-header">
+									<h3 class="card-title" x-text="$store.i18n.t('op.secPassword')"></h3>
+								</div>
+								<div class="card-body">
+									<div class="alert alert-danger" x-show="passError" x-text="passError"></div>
+									<form @submit.prevent="changePassword()">
+										<div class="mb-3">
+											<label class="form-label"
+												x-text="$store.i18n.t('settings.currentPassword')"></label>
+											<input type="password" class="form-control" x-model="pass.current"
+												autocomplete="current-password">
+										</div>
+										<div class="mb-3">
+											<label class="form-label"
+												x-text="$store.i18n.t('settings.newPassword')"></label>
+											<input type="password" class="form-control" x-model="pass.next"
+												autocomplete="new-password">
+										</div>
+										<div class="mb-3">
+											<label class="form-label"
+												x-text="$store.i18n.t('settings.repeatPassword')"></label>
+											<input type="password" class="form-control"
+												:class="{ 'is-invalid': passMismatch }" x-model="pass.repeat"
+												autocomplete="new-password">
+											<div class="invalid-feedback" x-show="passMismatch"
+												x-text="$store.i18n.t('newpass.mismatch')"></div>
+										</div>
+										<div class="d-flex align-items-center gap-2">
+											<button type="submit" class="btn btn-primary"
+												x-text="$store.i18n.t('settings.changePassword')"></button>
+											<span class="text-success" x-show="passChanged"
+												x-text="$store.i18n.t('settings.passwordChanged')"></span>
+										</div>
+									</form>
+								</div>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script src="vendor/tabler/tabler.min.js" defer></script>
+</body>
+</html>

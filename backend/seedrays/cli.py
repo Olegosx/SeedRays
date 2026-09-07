@@ -69,6 +69,11 @@ def build_parser() -> argparse.ArgumentParser:
 		"serve",
 		help="run the gateway: API server + watcher (SEEDRAYS_DATA_DIR, SEEDRAYS_BIND)",
 	)
+	operator = subparsers.add_parser(
+		"operator-create",
+		help="create an operator account (interactive; SEEDRAYS_DATA_DIR)",
+	)
+	operator.add_argument("--login", required=True, help="operator login (3-64 chars)")
 	return parser
 
 
@@ -162,6 +167,40 @@ def _cmd_serve() -> int:
 	return 0
 
 
+def _cmd_operator_create(args: argparse.Namespace) -> int:
+	"""Create an operator account: the console bootstrap of the panel."""
+	from seedrays.orchestrator.operations import OperationError
+	from seedrays.orchestrator.operator import create_operator
+	from seedrays.storage.engine import create_sqlite_engine, registry_db_path
+	from seedrays.storage.migrations.runner import upgrade_registry
+
+	data_dir = _service_prologue()
+	if data_dir is None:
+		return 2
+	# Пароль — только скрытым вводом: аргументы процесса видны всей системе.
+	password = getpass.getpass("Operator password: ")
+	if password != getpass.getpass("Repeat password: "):
+		print("error: passwords do not match", file=sys.stderr)
+		return 2
+
+	async def run_create() -> int:
+		upgrade_registry(data_dir)
+		registry = create_sqlite_engine(registry_db_path(data_dir))
+		try:
+			operator_id = await create_operator(
+				registry, login=args.login, password=password
+			)
+		except OperationError as exc:
+			print(f"error: {exc.message}", file=sys.stderr)
+			return 2
+		finally:
+			await registry.dispose()
+		print(f"operator {args.login!r} created (id {operator_id})")
+		return 0
+
+	return asyncio.run(run_create())
+
+
 def main(argv: list[str] | None = None) -> int:
 	"""Run the CLI.
 
@@ -180,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
 		return _cmd_watch()
 	if args.command == "serve":
 		return _cmd_serve()
+	if args.command == "operator-create":
+		return _cmd_operator_create(args)
 	# argparse с required=True не пропустит незарегистрированную команду.
 	raise AssertionError(f"unhandled command {args.command!r}")
 

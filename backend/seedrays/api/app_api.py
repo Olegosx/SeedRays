@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.api.errors import ApiError, register_error_handlers
+from seedrays.api.operator_api import register_operator_routes
 from seedrays.api.user_api import register_user_routes
 from seedrays.mail.base import MailSender
 from seedrays.orchestrator import operations as ops
@@ -59,6 +60,7 @@ def create_app(
 	app = FastAPI(title="SeedRays API", version="1")
 	register_error_handlers(app)
 	register_user_routes(app, data_dir, mailer=mailer)
+	register_operator_routes(app, data_dir)
 
 	async def caller(
 		x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,

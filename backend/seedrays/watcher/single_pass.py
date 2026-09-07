@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -129,10 +128,9 @@ async def run_pass(
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	user_engines: list[AsyncEngine] = []
 	try:
+		# Ключ провайдера — только из настроек реестра (ADR-0016);
+		# вносится оператором через панель.
 		api_key = await registry_ops.get_setting(registry, SETTING_API_KEY)
-		if api_key is None:
-			# ВРЕМЕННЫЙ обход до панели оператора: ключ из окружения (ADR-0016).
-			api_key = os.environ.get("TRONGRID_API_KEY")
 		rate = await read_float_setting(registry, SETTING_RATE, DEFAULT_RATE_PER_SEC)
 		interval = 1.0 / rate if rate > 0 else 0.0
 		overlap = timedelta(

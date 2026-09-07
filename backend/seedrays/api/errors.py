@@ -51,6 +51,8 @@ _OPERATION_STATUS = {
 	"cannot_remove_primary": 400,
 	"invalid_token": 400,
 	"invalid_cursor": 400,
+	"unknown_user": 404,
+	"unknown_setting": 400,
 }
 
 

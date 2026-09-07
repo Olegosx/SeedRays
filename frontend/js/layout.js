@@ -18,8 +18,14 @@ const MENU = [
 	["settings", "settings.html", "ti-settings", "menu.settings"],
 ];
 
-function sidebar(active) {
-	const items = MENU.map(
+// Боковое меню панели оператора (см. docs, operator-panel).
+const MENU_OPERATOR = [
+	["users", "operator-users.html", "ti-users", "op.menuUsers"],
+	["settings", "operator-settings.html", "ti-settings", "op.menuSettings"],
+];
+
+function sidebar(active, menu = MENU) {
+	const items = menu.map(
 		([key, href, icon, labelKey]) => `
 					<li class="nav-item${key === active ? " active" : ""}">
 						<a class="nav-link" href="${href}">
@@ -45,7 +51,7 @@ function sidebar(active) {
 	</aside>`;
 }
 
-function topbar() {
+function topbar(settingsHref = "settings.html", loginHref = "login.html") {
 	return `<header class="navbar navbar-expand-md d-print-none" x-cloak x-data>
 		<div class="container-xl justify-content-end">
 			<div class="navbar-nav flex-row align-items-center">
@@ -67,9 +73,9 @@ function topbar() {
 						<span class="ps-2" data-username></span>
 					</a>
 					<div class="dropdown-menu dropdown-menu-end">
-						<a class="dropdown-item" href="settings.html"
+						<a class="dropdown-item" href="${settingsHref}"
 							x-text="$store.i18n.t('menu.settings')"></a>
-						<a class="dropdown-item" href="login.html" data-logout
+						<a class="dropdown-item" href="${loginHref}" data-logout
 							x-text="$store.i18n.t('menu.logout')"></a>
 					</div>
 				</div>
@@ -99,6 +105,8 @@ function langCorner() {
 const TEMPLATES = {
 	sidebar: (el) => sidebar(el.dataset.active),
 	topbar: () => topbar(),
+	"op-sidebar": (el) => sidebar(el.dataset.active, MENU_OPERATOR),
+	"op-topbar": () => topbar("operator-settings.html", "operator-login.html"),
 	"lang-corner": () => langCorner(),
 };
 

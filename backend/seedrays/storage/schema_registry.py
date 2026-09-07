@@ -88,6 +88,20 @@ user_emails = Table(
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
 )
 
+# Сессии панели оператора — зеркало пользовательских сессий, но отдельной
+# таблицей: группы маршрутов и куки операторов и пользователей не пересекаются
+# (структурная граница ADR-0004).
+operator_sessions = Table(
+	"operator_sessions",
+	metadata,
+	Column("id", Integer, primary_key=True),
+	Column("token_hash", String(128), nullable=False, unique=True),
+	Column("operator_id", Integer, ForeignKey("operators.id"), nullable=False),
+	Column("csrf_token", String(64), nullable=False),
+	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+	Column("expires_at", DateTime, nullable=False),
+)
+
 # Токены сброса пароля: в письме — одноразовый токен, в базе — его отпечаток
 # SHA-256 со сроком действия. У пользователя живёт не больше одного действующего
 # токена: новый запрос вытесняет прежний.
