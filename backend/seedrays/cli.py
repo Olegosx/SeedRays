@@ -74,6 +74,15 @@ def build_parser() -> argparse.ArgumentParser:
 		help="create an operator account (interactive; SEEDRAYS_DATA_DIR)",
 	)
 	operator.add_argument("--login", required=True, help="operator login (3-64 chars)")
+	restore = subparsers.add_parser(
+		"user-restore",
+		help="restore a deleted user from an archive directory (SEEDRAYS_DATA_DIR)",
+	)
+	restore.add_argument(
+		"--archive",
+		required=True,
+		help="archive directory created by the deletion (archive/<dir>-<date>)",
+	)
 	return parser
 
 
@@ -201,6 +210,37 @@ def _cmd_operator_create(args: argparse.Namespace) -> int:
 	return asyncio.run(run_create())
 
 
+def _cmd_user_restore(args: argparse.Namespace) -> int:
+	"""Restore a deleted user from an archive directory (server console only)."""
+	from seedrays.orchestrator.operations import OperationError
+	from seedrays.orchestrator.operator import restore_user
+	from seedrays.storage.engine import create_sqlite_engine, registry_db_path
+	from seedrays.storage.migrations.runner import upgrade_registry
+
+	data_dir = _service_prologue()
+	if data_dir is None:
+		return 2
+	archive_dir = Path(args.archive)
+
+	async def run_restore() -> int:
+		upgrade_registry(data_dir)
+		registry = create_sqlite_engine(registry_db_path(data_dir))
+		try:
+			login = await restore_user(registry, data_dir, archive_dir=archive_dir)
+		except OperationError as exc:
+			print(f"error: {exc.message}", file=sys.stderr)
+			return 2
+		finally:
+			await registry.dispose()
+		print(
+			f"user {login!r} restored (status is kept as it was on deletion;"
+			" unblock from the operator panel)"
+		)
+		return 0
+
+	return asyncio.run(run_restore())
+
+
 def main(argv: list[str] | None = None) -> int:
 	"""Run the CLI.
 
@@ -221,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
 		return _cmd_serve()
 	if args.command == "operator-create":
 		return _cmd_operator_create(args)
+	if args.command == "user-restore":
+		return _cmd_user_restore(args)
 	# argparse с required=True не пропустит незарегистрированную команду.
 	raise AssertionError(f"unhandled command {args.command!r}")
 

@@ -182,6 +182,7 @@ POST /v1/operator/password   body: {"current_password", "new_password"}
 GET  /v1/operator/users
 POST /v1/operator/users/{id}/status          body: {"status": "active"|"blocked"}
 POST /v1/operator/users/{id}/password-reset  → a temporary password (once)
+POST /v1/operator/users/{id}/delete          body: {"username"} (the login retyped by the operator)
 GET  /v1/operator/settings
 PUT  /v1/operator/settings   body: {"values": {key: value}}
 GET  /v1/operator/watcher    (per-network watcher cursors, read-only)
@@ -195,6 +196,11 @@ GET  /v1/operator/watcher    (per-network watcher cursors, read-only)
 - Secret settings never appear in answers — only a "set" flag; an empty secret on save
   means "keep". Blocking a user terminates their sessions, and their applications lose
   Application API access immediately.
+- User deletion ([ADR-0024](../decisions/0024-user-deletion-archive.md)) works only on
+  a blocked user (`user_not_blocked` otherwise); the submitted `username` is checked
+  against the login of the user being deleted (`username_mismatch` on divergence).
+  The data moves into a server-side archive; restoring is the `seedrays user-restore`
+  console command.
 
 ## Detailed Specifications
 

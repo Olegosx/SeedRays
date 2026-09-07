@@ -45,6 +45,7 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0021: Two-Phase Scanning — Finalized Authority with a Provisional Preview](20-architecture/decisions/0021-two-phase-scanning.md)
     - [ADR-0022: Anonymous Auth Endpoints Behind a Self-Hosted Proof-of-Work Captcha](20-architecture/decisions/0022-pow-captcha.md)
     - [ADR-0023: Security Event Journal — Precise Inside, Neutral Outside](20-architecture/decisions/0023-security-journal.md)
+    - [ADR-0024: User Deletion — Two-Step, Through a Server-Side Archive](20-architecture/decisions/0024-user-deletion-archive.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)

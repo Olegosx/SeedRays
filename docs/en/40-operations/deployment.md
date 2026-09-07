@@ -54,7 +54,7 @@ everything else is a registry setting managed from the operator panel.
 
 | Variable | Required | Meaning |
 |----------|----------|---------|
-| `SEEDRAYS_DATA_DIR` | yes | The data directory: the registry database, per-user databases, `logs/security.log`. |
+| `SEEDRAYS_DATA_DIR` | yes | The data directory: the registry database, per-user databases, the deleted-user archive (`archive/`), `logs/security.log`. |
 | `SEEDRAYS_BIND` | no | API bind address, `host:port`; default `127.0.0.1:8080`. Keep it on localhost — the reverse proxy is the public face. |
 | `SEEDRAYS_FRONTEND_DIR` | no | Static frontend directory; by default the `frontend/` directory of the repository checkout is served. |
 
@@ -238,7 +238,9 @@ after a restart" (trusted proxies, journal rotation) pick up their values here t
 ## Backup
 
 What to back up: the entire data directory — the registry database, the per-user
-databases and, if desired, the security journal. The seed phrase is **not** part of
+databases, the deleted-user archive (`archive/`,
+[ADR-0024](../20-architecture/decisions/0024-user-deletion-archive.md)) and, if
+desired, the security journal. The seed phrase is **not** part of
 any backup: the gateway never stores it ([ADR-0002](../20-architecture/decisions/0002-watch-only-online-part.md));
 losing the server loses no funds, and balances are recomputable from the chain by a
 fresh install with the same xpubs.

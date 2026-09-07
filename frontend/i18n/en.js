@@ -26,6 +26,8 @@ export const en = {
 	"errors.mail_failed": "Could not send the email — try again later.",
 	"errors.mail_not_configured": "The gateway's outgoing mail is not configured yet — contact the operator.",
 	"errors.rate_limited": "Too many attempts — wait a little and try again.",
+	"errors.user_not_blocked": "Block the user first — only blocked users can be deleted.",
+	"errors.username_mismatch": "The typed name does not match the user being deleted.",
 	"errors.captcha_failed": "The robot-protection check failed — please try again.",
 	"errors.network": "No connection to the server.",
 	"errors.invalid_xpub": "This xpub was not accepted — check that it is a valid account-level xpub.",
@@ -196,6 +198,12 @@ export const en = {
 	"op.confirmResetText":
 		"The current password stops working and every session of the user is terminated. The new temporary password will be shown once.",
 	"op.confirmResetGo": "Reset",
+	"op.deleteUser": "Delete",
+	"op.confirmDeleteTitle": "Delete this user?",
+	"op.confirmDeleteText":
+		"The account, wallets and history move into a server-side archive; the user disappears from the gateway and their name, emails and keys become free. Restoring is possible only with a server console command.",
+	"op.confirmDeleteType": "Type the username to confirm",
+	"op.confirmDeleteGo": "Delete",
 	"op.tempPasswordTitle": "Temporary password",
 	"op.tempPasswordText":
 		"Shown once. Hand it to the user through a trusted channel and ask them to change it in the cabinet settings.",

@@ -139,6 +139,154 @@ async def delete_user_record(registry: AsyncEngine, user_id: int) -> None:
 		await conn.execute(delete(users).where(users.c.id == user_id))
 
 
+def _dt_str(value: datetime | None) -> str | None:
+	"""Serialize a storage datetime for the user-deletion archive."""
+	return None if value is None else value.isoformat(sep=" ")
+
+
+def _dt_parse(value: str | None) -> datetime | None:
+	"""Parse a datetime back from the user-deletion archive."""
+	return None if value is None else datetime.fromisoformat(value)
+
+
+async def read_user_bundle(registry: AsyncEngine, user_id: int) -> dict | None:
+	"""Snapshot every registry row of one user (the user-deletion archive).
+
+	Sessions and password-reset tokens are deliberately not part of the
+	bundle: they are dropped on deletion and a restored user simply signs
+	in again.
+
+	Args:
+		registry: Engine of the shared registry database.
+		user_id: The user being archived.
+
+	Returns:
+		A JSON-serializable dict of the user's rows, or None for an
+		unknown user.
+	"""
+	async with registry.connect() as conn:
+		user_row = (await conn.execute(select(users).where(users.c.id == user_id))).first()
+		if user_row is None:
+			return None
+		email_rows = (
+			await conn.execute(select(user_emails).where(user_emails.c.user_id == user_id))
+		).all()
+		xpub_rows = (
+			await conn.execute(select(wallet_xpubs).where(wallet_xpubs.c.user_id == user_id))
+		).all()
+		key_rows = (
+			await conn.execute(select(api_keys).where(api_keys.c.user_id == user_id))
+		).all()
+	return {
+		"user": {
+			"id": user_row.id,
+			"login": user_row.login,
+			"password_hash": user_row.password_hash,
+			"status": user_row.status,
+			"directory": user_row.directory,
+			"created_at": _dt_str(user_row.created_at),
+		},
+		"emails": [
+			{
+				"id": row.id,
+				"address": row.address,
+				"is_primary": row.is_primary,
+				"confirmed_at": _dt_str(row.confirmed_at),
+				"confirm_token_hash": row.confirm_token_hash,
+				"confirm_expires_at": _dt_str(row.confirm_expires_at),
+				"created_at": _dt_str(row.created_at),
+			}
+			for row in email_rows
+		],
+		"wallet_xpubs": [
+			{"id": row.id, "xpub_hash": row.xpub_hash, "created_at": _dt_str(row.created_at)}
+			for row in xpub_rows
+		],
+		"api_keys": [
+			{"id": row.id, "key_hash": row.key_hash, "created_at": _dt_str(row.created_at)}
+			for row in key_rows
+		],
+	}
+
+
+async def delete_user_bundle(registry: AsyncEngine, user_id: int) -> None:
+	"""Drop every registry row of one user in one transaction.
+
+	Дочерние строки удаляются раньше строки ``users`` — внешние ключи
+	включены (PRAGMA foreign_keys=ON), иначе удаление отвергнет база.
+	"""
+	async with registry.begin() as conn:
+		await conn.execute(delete(password_resets).where(password_resets.c.user_id == user_id))
+		await conn.execute(delete(sessions).where(sessions.c.user_id == user_id))
+		await conn.execute(delete(api_keys).where(api_keys.c.user_id == user_id))
+		await conn.execute(delete(wallet_xpubs).where(wallet_xpubs.c.user_id == user_id))
+		await conn.execute(delete(user_emails).where(user_emails.c.user_id == user_id))
+		await conn.execute(delete(users).where(users.c.id == user_id))
+
+
+async def restore_user_bundle(registry: AsyncEngine, bundle: dict) -> None:
+	"""Re-insert the archived registry rows of one user (all or nothing).
+
+	Args:
+		registry: Engine of the shared registry database.
+		bundle: The dict produced by :func:`read_user_bundle`.
+
+	Raises:
+		ValueError: Naming the conflicting unique columns when the user id,
+			login, an email, an xpub or an API key has been taken since the
+			deletion.
+	"""
+	user = bundle["user"]
+	try:
+		async with registry.begin() as conn:
+			await conn.execute(
+				insert(users).values(
+					id=user["id"],
+					login=user["login"],
+					password_hash=user["password_hash"],
+					status=user["status"],
+					directory=user["directory"],
+					created_at=_dt_parse(user["created_at"]),
+				)
+			)
+			for row in bundle["emails"]:
+				await conn.execute(
+					insert(user_emails).values(
+						id=row["id"],
+						user_id=user["id"],
+						address=row["address"],
+						is_primary=row["is_primary"],
+						confirmed_at=_dt_parse(row["confirmed_at"]),
+						confirm_token_hash=row["confirm_token_hash"],
+						confirm_expires_at=_dt_parse(row["confirm_expires_at"]),
+						created_at=_dt_parse(row["created_at"]),
+					)
+				)
+			for row in bundle["wallet_xpubs"]:
+				await conn.execute(
+					insert(wallet_xpubs).values(
+						id=row["id"],
+						user_id=user["id"],
+						xpub_hash=row["xpub_hash"],
+						created_at=_dt_parse(row["created_at"]),
+					)
+				)
+			for row in bundle["api_keys"]:
+				await conn.execute(
+					insert(api_keys).values(
+						id=row["id"],
+						user_id=user["id"],
+						key_hash=row["key_hash"],
+						created_at=_dt_parse(row["created_at"]),
+					)
+				)
+	except IntegrityError as exc:
+		taken = unique_violation(exc)
+		if taken is None:
+			raise  # иная ошибка целостности — не «занято с момента удаления»
+		raise ValueError(f"already taken since the deletion: {taken}") from exc
+
+
 async def set_user_password(registry: AsyncEngine, user_id: int, password_hash: str) -> None:
 	"""Replace the user's password hash."""
 	async with registry.begin() as conn:

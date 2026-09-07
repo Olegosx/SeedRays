@@ -21,6 +21,9 @@ def now_utc() -> datetime:
 REGISTRY_DB_FILENAME = "registry.db"
 USER_DB_FILENAME = "user.db"
 USERS_DIR_NAME = "users"
+# Архив удалённых пользователей — ВНЕ users/: базы в users/ миграции и
+# watcher считают живыми, архивные базы трогать нельзя.
+ARCHIVE_DIR_NAME = "archive"
 
 
 def registry_db_path(data_dir: Path) -> Path:
@@ -36,6 +39,11 @@ def users_root(data_dir: Path) -> Path:
 def user_db_path(data_dir: Path, directory: str) -> Path:
 	"""Path of a user's database given the user's directory name from the registry."""
 	return users_root(data_dir) / directory / USER_DB_FILENAME
+
+
+def archive_root(data_dir: Path) -> Path:
+	"""Root directory of the deleted-user archives."""
+	return data_dir / ARCHIVE_DIR_NAME
 
 
 def unique_violation(exc: IntegrityError) -> str | None:

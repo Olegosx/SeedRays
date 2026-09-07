@@ -53,6 +53,8 @@ _OPERATION_STATUS = {
 	"invalid_cursor": 400,
 	"unknown_user": 404,
 	"unknown_setting": 400,
+	"username_mismatch": 400,
+	"user_not_blocked": 409,
 }
 
 

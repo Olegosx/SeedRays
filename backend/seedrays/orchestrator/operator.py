@@ -8,9 +8,11 @@ settings. Operator accounts are created only from the server console
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import re
 import secrets
+import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -25,7 +27,13 @@ from seedrays.orchestrator.operations import OperationError
 from seedrays.orchestrator.seclog import ACTOR_OPERATOR, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_wallets
-from seedrays.storage.engine import create_sqlite_engine, now_utc, user_db_path
+from seedrays.storage.engine import (
+	archive_root,
+	create_sqlite_engine,
+	now_utc,
+	user_db_path,
+	users_root,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -302,6 +310,115 @@ async def reset_user_password(registry: AsyncEngine, *, user_id: int) -> str:
 	await registry_ops.set_user_password(registry, user_id, _hasher.hash(password))
 	await registry_ops.delete_user_sessions(registry, user_id)
 	return password
+
+
+ARCHIVE_REGISTRY_FILENAME = "registry.json"
+
+
+async def delete_user(
+	registry: AsyncEngine, data_dir: Path, *, user_id: int, username: str
+) -> str:
+	"""Archive and delete a blocked gateway user.
+
+	Удаление двухшаговое по решению владельца: сначала блокировка (мгновенно
+	отрезает доступ), затем удаление — так промах по строке списка не
+	уничтожает живого пользователя. Данные не стираются, а переезжают в
+	архив ``archive/`` каталога данных: снимок строк реестра (registry.json)
+	плюс каталог пользователя с его базой; восстановление — командой
+	``seedrays user-restore`` на сервере.
+
+	Args:
+		registry: Engine of the shared registry database.
+		data_dir: The gateway data directory.
+		user_id: The user to delete.
+		username: The user's login, retyped by the operator; must match —
+			a second, server-side guard of the irreversible action.
+
+	Returns:
+		Name of the created archive directory (inside ``archive/``).
+
+	Raises:
+		OperationError: unknown_user / username_mismatch / user_not_blocked.
+	"""
+	user = await registry_ops.get_user_by_id(registry, user_id)
+	if user is None:
+		raise OperationError("unknown_user", f"user {user_id} does not exist")
+	if user.login != username:
+		raise OperationError(
+			"username_mismatch", "the retyped username does not match the user being deleted"
+		)
+	if user.status != USER_STATUS_BLOCKED:
+		raise OperationError(
+			"user_not_blocked", "block the user first; only blocked users can be deleted"
+		)
+
+	bundle = await registry_ops.read_user_bundle(registry, user_id)
+	if bundle is None:
+		raise OperationError("unknown_user", f"user {user_id} does not exist")
+	# Имя каталога уникально даже при совпадении секунды и переиспользовании
+	# id пользователя (SQLite выдаёт освободившиеся id заново).
+	base_name = f"{user.directory}-{now_utc():%Y%m%d-%H%M%S}"
+	archive_name = base_name
+	suffix = 2
+	while (archive_root(data_dir) / archive_name).exists():
+		archive_name = f"{base_name}-{suffix}"
+		suffix += 1
+	archive_dir = archive_root(data_dir) / archive_name
+	# Снимок реестра пишется ДО удаления строк: если запись файла сорвётся,
+	# пользователь останется нетронутым.
+	archive_dir.mkdir(parents=True, exist_ok=False)
+	(archive_dir / ARCHIVE_REGISTRY_FILENAME).write_text(
+		json.dumps(bundle, ensure_ascii=False, indent=1), encoding="utf-8"
+	)
+	await registry_ops.delete_user_bundle(registry, user_id)
+	user_dir = users_root(data_dir) / user.directory
+	if user_dir.exists():
+		shutil.move(str(user_dir), str(archive_dir / user.directory))
+	logger.info("user %s (id %d) deleted into archive %s", user.login, user_id, archive_name)
+	return archive_name
+
+
+async def restore_user(registry: AsyncEngine, data_dir: Path, *, archive_dir: Path) -> str:
+	"""Restore a deleted user from an archive directory (the CLI path).
+
+	Возвращает строки реестра и каталог пользователя на место. Статус
+	восстанавливается как был на момент удаления (то есть «заблокирован») —
+	разблокировка остаётся отдельным осознанным действием оператора в панели.
+
+	Args:
+		registry: Engine of the shared registry database.
+		data_dir: The gateway data directory.
+		archive_dir: The archive directory created by :func:`delete_user`.
+
+	Returns:
+		Login of the restored user.
+
+	Raises:
+		OperationError: archive_not_found / restore_conflict.
+	"""
+	snapshot_path = archive_dir / ARCHIVE_REGISTRY_FILENAME
+	if not snapshot_path.is_file():
+		raise OperationError(
+			"archive_not_found", f"no {ARCHIVE_REGISTRY_FILENAME} in {archive_dir}"
+		)
+	bundle = json.loads(snapshot_path.read_text(encoding="utf-8"))
+	directory = bundle["user"]["directory"]
+	target_dir = users_root(data_dir) / directory
+	if target_dir.exists():
+		raise OperationError(
+			"restore_conflict", f"user directory already exists: {target_dir}"
+		)
+	try:
+		await registry_ops.restore_user_bundle(registry, bundle)
+	except ValueError as exc:
+		raise OperationError("restore_conflict", str(exc)) from exc
+	archived_dir = archive_dir / directory
+	if archived_dir.exists():
+		target_dir.parent.mkdir(parents=True, exist_ok=True)
+		shutil.move(str(archived_dir), str(target_dir))
+	login = bundle["user"]["login"]
+	logger.info("user %s restored from archive %s", login, archive_dir)
+	return login
 
 
 async def get_settings(registry: AsyncEngine) -> list[dict]:

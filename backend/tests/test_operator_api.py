@@ -1,15 +1,24 @@
 """Operator API: sign-in, gateway users, settings, watcher status."""
 
 import asyncio
+import json
 from pathlib import Path
 
 import httpx
 
 from seedrays.api.app_api import create_app
-from seedrays.orchestrator.operator import create_operator
-from seedrays.storage.engine import create_sqlite_engine, registry_db_path
+from seedrays.families import Family
+from seedrays.keygen.generate import account_xpub
+from seedrays.orchestrator.operations import OperationError
+from seedrays.orchestrator.operator import create_operator, restore_user
+from seedrays.storage.engine import archive_root, create_sqlite_engine, registry_db_path
 from seedrays.storage.migrations.runner import upgrade_registry
-from seeding import TEST_CAPTCHA_COST, captcha_solution, enable_dev_mail
+from seeding import (
+	TEST_CAPTCHA_COST,
+	captcha_solution,
+	enable_dev_mail,
+	signed_in_client,
+)
 
 
 async def _operator_login(
@@ -150,6 +159,130 @@ def test_operator_manages_users(tmp_path: Path) -> None:
 				"/v1/operator/users/999/password-reset", headers=headers
 			)
 			assert unknown.json()["error"]["code"] == "unknown_user"
+		finally:
+			await user.aclose()
+			await client.aclose()
+
+	asyncio.run(scenario())
+
+
+def test_operator_deletes_and_restores_user(tmp_path: Path) -> None:
+	"""Delete moves a blocked user into the archive; the CLI path restores them."""
+
+	TEST_MNEMONIC = (
+		"abandon abandon abandon abandon abandon abandon "
+		"abandon abandon abandon abandon abandon about"
+	)
+
+	async def scenario() -> None:
+		# alice с кошельком — чтобы проверить переезд базы и индекса xpub.
+		user, user_csrf = await signed_in_client(tmp_path)
+		xpub = account_xpub(TEST_MNEMONIC, Family.TRON)
+		attached = await user.post(
+			"/v1/user/wallets",
+			json={"family": "tron", "xpub": xpub, "label": "Main"},
+			headers={"X-CSRF-Token": user_csrf},
+		)
+		assert attached.status_code == 200, attached.text
+
+		client, csrf = await _operator_client(tmp_path)
+		headers = {"X-CSRF-Token": csrf}
+		try:
+			listed = (await client.get("/v1/operator/users")).json()["users"]
+			user_id = listed[0]["id"]
+
+			# Активного удалить нельзя — сначала блокировка.
+			active = await client.post(
+				f"/v1/operator/users/{user_id}/delete",
+				json={"username": "alice"},
+				headers=headers,
+			)
+			assert active.status_code == 409
+			assert active.json()["error"]["code"] == "user_not_blocked"
+
+			await client.post(
+				f"/v1/operator/users/{user_id}/status",
+				json={"status": "blocked"},
+				headers=headers,
+			)
+
+			# Логин сверяется и на сервере, не только в форме панели.
+			mismatch = await client.post(
+				f"/v1/operator/users/{user_id}/delete",
+				json={"username": "alicia"},
+				headers=headers,
+			)
+			assert mismatch.json()["error"]["code"] == "username_mismatch"
+
+			deleted = await client.post(
+				f"/v1/operator/users/{user_id}/delete",
+				json={"username": "alice"},
+				headers=headers,
+			)
+			assert deleted.status_code == 200, deleted.text
+			assert (await client.get("/v1/operator/users")).json()["users"] == []
+
+			# Архив: снимок реестра + каталог пользователя с базой.
+			archives = list(archive_root(tmp_path).iterdir())
+			assert len(archives) == 1
+			bundle = json.loads((archives[0] / "registry.json").read_text())
+			assert bundle["user"]["login"] == "alice"
+			assert len(bundle["wallet_xpubs"]) == 1
+			directory = bundle["user"]["directory"]
+			assert (archives[0] / directory / "user.db").is_file()
+			assert not (tmp_path / "users" / directory).exists()
+
+			# Имя и xpub освободились: новая регистрация и привязка проходят.
+			fresh, fresh_csrf = await signed_in_client(tmp_path)
+			reattached = await fresh.post(
+				"/v1/user/wallets",
+				json={"family": "tron", "xpub": xpub, "label": "Again"},
+				headers={"X-CSRF-Token": fresh_csrf},
+			)
+			assert reattached.status_code == 200, reattached.text
+
+			# Пока имя занято новой alice — восстановление честно отказывает.
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			try:
+				conflict = None
+				try:
+					await restore_user(registry, tmp_path, archive_dir=archives[0])
+				except OperationError as exc:
+					conflict = exc
+				assert conflict is not None and conflict.code == "restore_conflict"
+
+				# Убираем новую alice тем же путём удаления — и восстанавливаем старую.
+				second = (await client.get("/v1/operator/users")).json()["users"][0]
+				await client.post(
+					f"/v1/operator/users/{second['id']}/status",
+					json={"status": "blocked"},
+					headers=headers,
+				)
+				await client.post(
+					f"/v1/operator/users/{second['id']}/delete",
+					json={"username": "alice"},
+					headers=headers,
+				)
+				login = await restore_user(registry, tmp_path, archive_dir=archives[0])
+				assert login == "alice"
+			finally:
+				await registry.dispose()
+			await fresh.aclose()
+
+			# Восстановленная alice: статус сохранён («заблокирован»), база на месте.
+			restored = (await client.get("/v1/operator/users")).json()["users"]
+			assert [u["username"] for u in restored] == ["alice"]
+			assert restored[0]["status"] == "blocked"
+			assert restored[0]["wallets"] == 1
+
+			# После разблокировки старый пароль работает.
+			await client.post(
+				f"/v1/operator/users/{restored[0]['id']}/status",
+				json={"status": "active"},
+				headers=headers,
+			)
+			back = await _user_login(user, "alice", "correct-horse")
+			assert back.status_code == 200, back.text
 		finally:
 			await user.aclose()
 			await client.aclose()

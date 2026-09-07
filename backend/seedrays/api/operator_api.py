@@ -51,6 +51,12 @@ class UserStatusRequest(BaseModel):
 	status: str = Field(min_length=1, max_length=16)
 
 
+class UserDeleteRequest(BaseModel):
+	"""Body of the user deletion: the login retyped by the operator."""
+
+	username: str = Field(min_length=1, max_length=64)
+
+
 class SettingsRequest(BaseModel):
 	"""Body of the settings update: key → value."""
 
@@ -262,6 +268,25 @@ def register_operator_routes(
 			detail={"target_user_id": user_id},
 		)
 		return {"password": password}
+
+	@app.post("/v1/operator/users/{user_id}/delete")
+	async def delete_user(
+		user_id: int,
+		body: UserDeleteRequest,
+		request: Request,
+		ctx: OperatorContext = MutatingSessionDep,
+	) -> dict:
+		"""Archive and delete a blocked user; the retyped login must match."""
+		archive = await operator_ops.delete_user(
+			ctx.registry, data_dir, user_id=user_id, username=body.username
+		)
+		await journal.event(
+			ctx.registry, "user_delete", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id,
+			client=request.client.host if request.client else "unknown",
+			detail={"target_user_id": user_id, "username": body.username, "archive": archive},
+		)
+		return {"ok": True}
 
 	@app.get("/v1/operator/settings")
 	async def get_settings(ctx: OperatorContext = SessionDep) -> dict:

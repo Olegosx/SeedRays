@@ -180,6 +180,7 @@ POST /v1/operator/password   тело: {"current_password", "new_password"}
 GET  /v1/operator/users
 POST /v1/operator/users/{id}/status          тело: {"status": "active"|"blocked"}
 POST /v1/operator/users/{id}/password-reset  → временный пароль (один раз)
+POST /v1/operator/users/{id}/delete          тело: {"username"} (логин, набранный оператором)
 GET  /v1/operator/settings
 PUT  /v1/operator/settings   тело: {"values": {ключ: значение}}
 GET  /v1/operator/watcher    (курсоры watcher по сетям, только чтение)
@@ -192,6 +193,10 @@ GET  /v1/operator/watcher    (курсоры watcher по сетям, тольк
 - Секретные настройки в ответах не появляются — только признак «задано»; пустой секрет
   при сохранении означает «не менять». Блокировка пользователя завершает его сессии,
   и его приложения теряют доступ к API приложений немедленно.
+- Удаление пользователя ([ADR-0024](../decisions/0024-user-deletion-archive.md)) —
+  только заблокированного (`user_not_blocked` иначе); присланный `username` сверяется
+  с логином удаляемого (`username_mismatch` при расхождении). Данные переезжают в
+  серверный архив; восстановление — консольной командой `seedrays user-restore`.
 
 ## Детальные спецификации
 

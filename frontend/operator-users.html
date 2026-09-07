@@ -19,6 +19,7 @@
 		error: '',
 		confirmAction: '',
 		confirmUser: null,
+		confirmInput: '',
 		tempPassword: null,
 		async load() {
 			const { api } = await import('/js/api.js');
@@ -30,9 +31,10 @@
 			} catch (e) { this.loadError = this.$store.i18n.errorText(e); }
 		},
 		askConfirm(action, user) {
-			// Блокировка и сброс пароля — только через подтверждающий диалог.
+			// Блокировка, сброс пароля и удаление — только через подтверждающий диалог.
 			this.confirmAction = action;
 			this.confirmUser = user;
+			this.confirmInput = '';
 			new window.tabler.Modal(document.getElementById('modal-confirm')).show();
 		},
 		async confirmProceed() {
@@ -49,6 +51,10 @@
 						'/v1/operator/users/' + this.confirmUser.id + '/password-reset');
 					this.tempPassword = result.password;
 					new window.tabler.Modal(document.getElementById('modal-password')).show();
+				} else if (this.confirmAction === 'delete') {
+					// Логин, набранный оператором, сверяет ещё и сервер.
+					await api('POST', '/v1/operator/users/' + this.confirmUser.id + '/delete',
+						{ username: this.confirmInput });
 				}
 				await this.load();
 			} catch (e) { this.error = this.$store.i18n.errorText(e); }
@@ -129,6 +135,10 @@
 													<button type="button" class="btn btn-sm btn-outline-secondary"
 														@click="askConfirm('reset', user)"
 														x-text="$store.i18n.t('op.resetPassword')"></button>
+													<button type="button" class="btn btn-sm btn-danger"
+														x-show="user.status !== 'active'"
+														@click="askConfirm('delete', user)"
+														x-text="$store.i18n.t('op.deleteUser')"></button>
 												</div>
 											</td>
 										</tr>
@@ -150,20 +160,35 @@
 						<i class="ti ti-alert-triangle text-danger mb-2" style="font-size: 3rem;"></i>
 						<h3 x-text="confirmAction === 'block'
 							? $store.i18n.t('op.confirmBlockTitle')
-							: $store.i18n.t('op.confirmResetTitle')"></h3>
+							: confirmAction === 'delete'
+								? $store.i18n.t('op.confirmDeleteTitle')
+								: $store.i18n.t('op.confirmResetTitle')"></h3>
 						<div class="mb-2 font-monospace"
 							x-text="confirmUser ? confirmUser.username : ''"></div>
 						<div class="text-secondary" x-text="confirmAction === 'block'
 							? $store.i18n.t('op.confirmBlockText')
-							: $store.i18n.t('op.confirmResetText')"></div>
+							: confirmAction === 'delete'
+								? $store.i18n.t('op.confirmDeleteText')
+								: $store.i18n.t('op.confirmResetText')"></div>
+						<!-- Удаление: логин набирается руками, кнопка ждёт совпадения -->
+						<div class="mt-3 text-start" x-show="confirmAction === 'delete'">
+							<label class="form-label"
+								x-text="$store.i18n.t('op.confirmDeleteType')"></label>
+							<input type="text" class="form-control font-monospace"
+								x-model="confirmInput" autocomplete="off">
+						</div>
 					</div>
 					<div class="modal-footer">
 						<button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal"
 							x-text="$store.i18n.t('confirm.cancel')"></button>
 						<button type="button" class="btn btn-danger" @click="confirmProceed()"
+							:disabled="confirmAction === 'delete'
+								&& (!confirmUser || confirmInput !== confirmUser.username)"
 							x-text="confirmAction === 'block'
 								? $store.i18n.t('op.confirmBlockGo')
-								: $store.i18n.t('op.confirmResetGo')"></button>
+								: confirmAction === 'delete'
+									? $store.i18n.t('op.confirmDeleteGo')
+									: $store.i18n.t('op.confirmResetGo')"></button>
 					</div>
 				</div>
 			</div>

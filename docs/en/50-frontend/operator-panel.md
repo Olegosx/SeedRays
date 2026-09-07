@@ -31,6 +31,14 @@ cabinet (the language switcher and the operator menu with sign-out).
 - **Password reset** — the fallback recovery path of the cabinet scenario: upon
   confirmation a temporary password is generated and shown exactly once; every session
   of the user is terminated; the password is handed to the user outside the gateway.
+- **Deletion** ([ADR-0024](../20-architecture/decisions/0024-user-deletion-archive.md)) —
+  only for a blocked user (the button appears after blocking); in the confirmation
+  dialog the login of the user being deleted is retyped by hand, and the server
+  verifies it once more. The data is not erased — it moves into the `archive/`
+  directory of the data directory (a snapshot of the registry rows plus the user's
+  directory with their database); the name, emails, xpubs and API keys become free.
+  Restoring is a server console command (`seedrays user-restore --archive …`); the
+  status comes back as it was ("blocked"), unblocking is a separate panel action.
 
 ## Settings
 
