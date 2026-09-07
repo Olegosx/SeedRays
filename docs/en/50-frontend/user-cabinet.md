@@ -158,8 +158,9 @@ opened; a forgotten passphrase means permanently lost access to the funds.
     a confirmation dialog describing the consequences;
   - the "network → wallet" mapping ([ADR-0011](../20-architecture/decisions/0011-application-api-principles.md)):
     a table with row removal; adding — by picking from the not-yet-assigned networks;
-  - application users: identifier, address count, creation date.
-- Open question: viewing the addresses of one application user.
+  - application users: identifier, address count, creation date; clicking a row expands
+    the user's address list (network, address, memo) — the addresses load on the first
+    expansion.
 
 ## Operation History
 

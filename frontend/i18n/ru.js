@@ -206,6 +206,7 @@ export const ru = {
 	"app.colUser": "Идентификатор",
 	"app.colAddresses": "Адреса",
 	"app.colUserCreated": "Создан",
+	"app.addressesEmpty": "Адресов пока нет.",
 
 	"history.pageTitle": "История операций — SeedRays",
 	"history.title": "История операций",

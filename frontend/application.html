@@ -62,6 +62,28 @@
 			await this._call('DELETE',
 				'/v1/user/applications/' + this.appId + '/networks/' + network);
 		},
+		expanded: {},
+		userAddresses: {},
+		async toggleUser(externalId) {
+			if (this.expanded[externalId]) {
+				this.expanded[externalId] = false;
+				return;
+			}
+			if (this.userAddresses[externalId] === undefined) {
+				// Адреса грузятся лениво, при первом раскрытии.
+				this.error = '';
+				try {
+					const { api } = await import('/js/api.js');
+					const result = await api('GET', '/v1/user/applications/' + this.appId
+						+ '/users/' + encodeURIComponent(externalId) + '/addresses');
+					this.userAddresses[externalId] = result.addresses;
+				} catch (e) {
+					this.error = this.$store.i18n.errorText(e);
+					return;
+				}
+			}
+			this.expanded[externalId] = true;
+		},
 		confirmAction: '',
 		askConfirm(action) {
 			// Опасные действия — только через подтверждающий диалог.
@@ -250,16 +272,45 @@
 												<th x-text="$store.i18n.t('app.colUserCreated')"></th>
 											</tr>
 										</thead>
-										<tbody>
-											<template x-for="user in users">
-												<tr>
-													<td class="font-monospace" x-text="user.external_id"></td>
+										<!-- По tbody на пользователя: строка + её раскрытие с адресами -->
+										<template x-for="user in users" :key="user.external_id">
+											<tbody>
+												<tr role="button" @click="toggleUser(user.external_id)">
+													<td>
+														<i class="ti me-1 text-secondary"
+															:class="expanded[user.external_id]
+																? 'ti-chevron-down' : 'ti-chevron-right'"></i>
+														<span class="font-monospace" x-text="user.external_id"></span>
+													</td>
 													<td x-text="user.addresses"></td>
 													<td class="text-secondary"
 														x-text="user.created_at ? user.created_at.slice(0, 10) : ''"></td>
 												</tr>
-											</template>
-										</tbody>
+												<tr x-show="expanded[user.external_id]">
+													<td colspan="3" class="bg-surface-secondary">
+														<div class="text-secondary"
+															x-show="(userAddresses[user.external_id] || []).length === 0"
+															x-text="$store.i18n.t('app.addressesEmpty')"></div>
+														<table class="table table-sm mb-0"
+															x-show="(userAddresses[user.external_id] || []).length">
+															<tbody>
+																<template x-for="binding in userAddresses[user.external_id] || []">
+																	<tr>
+																		<td class="w-1">
+																			<span class="badge bg-blue-lt"
+																				x-text="binding.network"></span>
+																		</td>
+																		<td class="font-monospace" x-text="binding.address"></td>
+																		<td class="text-secondary"
+																			x-text="binding.memo ? 'memo: ' + binding.memo : ''"></td>
+																	</tr>
+																</template>
+															</tbody>
+														</table>
+													</td>
+												</tr>
+											</tbody>
+										</template>
 									</table>
 								</div>
 							</div>

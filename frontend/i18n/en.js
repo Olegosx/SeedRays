@@ -204,6 +204,7 @@ export const en = {
 	"app.colUser": "Identifier",
 	"app.colAddresses": "Addresses",
 	"app.colUserCreated": "Created",
+	"app.addressesEmpty": "No addresses yet.",
 
 	"history.pageTitle": "Operation history — SeedRays",
 	"history.title": "Operation history",

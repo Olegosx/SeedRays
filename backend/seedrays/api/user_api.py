@@ -454,6 +454,20 @@ def register_user_routes(
 			"app_users": detail.users,
 		}
 
+	@app.get("/v1/user/applications/{app_id}/users/{external_id}/addresses")
+	async def app_user_addresses(
+		app_id: int,
+		external_id: str,
+		ctx: UserContext = SessionDep,
+		engine: AsyncEngine = UserEngineDep,
+	) -> dict:
+		"""The bound addresses of one application user."""
+		return {
+			"addresses": await app_ops.app_user_addresses(
+				engine, app_id=app_id, external_id=external_id
+			)
+		}
+
 	@app.post("/v1/user/applications/{app_id}/key")
 	async def reissue_key(
 		app_id: int,

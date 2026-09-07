@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.orchestrator.operations import OperationError, hash_api_key
 from seedrays.storage import registry as registry_ops
-from seedrays.storage import user_apps, user_wallets
+from seedrays.storage import user_apps, user_store, user_wallets
 from seedrays.storage.engine import now_utc
 from seedrays.storage.user_apps import AppSummary
 
@@ -146,6 +146,26 @@ async def get_application(engine: AsyncEngine, app_id: int) -> AppDetail:
 			for u in user_rows
 		],
 	)
+
+
+async def app_user_addresses(
+	engine: AsyncEngine, *, app_id: int, external_id: str
+) -> list[dict]:
+	"""The bound addresses of one application user (the expandable row).
+
+	Raises:
+		OperationError: unknown_application / unknown_app_user.
+	"""
+	await _require_summary(engine, app_id)
+	app_user_id = await user_apps.get_app_user_id(
+		engine, app_id=app_id, external_id=external_id
+	)
+	if app_user_id is None:
+		raise OperationError(
+			"unknown_app_user", f"application user {external_id!r} is unknown"
+		)
+	rows = await user_store.list_bindings_of_app_user(engine, app_user_id)
+	return [{"network": r.network, "address": r.address, "memo": r.memo} for r in rows]
 
 
 async def set_network_mapping(

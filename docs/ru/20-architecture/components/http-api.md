@@ -97,6 +97,7 @@ POST   /v1/user/wallets/generate  тело: {"words", "families", "passphrase"}
 GET    /v1/user/applications
 POST   /v1/user/applications      тело: {"name"} → ключ (показывается один раз)
 GET    /v1/user/applications/{id}
+GET    /v1/user/applications/{id}/users/{ид}/addresses
 POST   /v1/user/applications/{id}/key        (перевыпуск — новый ключ один раз)
 DELETE /v1/user/applications/{id}/key        (отзыв)
 PUT    /v1/user/applications/{id}/networks   тело: {"network", "wallet_id"}

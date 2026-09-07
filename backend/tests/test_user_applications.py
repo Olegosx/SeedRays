@@ -58,6 +58,19 @@ def test_application_lifecycle_and_key_bridge(tmp_path: Path) -> None:
 			assert detail.json()["networks"][0]["wallet_label"] == "Main"
 			assert detail.json()["app_users"][0]["addresses"] == 1
 
+			# Раскрытие адресов пользователя приложения — точечным маршрутом.
+			user_addresses = await client.get(
+				f"/v1/user/applications/{app_id}/users/user1/addresses"
+			)
+			assert user_addresses.status_code == 200
+			listed = user_addresses.json()["addresses"]
+			assert listed == issued.json()["addresses"]
+			unknown = await client.get(
+				f"/v1/user/applications/{app_id}/users/nobody/addresses"
+			)
+			assert unknown.status_code == 404
+			assert unknown.json()["error"]["code"] == "unknown_app_user"
+
 			# Перевыпуск: старый ключ умирает, новый работает.
 			reissued = await client.post(
 				f"/v1/user/applications/{app_id}/key", headers=headers

@@ -96,6 +96,7 @@ POST   /v1/user/wallets/generate  body: {"words", "families", "passphrase"}
 GET    /v1/user/applications
 POST   /v1/user/applications      body: {"name"} → the key (shown once)
 GET    /v1/user/applications/{id}
+GET    /v1/user/applications/{id}/users/{id}/addresses
 POST   /v1/user/applications/{id}/key        (reissue — the new key shown once)
 DELETE /v1/user/applications/{id}/key        (revocation)
 PUT    /v1/user/applications/{id}/networks   body: {"network", "wallet_id"}
