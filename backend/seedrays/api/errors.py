@@ -50,6 +50,7 @@ _OPERATION_STATUS = {
 	"unknown_email": 404,
 	"cannot_remove_primary": 400,
 	"invalid_token": 400,
+	"invalid_cursor": 400,
 }
 
 

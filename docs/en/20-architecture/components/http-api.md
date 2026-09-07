@@ -100,7 +100,7 @@ POST   /v1/user/applications/{id}/key        (reissue — the new key shown once
 DELETE /v1/user/applications/{id}/key        (revocation)
 PUT    /v1/user/applications/{id}/networks   body: {"network", "wallet_id"}
 DELETE /v1/user/applications/{id}/networks/{network}
-GET    /v1/user/history      [?wallet_id=&network=&asset=&status=&limit=]
+GET    /v1/user/history      [?wallet_id=&network=&asset=&status=&limit=&cursor=]
 GET    /v1/user/overview     (counters, receipts by asset, recent operations)
 POST   /v1/user/emails       body: {"address"}   (a second email, confirmed by a message)
 DELETE /v1/user/emails/{id}                      (the primary one cannot be removed)
@@ -110,6 +110,11 @@ POST   /v1/user/password-reset/confirm  body: {"token", "new_password"}
 ```
 
 A password change drops every other session of the user (the current one stays).
+
+The cabinet history pages with "show more" (the owner's decision): the answer carries
+`next_cursor` — the opaque position of the last returned row; passing it back as
+`cursor` continues the list strictly past it, so new operations appearing on top never
+shift or duplicate what is already shown. A missing `next_cursor` means the end.
 
 Password reset: the request answer is always the same — the address's existence is not
 revealed; the message goes only to a confirmed email. The token from the message is

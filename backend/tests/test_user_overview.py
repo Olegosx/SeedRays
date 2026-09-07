@@ -84,6 +84,54 @@ async def _seed_transactions(data_dir: Path, address: str) -> None:
 	await engine.dispose()
 
 
+def test_history_show_more_pagination(tmp_path: Path) -> None:
+	"""The cursor continues strictly past the last row, without duplicates."""
+
+	async def scenario() -> None:
+		client, _csrf, address = await _prepared_client(tmp_path)
+		try:
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			asset = await registry_ops.get_or_create_asset(
+				registry, network="tron-nile", kind="token", contract_address="C1",
+				symbol="USDT", decimals=6,
+			)
+			await registry.dispose()
+			engine = create_sqlite_engine(user_db_path(tmp_path, "u1"))
+			for txid, block in (("tx-1", 90), ("tx-2", 100), ("tx-3", 110)):
+				await user_store.record_transaction(
+					engine,
+					address=address,
+					txid=txid,
+					asset_id=asset.id,
+					direction="in",
+					amount=1_000_000,
+					block_number=block,
+					tx_time=datetime(2026, 9, 7, 12, 0),
+					status="success",
+				)
+			await engine.dispose()
+
+			first = (await client.get("/v1/user/history", params={"limit": 2})).json()
+			assert [r["txid"] for r in first["history"]] == ["tx-3", "tx-2"]
+			assert first["next_cursor"] is not None
+
+			second = (
+				await client.get(
+					"/v1/user/history",
+					params={"limit": 2, "cursor": first["next_cursor"]},
+				)
+			).json()
+			assert [r["txid"] for r in second["history"]] == ["tx-1"]
+			assert second["next_cursor"] is None
+
+			bad = await client.get("/v1/user/history", params={"cursor": "bogus"})
+			assert bad.json()["error"]["code"] == "invalid_cursor"
+		finally:
+			await client.aclose()
+
+	asyncio.run(scenario())
+
+
 def test_history_and_overview(tmp_path: Path) -> None:
 	"""History rows carry wallet/network/asset/status; overview aggregates them."""
 

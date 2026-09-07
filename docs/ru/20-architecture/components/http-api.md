@@ -101,7 +101,7 @@ POST   /v1/user/applications/{id}/key        (перевыпуск — новы�
 DELETE /v1/user/applications/{id}/key        (отзыв)
 PUT    /v1/user/applications/{id}/networks   тело: {"network", "wallet_id"}
 DELETE /v1/user/applications/{id}/networks/{network}
-GET    /v1/user/history      [?wallet_id=&network=&asset=&status=&limit=]
+GET    /v1/user/history      [?wallet_id=&network=&asset=&status=&limit=&cursor=]
 GET    /v1/user/overview     (счётчики, поступления по активам, последние операции)
 POST   /v1/user/emails       тело: {"address"}   (вторая почта, подтверждение письмом)
 DELETE /v1/user/emails/{id}                      (основную удалить нельзя)
@@ -111,6 +111,11 @@ POST   /v1/user/password-reset/confirm  тело: {"token", "new_password"}
 ```
 
 Смена пароля гасит все остальные сессии пользователя (текущая остаётся).
+
+История кабинета листается «показать ещё» (решение владельца): ответ несёт
+`next_cursor` — непрозрачную позицию последней выданной строки; передача его в `cursor`
+продолжает список строго за ней, поэтому появление новых операций сверху не сдвигает и
+не дублирует уже показанное. Отсутствие `next_cursor` — конец списка.
 
 Сброс пароля: ответ запроса всегда одинаковый — существование адреса не раскрывается;
 письмо уходит только на подтверждённую почту. Токен из письма одноразовый (в базе — его

@@ -167,8 +167,9 @@ opened; a forgotten passphrase means permanently lost access to the funds.
   amount, a truncated transaction id, status ("confirmed" / "pending" / "failed" as
   colored badges — the status semantics of [ADR-0017](../20-architecture/decisions/0017-universal-tx-model.md)).
 - Filters above the table: wallet, network, asset, status.
-- Open questions: the pagination style ("show more" or pages); linking a transaction to
-  the network's block explorer.
+- Pagination is a "Show more" button: the next batch loads by a cursor strictly past
+  the last shown row (new operations on top never shift anything).
+- Open question: linking a transaction to the network's block explorer.
 
 ## Settings
 

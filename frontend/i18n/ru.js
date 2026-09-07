@@ -38,6 +38,7 @@ export const ru = {
 	"errors.wallet_missing": "Такого кошелька нет.",
 	"errors.unknown_email": "Такой почты на учётной записи нет.",
 	"errors.invalid_token": "Ссылка недействительна или устарела — запросите сброс заново.",
+	"errors.invalid_cursor": "Не удалось продолжить список — обновите страницу.",
 	"errors.cannot_remove_primary": "Основную почту удалить нельзя.",
 
 	"register.pageTitle": "Регистрация — SeedRays",
@@ -219,7 +220,7 @@ export const ru = {
 	"history.statusConfirmed": "подтверждена",
 	"history.statusPending": "ожидает",
 	"history.statusFailed": "провал",
-	"history.truncated": "Показаны только последние операции — сузьте фильтры, чтобы увидеть более старые.",
+	"history.showMore": "Показать ещё",
 	"history.empty": "По выбранным фильтрам операций нет.",
 
 	"settings.pageTitle": "Настройки — SeedRays",

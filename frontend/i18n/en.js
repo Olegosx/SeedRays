@@ -38,6 +38,7 @@ export const en = {
 	"errors.wallet_missing": "No such wallet.",
 	"errors.unknown_email": "No such email on this account.",
 	"errors.invalid_token": "The link is invalid or expired — request a new reset.",
+	"errors.invalid_cursor": "Could not continue the list — reload the page.",
 	"errors.cannot_remove_primary": "The primary email cannot be removed.",
 
 	"register.pageTitle": "Sign up — SeedRays",
@@ -217,7 +218,7 @@ export const en = {
 	"history.statusConfirmed": "confirmed",
 	"history.statusPending": "pending",
 	"history.statusFailed": "failed",
-	"history.truncated": "Only the most recent operations are shown — narrow the filters to see older ones.",
+	"history.showMore": "Show more",
 	"history.empty": "No operations match the chosen filters.",
 
 	"settings.pageTitle": "Settings — SeedRays",

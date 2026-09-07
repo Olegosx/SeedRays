@@ -15,15 +15,16 @@
 <body>
 	<div class="page" x-cloak x-data="{
 		rows: [],
-		// Потолок одной выборки; вопрос пагинации в документации открыт.
-		limit: 200,
+		// Размер страницы «показать ещё» (курсорная догрузка).
+		limit: 50,
+		nextCursor: null,
 		filter: { wallet: '', network: '', asset: '', status: '' },
 		wallets: [],
 		networks: [],
 		assetOptions: [],
 		statuses: ['confirmed', 'pending', 'failed'],
 		loadError: '',
-		async load() {
+		async load(cursor) {
 			// Фильтрует сервер: клиентская фильтрация усечённой выборки
 			// прятала бы операции старше первых строк.
 			const { api } = await import('/js/api.js');
@@ -32,12 +33,23 @@
 			if (this.filter.network) { params.set('network', this.filter.network); }
 			if (this.filter.asset) { params.set('asset', this.filter.asset); }
 			if (this.filter.status) { params.set('status', this.filter.status); }
-			this.rows = (await api('GET', '/v1/user/history?' + params)).history;
+			if (cursor) { params.set('cursor', cursor); }
+			const page = await api('GET', '/v1/user/history?' + params);
+			this.rows = cursor ? this.rows.concat(page.history) : page.history;
+			this.nextCursor = page.next_cursor;
 		},
 		async reload() {
 			this.loadError = '';
 			try {
 				await this.load();
+			} catch (e) {
+				this.loadError = this.$store.i18n.errorText(e);
+			}
+		},
+		async showMore() {
+			this.loadError = '';
+			try {
+				await this.load(this.nextCursor);
 			} catch (e) {
 				this.loadError = this.$store.i18n.errorText(e);
 			}
@@ -72,8 +84,6 @@
 			<div class="page-body">
 				<div class="container-xl">
 					<div class="alert alert-danger" x-show="loadError" x-text="loadError"></div>
-					<div class="alert alert-info" x-show="rows.length >= limit"
-						x-text="$store.i18n.t('history.truncated')"></div>
 					<div class="card">
 						<div class="card-body border-bottom py-3">
 							<div class="row g-2">
@@ -153,6 +163,10 @@
 									</tr>
 								</tbody>
 							</table>
+						</div>
+						<div class="card-footer text-center" x-show="nextCursor">
+							<button type="button" class="btn btn-outline-primary" @click="showMore()"
+								x-text="$store.i18n.t('history.showMore')"></button>
 						</div>
 					</div>
 				</div>

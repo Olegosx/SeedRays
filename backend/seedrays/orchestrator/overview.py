@@ -59,6 +59,29 @@ class HistoryRow:
 	status: str
 
 
+@dataclass(frozen=True)
+class HistoryPage:
+	"""One page of the history plus the cursor of the next one."""
+
+	rows: list[HistoryRow]
+	# Курсор «показать ещё»: (номер блока, ид строки) последней выданной
+	# строки; None — страница последняя.
+	next_cursor: tuple[int, int] | None
+
+
+def parse_history_cursor(raw: str) -> tuple[int, int]:
+	"""Parse the opaque ``block:id`` cursor of the history pagination.
+
+	Raises:
+		OperationError: invalid_cursor.
+	"""
+	block_part, _, id_part = raw.partition(":")
+	try:
+		return int(block_part), int(id_part)
+	except ValueError as exc:
+		raise OperationError("invalid_cursor", "the pagination cursor is malformed") from exc
+
+
 async def history(
 	engine: AsyncEngine,
 	registry: AsyncEngine,
@@ -68,8 +91,14 @@ async def history(
 	asset: str | None = None,
 	status: str = "all",
 	limit: int = HISTORY_LIMIT_DEFAULT,
-) -> list[HistoryRow]:
-	"""Incoming operations across every wallet, newest first.
+	cursor: tuple[int, int] | None = None,
+) -> HistoryPage:
+	"""Incoming operations across every wallet, newest first, page by page.
+
+	Пагинация курсорная («показать ещё», решение владельца): курсор —
+	позиция последней выданной строки в порядке (блок ↓, ид ↓); следующая
+	страница продолжает строго за ним, поэтому появление новых операций
+	сверху не сдвигает уже показанное.
 
 	Raises:
 		OperationError: invalid_status / invalid_limit.
@@ -82,10 +111,11 @@ async def history(
 		raise OperationError("invalid_limit", "limit must be non-negative (0 means all)")
 
 	address_to_wallet, wallet_names = await user_views.wallet_display_map(engine)
-	rows = await user_views.list_incoming(engine)
+	rows = await user_views.list_incoming(engine, before=cursor)
 	infos = await _asset_infos(registry, {row.asset_id for row in rows})
 
 	result: list[HistoryRow] = []
+	next_cursor: tuple[int, int] | None = None
 	for row in rows:
 		info = infos.get(row.asset_id)
 		if info is None:
@@ -111,8 +141,10 @@ async def history(
 			continue
 		result.append(entry)
 		if limit and len(result) >= limit:
+			# Лимит выбран не до конца выборки — есть следующая страница.
+			next_cursor = (row.block_number, row.id)
 			break
-	return result
+	return HistoryPage(rows=result, next_cursor=next_cursor)
 
 
 @dataclass(frozen=True)
@@ -164,5 +196,5 @@ async def overview(engine: AsyncEngine, registry: AsyncEngine) -> Overview:
 		applications=app_count,
 		addresses=address_count,
 		receipts=receipts,
-		recent=recent,
+		recent=recent.rows,
 	)

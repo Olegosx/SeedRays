@@ -517,9 +517,10 @@ def register_user_routes(
 		asset: str | None = None,
 		status: str = "all",
 		limit: Annotated[int, Query(ge=0)] = overview_ops.HISTORY_LIMIT_DEFAULT,
+		cursor: str | None = None,
 	) -> dict:
-		"""Incoming operations across every wallet, with filters."""
-		rows = await overview_ops.history(
+		"""Incoming operations, filterable; ``cursor`` continues the previous page."""
+		page = await overview_ops.history(
 			engine,
 			ctx.registry,
 			wallet_id=wallet_id,
@@ -527,8 +528,14 @@ def register_user_routes(
 			asset=asset,
 			status=status,
 			limit=limit,
+			cursor=overview_ops.parse_history_cursor(cursor) if cursor else None,
 		)
-		return {"history": [_history_json(row) for row in rows]}
+		return {
+			"history": [_history_json(row) for row in page.rows],
+			"next_cursor": (
+				f"{page.next_cursor[0]}:{page.next_cursor[1]}" if page.next_cursor else None
+			),
+		}
 
 	@app.get("/v1/user/overview")
 	async def get_overview(

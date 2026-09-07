@@ -9,7 +9,7 @@ point of truth of the financial model.
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.storage.schema_user import applications, balances, bindings, transactions, wallets
@@ -40,11 +40,22 @@ async def wallet_display_map(engine: AsyncEngine) -> tuple[dict[str, int], dict[
 	return {b.address: b.wallet_id for b in binding_rows}, names
 
 
-async def list_incoming(engine: AsyncEngine, *, addresses: list[str] | None = None) -> list:
+async def list_incoming(
+	engine: AsyncEngine,
+	*,
+	addresses: list[str] | None = None,
+	before: tuple[int, int] | None = None,
+) -> list:
 	"""Incoming transaction rows, newest first; optionally scoped to addresses.
 
 	Кормит и историю кабинета (без охвата адресов), и историю API
 	приложений (по адресам одного пользователя приложения).
+
+	Args:
+		engine: The owner's user-database engine.
+		addresses: When given, only rows on these addresses.
+		before: Pagination cursor ``(block_number, row id)`` — only rows
+			strictly older in the (block desc, id desc) ordering.
 	"""
 	query = (
 		select(transactions)
@@ -53,6 +64,17 @@ async def list_incoming(engine: AsyncEngine, *, addresses: list[str] | None = No
 	)
 	if addresses is not None:
 		query = query.where(transactions.c.address.in_(addresses))
+	if before is not None:
+		block, row_id = before
+		query = query.where(
+			or_(
+				transactions.c.block_number < block,
+				and_(
+					transactions.c.block_number == block,
+					transactions.c.id < row_id,
+				),
+			)
+		)
 	async with engine.connect() as conn:
 		return (await conn.execute(query)).all()
 
