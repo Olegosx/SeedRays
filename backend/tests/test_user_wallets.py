@@ -5,7 +5,7 @@ from pathlib import Path
 
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, validate_mnemonic
-from seeding import signed_in_client
+from seeding import captcha_solution, signed_in_client
 
 TEST_MNEMONIC = (
 	"abandon abandon abandon abandon abandon abandon "
@@ -162,10 +162,20 @@ def test_attach_rejects_duplicate_xpub_neutrally(tmp_path: Path) -> None:
 			# без раскрытия, что xpub уже подключён.
 			await client.post(
 				"/v1/user/register",
-				json={"username": "bob", "email": "b@example.com", "password": "correct-horse"},
+				json={
+					"username": "bob",
+					"email": "b@example.com",
+					"password": "correct-horse",
+					"captcha": await captcha_solution(client),
+				},
 			)
 			login = await client.post(
-				"/v1/user/login", json={"identifier": "bob", "password": "correct-horse"}
+				"/v1/user/login",
+				json={
+					"identifier": "bob",
+					"password": "correct-horse",
+					"captcha": await captcha_solution(client),
+				},
 			)
 			other = await client.post(
 				"/v1/user/wallets",

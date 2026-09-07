@@ -6,7 +6,14 @@ from pathlib import Path
 import httpx
 
 from seedrays.api.app_api import create_app
-from seeding import FakeMailer, confirm_link, enable_dev_mail, signed_in_client
+from seeding import (
+	TEST_CAPTCHA_COST,
+	FakeMailer,
+	captcha_solution,
+	confirm_link,
+	enable_dev_mail,
+	signed_in_client,
+)
 from seedrays.storage.migrations.runner import upgrade_registry
 
 
@@ -64,7 +71,7 @@ def test_change_password_drops_other_sessions(tmp_path: Path) -> None:
 	async def scenario() -> None:
 		upgrade_registry(tmp_path)
 		await enable_dev_mail(tmp_path)
-		app = create_app(tmp_path, mailer=None)
+		app = create_app(tmp_path, mailer=None, captcha_cost=TEST_CAPTCHA_COST)
 		first = httpx.AsyncClient(
 			transport=httpx.ASGITransport(app=app), base_url="https://gw"
 		)
@@ -78,16 +85,25 @@ def test_change_password_drops_other_sessions(tmp_path: Path) -> None:
 					"username": "alice",
 					"email": "a@example.com",
 					"password": "correct-horse",
+					"captcha": await captcha_solution(first),
 				},
 			)
 			login = await first.post(
 				"/v1/user/login",
-				json={"identifier": "alice", "password": "correct-horse"},
+				json={
+					"identifier": "alice",
+					"password": "correct-horse",
+					"captcha": await captcha_solution(first),
+				},
 			)
 			csrf = login.json()["csrf"]
 			await second.post(
 				"/v1/user/login",
-				json={"identifier": "alice", "password": "correct-horse"},
+				json={
+					"identifier": "alice",
+					"password": "correct-horse",
+					"captcha": await captcha_solution(second),
+				},
 			)
 			assert (await second.get("/v1/user/me")).status_code == 200
 
@@ -114,12 +130,20 @@ def test_change_password_drops_other_sessions(tmp_path: Path) -> None:
 
 			old = await second.post(
 				"/v1/user/login",
-				json={"identifier": "alice", "password": "correct-horse"},
+				json={
+					"identifier": "alice",
+					"password": "correct-horse",
+					"captcha": await captcha_solution(second),
+				},
 			)
 			assert old.status_code == 401
 			fresh = await second.post(
 				"/v1/user/login",
-				json={"identifier": "alice", "password": "new-password-1"},
+				json={
+					"identifier": "alice",
+					"password": "new-password-1",
+					"captcha": await captcha_solution(second),
+				},
 			)
 			assert fresh.status_code == 200
 		finally:

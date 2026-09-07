@@ -44,6 +44,7 @@ def create_app(
 	data_dir: Path,
 	frontend_dir: Path | None = None,
 	mailer: MailSender | None = None,
+	captcha_cost: int | None = None,
 ) -> FastAPI:
 	"""Build the FastAPI application: the Application and User API groups.
 
@@ -53,14 +54,16 @@ def create_app(
 			(ADR-0012: the backend process may serve the static files).
 		mailer: Mail sender override for tests; by default the sender is
 			built from the registry settings.
+		captcha_cost: Proof-of-work cost override for tests; by default
+			the production cost of the captcha module.
 
 	Returns:
 		The configured FastAPI application.
 	"""
 	app = FastAPI(title="SeedRays API", version="1")
 	register_error_handlers(app)
-	register_user_routes(app, data_dir, mailer=mailer)
-	register_operator_routes(app, data_dir)
+	register_user_routes(app, data_dir, mailer=mailer, captcha_cost=captcha_cost)
+	register_operator_routes(app, data_dir, captcha_cost=captcha_cost)
 
 	async def caller(
 		x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,

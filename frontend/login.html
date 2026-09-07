@@ -10,10 +10,11 @@
 	<script type="module" src="js/i18n.js"></script>
 	<script type="module" src="js/layout.js"></script>
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+	<script async defer src="vendor/altcha/altcha.i18n.min.js" type="module"></script>
 </head>
 <body class="d-flex flex-column">
 	<div class="page page-center" x-cloak x-data="{
-		identifier: '', password: '', remember: false, error: '', notice: '',
+		identifier: '', password: '', remember: false, busy: false, error: '', notice: '',
 		init() {
 			const params = new URLSearchParams(location.search);
 			if (params.get('confirmed') === '1') {
@@ -25,15 +26,21 @@
 			}
 		},
 		async submit() {
+			if (this.busy) return;
+			this.busy = true;
 			this.error = '';
 			try {
 				const { api } = await import('/js/api.js');
+				const { solveCaptcha } = await import('/js/captcha.js');
 				await api('POST', '/v1/user/login', {
 					identifier: this.identifier, password: this.password, remember: this.remember,
+					captcha: await solveCaptcha(this.$root),
 				});
 				location.href = 'dashboard.html';
 			} catch (e) {
 				this.error = this.$store.i18n.errorText(e);
+			} finally {
+				this.busy = false;
 			}
 		},
 	}">
@@ -81,8 +88,9 @@
 								<span class="form-check-label" x-text="$store.i18n.t('login.remember')"></span>
 							</label>
 						</div>
+						<altcha-widget challenge="/v1/user/captcha" display="invisible"></altcha-widget>
 						<div class="form-footer">
-							<button type="submit" class="btn btn-primary w-100"
+							<button type="submit" class="btn btn-primary w-100" :class="busy && 'btn-loading'"
 								x-text="$store.i18n.t('login.submit')"></button>
 						</div>
 					</form>

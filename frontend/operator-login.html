@@ -10,20 +10,27 @@
 	<script type="module" src="js/i18n.js"></script>
 	<script type="module" src="js/layout.js"></script>
 	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+	<script async defer src="vendor/altcha/altcha.i18n.min.js" type="module"></script>
 </head>
 <body class="d-flex flex-column">
 	<div class="page page-center" x-cloak x-data="{
-		login: '', password: '', error: '',
+		login: '', password: '', busy: false, error: '',
 		async submit() {
+			if (this.busy) return;
+			this.busy = true;
 			this.error = '';
 			try {
 				const { api } = await import('/js/api.js');
+				const { solveCaptcha } = await import('/js/captcha.js');
 				await api('POST', '/v1/operator/login', {
 					login: this.login, password: this.password,
+					captcha: await solveCaptcha(this.$root),
 				});
 				location.href = 'operator-users.html';
 			} catch (e) {
 				this.error = this.$store.i18n.errorText(e);
+			} finally {
+				this.busy = false;
 			}
 		},
 	}">
@@ -48,8 +55,9 @@
 							<input type="password" class="form-control" name="password" x-model="password"
 								autocomplete="current-password">
 						</div>
+						<altcha-widget challenge="/v1/operator/captcha" display="invisible"></altcha-widget>
 						<div class="form-footer">
-							<button type="submit" class="btn btn-primary w-100"
+							<button type="submit" class="btn btn-primary w-100" :class="busy && 'btn-loading'"
 								x-text="$store.i18n.t('op.submit')"></button>
 						</div>
 					</form>

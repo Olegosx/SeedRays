@@ -17,6 +17,7 @@ dependencies = [
     "bip-utils==2.12.2",
     "argon2-cffi==25.1.0",
     "aiosqlite==0.22.1",
+    "altcha==2.1.0",
 ]
 
 [dependency-groups]

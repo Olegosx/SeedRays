@@ -48,6 +48,9 @@ worked out.
 - One identifier field + password; the identifier field accepts the username and the email
   interchangeably (lookup by username first, then by email — both are unique, so ambiguity
   is impossible).
+- Sign-in, registration and the password-reset request are behind an invisible
+  proof-of-work check ([ADR-0022](../20-architecture/decisions/0022-pow-captcha.md)):
+  the browser solves a background computational challenge, the visitor sees no puzzles.
 
 ## Password Recovery
 

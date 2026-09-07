@@ -84,9 +84,10 @@ GET  /v1/app/users                  [?limit=]
 ## User API: Implemented Routes
 
 ```
-POST   /v1/user/register          body: {"username", "email", "password"}
+GET    /v1/user/captcha           (a signed proof-of-work challenge, ADR-0022)
+POST   /v1/user/register          body: {"username", "email", "password", "captcha"}
 GET    /v1/user/confirm-email     ?token=…   (the link from the email; redirects to sign-in)
-POST   /v1/user/login             body: {"identifier", "password", "remember"}
+POST   /v1/user/login             body: {"identifier", "password", "remember", "captcha"}
 POST   /v1/user/logout
 GET    /v1/user/me
 GET    /v1/user/networks          (networks, families and block-explorer link templates)
@@ -106,7 +107,7 @@ GET    /v1/user/overview     (counters, receipts by asset, recent operations)
 POST   /v1/user/emails       body: {"address"}   (a second email, confirmed by a message)
 DELETE /v1/user/emails/{id}                      (the primary one cannot be removed)
 POST   /v1/user/password     body: {"current_password", "new_password"}
-POST   /v1/user/password-reset          body: {"email"}
+POST   /v1/user/password-reset          body: {"email", "captcha"}
 POST   /v1/user/password-reset/confirm  body: {"token", "new_password"}
 ```
 
@@ -139,6 +140,11 @@ through the same brute-force brake.
 - Brute-force brake: sign-in and registration are rate-limited by in-process sliding
   windows (per client + identifier for sign-in, per client for registration); over the
   limit the answer is 429 `rate_limited`.
+- Proof-of-work captcha ([ADR-0022](../decisions/0022-pow-captcha.md)): sign-in,
+  registration and the reset request carry a `captcha` field — the solution of a
+  challenge from `GET /v1/user/captcha`, solved invisibly by the browser. Challenges
+  are HMAC-signed, expire in 10 minutes and are accepted exactly once; the check runs
+  after the rate limiter, a failure answers 400 `captcha_failed`.
 - Sign-in: one identifier field (username or email); until the primary email is
   confirmed, sign-in is closed (`email_not_confirmed`); "no such user" and "wrong
   password" produce the same `invalid_credentials` answer.
@@ -163,7 +169,8 @@ through the same brute-force brake.
 ## Operator API: Implemented Routes
 
 ```
-POST /v1/operator/login      body: {"login", "password"}
+GET  /v1/operator/captcha    (a signed proof-of-work challenge, ADR-0022)
+POST /v1/operator/login      body: {"login", "password", "captcha"}
 POST /v1/operator/logout
 GET  /v1/operator/me
 POST /v1/operator/password   body: {"current_password", "new_password"}
@@ -175,9 +182,11 @@ PUT  /v1/operator/settings   body: {"values": {key: value}}
 GET  /v1/operator/watcher    (per-network watcher cursors, read-only)
 ```
 
-- The panel session is its own HttpOnly/Secure cookie, separate from the cabinet; CSRF
-  and the brute-force brake are the same mechanisms as in the user group. Operator
-  accounts are created only by the `seedrays operator-create` console command.
+- The panel session is its own HttpOnly/Secure cookie, separate from the cabinet; CSRF,
+  the brute-force brake and the proof-of-work captcha are the same mechanisms as in the
+  user group (the panel keeps its own captcha issuer — the group boundary stays
+  structural). Operator accounts are created only by the `seedrays operator-create`
+  console command.
 - Secret settings never appear in answers — only a "set" flag; an empty secret on save
   means "keep". Blocking a user terminates their sessions, and their applications lose
   Application API access immediately.

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.api.errors import ApiError
 from seedrays.orchestrator import operator as operator_ops
+from seedrays.orchestrator.captcha import CaptchaGuard
 from seedrays.orchestrator.ratelimit import RateLimiter
 from seedrays.storage.engine import create_sqlite_engine, now_utc, registry_db_path
 
@@ -32,6 +33,7 @@ class OperatorLoginRequest(BaseModel):
 
 	login: str = Field(min_length=1, max_length=64)
 	password: str = Field(min_length=1, max_length=1024)
+	captcha: str = Field(min_length=1, max_length=4096)
 
 
 class OperatorPasswordRequest(BaseModel):
@@ -62,14 +64,19 @@ class OperatorContext:
 	session_token: str
 
 
-def register_operator_routes(app: FastAPI, data_dir: Path) -> None:
+def register_operator_routes(
+	app: FastAPI, data_dir: Path, captcha_cost: int | None = None
+) -> None:
 	"""Attach the /v1/operator route group.
 
 	Args:
 		app: The FastAPI application.
 		data_dir: The gateway data directory.
+		captcha_cost: Proof-of-work cost override (tests); by default
+			the production cost of the captcha module.
 	"""
 	login_limiter = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS)
+	captcha_guard = CaptchaGuard(cost=captcha_cost) if captcha_cost else CaptchaGuard()
 
 	async def registry_engine() -> AsyncIterator[AsyncEngine]:
 		"""Open the registry engine for one request."""
@@ -108,6 +115,11 @@ def register_operator_routes(app: FastAPI, data_dir: Path) -> None:
 
 	MutatingSessionDep = Depends(mutating_session)
 
+	@app.get("/v1/operator/captcha")
+	async def issue_captcha() -> dict:
+		"""One signed proof-of-work challenge for the ALTCHA widget."""
+		return captcha_guard.issue()
+
 	@app.post("/v1/operator/login")
 	async def login(
 		body: OperatorLoginRequest,
@@ -119,6 +131,10 @@ def register_operator_routes(app: FastAPI, data_dir: Path) -> None:
 		client = request.client.host if request.client else "unknown"
 		if not login_limiter.allow(f"{client}|{body.login.strip().lower()}"):
 			raise ApiError(429, "rate_limited", "too many sign-in attempts; try again later")
+		if not captcha_guard.verify(body.captcha):
+			raise ApiError(
+				400, "captcha_failed", "the proof-of-work check failed; please try again"
+			)
 		signed = await operator_ops.sign_in(
 			registry, login=body.login, password=body.password
 		)

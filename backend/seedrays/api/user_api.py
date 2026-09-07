@@ -27,6 +27,7 @@ from seedrays.orchestrator import apps as app_ops
 from seedrays.orchestrator import auth
 from seedrays.orchestrator import overview as overview_ops
 from seedrays.orchestrator import wallets as wallet_ops
+from seedrays.orchestrator.captcha import CaptchaGuard
 from seedrays.orchestrator.ratelimit import RateLimiter
 from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import create_sqlite_engine, now_utc, registry_db_path, user_db_path
@@ -58,6 +59,7 @@ class RegisterRequest(BaseModel):
 	username: str = Field(min_length=1, max_length=128)
 	email: str = Field(min_length=3, max_length=255)
 	password: str = Field(min_length=1, max_length=1024)
+	captcha: str = Field(min_length=1, max_length=4096)
 
 
 class LoginRequest(BaseModel):
@@ -66,6 +68,7 @@ class LoginRequest(BaseModel):
 	identifier: str = Field(min_length=1, max_length=255)
 	password: str = Field(min_length=1, max_length=1024)
 	remember: bool = False
+	captcha: str = Field(min_length=1, max_length=4096)
 
 
 class AttachWalletRequest(BaseModel):
@@ -88,6 +91,7 @@ class ResetRequest(BaseModel):
 	"""Body of the password-reset request."""
 
 	email: str = Field(min_length=3, max_length=255)
+	captcha: str = Field(min_length=1, max_length=4096)
 
 
 class ResetConfirmRequest(BaseModel):
@@ -142,7 +146,10 @@ async def _resolve_mailer(registry: AsyncEngine) -> MailSender | None:
 
 
 def register_user_routes(
-	app: FastAPI, data_dir: Path, mailer: MailSender | None = None
+	app: FastAPI,
+	data_dir: Path,
+	mailer: MailSender | None = None,
+	captcha_cost: int | None = None,
 ) -> None:
 	"""Attach the /v1/user route group.
 
@@ -152,10 +159,20 @@ def register_user_routes(
 		mailer: Mail sender override (tests); by default the sender is
 			built from the registry settings on every mail-sending
 			operation (registration, adding an email).
+		captcha_cost: Proof-of-work cost override (tests); by default
+			the production cost of the captcha module.
 	"""
 	login_limiter = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS)
 	register_limiter = RateLimiter(REGISTER_LIMIT, REGISTER_WINDOW_SECONDS)
 	reset_limiter = RateLimiter(RESET_LIMIT, RESET_WINDOW_SECONDS)
+	captcha_guard = CaptchaGuard(cost=captcha_cost) if captcha_cost else CaptchaGuard()
+
+	def _check_captcha(payload: str) -> None:
+		"""Reject the request when its proof-of-work solution is not genuine."""
+		if not captcha_guard.verify(payload):
+			raise ApiError(
+				400, "captcha_failed", "the proof-of-work check failed; please try again"
+			)
 
 	def _client_host(request: Request) -> str:
 		"""The caller's address for rate-limit keys."""
@@ -240,6 +257,11 @@ def register_user_routes(
 			path="/",
 		)
 
+	@app.get("/v1/user/captcha")
+	async def issue_captcha() -> dict:
+		"""One signed proof-of-work challenge for the ALTCHA widget."""
+		return captcha_guard.issue()
+
 	@app.post("/v1/user/register")
 	async def register(
 		body: RegisterRequest, request: Request, registry: AsyncEngine = RegistryDep
@@ -247,6 +269,7 @@ def register_user_routes(
 		"""Create an account; sends the confirmation email when mail is set up."""
 		if not register_limiter.allow(_client_host(request)):
 			raise ApiError(429, "rate_limited", "too many registrations; try again later")
+		_check_captcha(body.captcha)
 		active_mailer, base_url, dev = await _mail_context(registry)
 		registered = await auth.register(
 			registry,
@@ -283,6 +306,7 @@ def register_user_routes(
 		key = f"{_client_host(request)}|{body.identifier.strip().lower()}"
 		if not login_limiter.allow(key):
 			raise ApiError(429, "rate_limited", "too many sign-in attempts; try again later")
+		_check_captcha(body.captcha)
 		signed = await auth.sign_in(
 			registry,
 			identifier=body.identifier,
@@ -299,6 +323,7 @@ def register_user_routes(
 		"""Send the reset link; the answer never reveals whether the email exists."""
 		if not reset_limiter.allow(_client_host(request)):
 			raise ApiError(429, "rate_limited", "too many reset requests; try again later")
+		_check_captcha(body.captcha)
 		active_mailer, base_url, _dev = await _mail_context(registry)
 		await auth.request_password_reset(
 			registry, email=body.email, mailer=active_mailer, reset_base_url=base_url

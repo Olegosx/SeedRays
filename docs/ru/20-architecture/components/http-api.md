@@ -85,9 +85,10 @@ GET  /v1/app/users                  [?limit=]
 ## API пользователя: реализованные маршруты
 
 ```
-POST   /v1/user/register          тело: {"username", "email", "password"}
+GET    /v1/user/captcha           (подписанная proof-of-work задача, ADR-0022)
+POST   /v1/user/register          тело: {"username", "email", "password", "captcha"}
 GET    /v1/user/confirm-email     ?token=…   (ссылка из письма; переадресует на вход)
-POST   /v1/user/login             тело: {"identifier", "password", "remember"}
+POST   /v1/user/login             тело: {"identifier", "password", "remember", "captcha"}
 POST   /v1/user/logout
 GET    /v1/user/me
 GET    /v1/user/networks          (сети, семейства и шаблоны ссылок на обозреватель блоков)
@@ -107,7 +108,7 @@ GET    /v1/user/overview     (счётчики, поступления по ак
 POST   /v1/user/emails       тело: {"address"}   (вторая почта, подтверждение письмом)
 DELETE /v1/user/emails/{id}                      (основную удалить нельзя)
 POST   /v1/user/password     тело: {"current_password", "new_password"}
-POST   /v1/user/password-reset          тело: {"email"}
+POST   /v1/user/password-reset          тело: {"email", "captcha"}
 POST   /v1/user/password-reset/confirm  тело: {"token", "new_password"}
 ```
 
@@ -139,6 +140,11 @@ POST   /v1/user/password-reset/confirm  тело: {"token", "new_password"}
 - Тормоз перебора: вход и регистрация ограничены скользящими окнами в памяти процесса
   (для входа — по клиенту и идентификатору, для регистрации — по клиенту); сверх лимита
   ответ 429 `rate_limited`.
+- Proof-of-work капча ([ADR-0022](../decisions/0022-pow-captcha.md)): вход, регистрация
+  и запрос сброса несут поле `captcha` — решение задачи из `GET /v1/user/captcha`,
+  которое браузер вычисляет незаметно. Задачи подписаны HMAC, живут 10 минут и
+  принимаются ровно один раз; проверка идёт после тормоза перебора, отказ отвечает
+  400 `captcha_failed`.
 - Вход: одно поле идентификатора (имя или почта); до подтверждения основной почты вход
   закрыт (`email_not_confirmed`); «нет такого пользователя» и «не тот пароль» дают
   одинаковый ответ `invalid_credentials`.
@@ -162,7 +168,8 @@ POST   /v1/user/password-reset/confirm  тело: {"token", "new_password"}
 ## API оператора: реализованные маршруты
 
 ```
-POST /v1/operator/login      тело: {"login", "password"}
+GET  /v1/operator/captcha    (подписанная proof-of-work задача, ADR-0022)
+POST /v1/operator/login      тело: {"login", "password", "captcha"}
 POST /v1/operator/logout
 GET  /v1/operator/me
 POST /v1/operator/password   тело: {"current_password", "new_password"}
@@ -174,8 +181,9 @@ PUT  /v1/operator/settings   тело: {"values": {ключ: значение}}
 GET  /v1/operator/watcher    (курсоры watcher по сетям, только чтение)
 ```
 
-- Сессия панели — собственная кука HttpOnly/Secure, отдельная от кабинета; CSRF и
-  тормоз перебора — те же механизмы, что в группе пользователя. Учётные записи
+- Сессия панели — собственная кука HttpOnly/Secure, отдельная от кабинета; CSRF,
+  тормоз перебора и proof-of-work капча — те же механизмы, что в группе пользователя
+  (у панели свой выпуск задач — граница групп остаётся структурной). Учётные записи
   операторов создаются только консольной командой `seedrays operator-create`.
 - Секретные настройки в ответах не появляются — только признак «задано»; пустой секрет
   при сохранении означает «не менять». Блокировка пользователя завершает его сессии,

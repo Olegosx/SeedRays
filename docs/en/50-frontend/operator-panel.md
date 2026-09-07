@@ -10,9 +10,10 @@ managing users and gateway-wide settings.
 - Operator registration does not exist: the account is created by the console command
   `seedrays operator-create --login …` on the server (the password — by hidden
   interactive input). Whoever has server console access creates operators.
-- Sign-in is a separate page; the panel session lives in its own cookie, separate from
-  the user cabinet (the structural boundary of ADR-0004), and lasts 1 day. Sign-in is
-  limited by the same brute-force brake as the cabinet.
+- Sign-in is a separate page behind the same brute-force brake and the same invisible
+  proof-of-work captcha ([ADR-0022](../20-architecture/decisions/0022-pow-captcha.md))
+  as the cabinet; the panel session lives in its own cookie, separate from
+  the user cabinet (the structural boundary of ADR-0004), and lasts 1 day.
 - The operator password change lives on the settings page; a change drops the
   operator's other sessions.
 

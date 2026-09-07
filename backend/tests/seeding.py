@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import json
 import re
 from pathlib import Path
 
+import altcha
 import httpx
 from sqlalchemy import insert
 
@@ -25,6 +28,22 @@ TEST_MNEMONIC = (
 TEST_API_KEY = "test-api-key-0001"
 # m/44'/195'/0'/0/0 этой фразы — эталонный адрес из тестов деривации.
 FIRST_TRON_ADDRESS = "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH"
+
+# Дешёвая сложность капчи, чтобы тесты решали задачи мгновенно.
+TEST_CAPTCHA_COST = 10
+
+
+async def captcha_solution(
+	client: httpx.AsyncClient, path: str = "/v1/user/captcha"
+) -> str:
+	"""Fetch one proof-of-work challenge from the gateway and solve it."""
+	response = await client.get(path)
+	assert response.status_code == 200, response.text
+	challenge = altcha.Challenge.from_dict(response.json())
+	solution = altcha.solve_challenge(challenge)
+	assert solution is not None, "the test captcha challenge was not solved"
+	payload = {"challenge": challenge.to_dict(), "solution": solution.to_dict()}
+	return base64.b64encode(json.dumps(payload).encode()).decode()
 
 
 class FakeMailer(MailSender):
@@ -55,16 +74,28 @@ async def signed_in_client(
 	"""
 	upgrade_registry(data_dir)
 	await enable_dev_mail(data_dir)
-	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=mailer))
+	transport = httpx.ASGITransport(
+		app=create_app(data_dir, mailer=mailer, captcha_cost=TEST_CAPTCHA_COST)
+	)
 	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
 	await client.post(
 		"/v1/user/register",
-		json={"username": "alice", "email": "a@example.com", "password": "correct-horse"},
+		json={
+			"username": "alice",
+			"email": "a@example.com",
+			"password": "correct-horse",
+			"captcha": await captcha_solution(client),
+		},
 	)
 	if mailer is not None:
 		await client.get(confirm_link(mailer))
 	login = await client.post(
-		"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
+		"/v1/user/login",
+		json={
+			"identifier": "alice",
+			"password": "correct-horse",
+			"captcha": await captcha_solution(client),
+		},
 	)
 	return client, login.json()["csrf"]
 

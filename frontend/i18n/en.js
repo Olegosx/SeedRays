@@ -26,6 +26,7 @@ export const en = {
 	"errors.mail_failed": "Could not send the email — try again later.",
 	"errors.mail_not_configured": "The gateway's outgoing mail is not configured yet — contact the operator.",
 	"errors.rate_limited": "Too many attempts — wait a little and try again.",
+	"errors.captcha_failed": "The robot-protection check failed — please try again.",
 	"errors.network": "No connection to the server.",
 	"errors.invalid_xpub": "This xpub was not accepted — check that it is a valid account-level xpub.",
 	"errors.private_key_rejected": "This is a PRIVATE key. Never paste it anywhere — treat it as compromised and move the funds to a new wallet. The gateway only needs the public xpub.",

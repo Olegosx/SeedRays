@@ -9,7 +9,35 @@ from seedrays.api.app_api import create_app
 from seedrays.orchestrator.operator import create_operator
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path
 from seedrays.storage.migrations.runner import upgrade_registry
-from seeding import enable_dev_mail
+from seeding import TEST_CAPTCHA_COST, captcha_solution, enable_dev_mail
+
+
+async def _operator_login(
+	client: httpx.AsyncClient, login: str, password: str
+) -> httpx.Response:
+	"""POST /operator/login with a freshly solved captcha."""
+	return await client.post(
+		"/v1/operator/login",
+		json={
+			"login": login,
+			"password": password,
+			"captcha": await captcha_solution(client, "/v1/operator/captcha"),
+		},
+	)
+
+
+async def _user_login(
+	client: httpx.AsyncClient, identifier: str, password: str
+) -> httpx.Response:
+	"""POST /user/login with a freshly solved captcha."""
+	return await client.post(
+		"/v1/user/login",
+		json={
+			"identifier": identifier,
+			"password": password,
+			"captcha": await captcha_solution(client),
+		},
+	)
 
 
 async def _operator_client(data_dir: Path) -> tuple[httpx.AsyncClient, str]:
@@ -18,11 +46,11 @@ async def _operator_client(data_dir: Path) -> tuple[httpx.AsyncClient, str]:
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	await create_operator(registry, login="boss", password="operator-pass")
 	await registry.dispose()
-	transport = httpx.ASGITransport(app=create_app(data_dir, mailer=None))
-	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
-	login = await client.post(
-		"/v1/operator/login", json={"login": "boss", "password": "operator-pass"}
+	transport = httpx.ASGITransport(
+		app=create_app(data_dir, mailer=None, captcha_cost=TEST_CAPTCHA_COST)
 	)
+	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
+	login = await _operator_login(client, "boss", "operator-pass")
 	assert login.status_code == 200, login.text
 	return client, login.json()["csrf"]
 
@@ -33,9 +61,7 @@ def test_operator_sign_in_and_password_change(tmp_path: Path) -> None:
 	async def scenario() -> None:
 		client, csrf = await _operator_client(tmp_path)
 		try:
-			wrong = await client.post(
-				"/v1/operator/login", json={"login": "boss", "password": "nope-nope"}
-			)
+			wrong = await _operator_login(client, "boss", "nope-nope")
 			assert wrong.status_code == 401
 			assert (await client.get("/v1/operator/me")).json()["operator"]["login"] == "boss"
 
@@ -52,9 +78,7 @@ def test_operator_sign_in_and_password_change(tmp_path: Path) -> None:
 				headers={"X-CSRF-Token": csrf},
 			)
 			assert changed.status_code == 200
-			relogin = await client.post(
-				"/v1/operator/login", json={"login": "boss", "password": "next-pass-1"}
-			)
+			relogin = await _operator_login(client, "boss", "next-pass-1")
 			assert relogin.status_code == 200
 		finally:
 			await client.aclose()
@@ -70,7 +94,9 @@ def test_operator_manages_users(tmp_path: Path) -> None:
 		headers = {"X-CSRF-Token": csrf}
 		await enable_dev_mail(tmp_path)
 		user = httpx.AsyncClient(
-			transport=httpx.ASGITransport(app=create_app(tmp_path, mailer=None)),
+			transport=httpx.ASGITransport(
+				app=create_app(tmp_path, mailer=None, captcha_cost=TEST_CAPTCHA_COST)
+			),
 			base_url="https://gw",
 		)
 		try:
@@ -80,11 +106,10 @@ def test_operator_manages_users(tmp_path: Path) -> None:
 					"username": "alice",
 					"email": "a@example.com",
 					"password": "correct-horse",
+					"captcha": await captcha_solution(user),
 				},
 			)
-			await user.post(
-				"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
-			)
+			await _user_login(user, "alice", "correct-horse")
 			assert (await user.get("/v1/user/me")).status_code == 200
 
 			listed = (await client.get("/v1/operator/users")).json()["users"]
@@ -102,9 +127,7 @@ def test_operator_manages_users(tmp_path: Path) -> None:
 			)
 			assert blocked.status_code == 200
 			assert (await user.get("/v1/user/me")).status_code == 401
-			refused = await user.post(
-				"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
-			)
+			refused = await _user_login(user, "alice", "correct-horse")
 			assert refused.status_code == 401
 
 			await client.post(
@@ -118,13 +141,9 @@ def test_operator_manages_users(tmp_path: Path) -> None:
 				f"/v1/operator/users/{user_id}/password-reset", headers=headers
 			)
 			temp_password = reset.json()["password"]
-			old = await user.post(
-				"/v1/user/login", json={"identifier": "alice", "password": "correct-horse"}
-			)
+			old = await _user_login(user, "alice", "correct-horse")
 			assert old.status_code == 401
-			fresh = await user.post(
-				"/v1/user/login", json={"identifier": "alice", "password": temp_password}
-			)
+			fresh = await _user_login(user, "alice", temp_password)
 			assert fresh.status_code == 200
 
 			unknown = await client.post(

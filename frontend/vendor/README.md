@@ -9,13 +9,19 @@ deliberate separate task (see ADR-0012).
 | Tabler | @tabler/core 1.4.0 | `cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/` |
 | Tabler Icons (webfont) | 3.46.0 | `cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.46.0/dist/` |
 | Alpine.js | 3.17.1 | `cdn.jsdelivr.net/npm/alpinejs@3.17.1/dist/cdn.min.js` |
+| ALTCHA widget (with all translations) | altcha 3.2.2 | `registry.npmjs.org/altcha/-/altcha-3.2.2.tgz` → `dist/main/altcha.i18n.min.js` |
 
-Licenses: MIT for all three; the license text of each library sits in its directory.
+Licenses: MIT for all four; the license text of each library sits in its directory.
 
 Review notes (2026-09-02): files contain no external resource loads; the only URLs
 inside are license/documentation references in comments. `tabler.min.{css,js}` carry
 `sourceMappingURL` comments pointing at `.map` files that are deliberately not shipped —
 this only silences developer tooling, browsers ignore it.
+
+Review notes for ALTCHA (2026-09-07): the bundle spawns its proof-of-work web
+workers from embedded `data:` URLs and performs network requests only to the
+challenge URL passed in by our pages; the `https://altcha.org/` string inside is
+the footer attribution link (an `href`, not a resource load).
 
 SHA-256 of the vendored files:
 
@@ -27,4 +33,5 @@ b60c76160e97624574dbb8cf10abe6aee9a6493b60096fdfc15dd1dd2bd99eb9  tabler/tabler.
 ed0c7bc91df578809986d98917281921c6c9e64e9a726a46caacc5b1a0967eb2  tabler-icons/fonts/tabler-icons.woff
 c9df3377cc2f7b2196c57a240ff01bad34d7039abbaf7380fcfb21f6d7d8eee7  tabler-icons/fonts/tabler-icons.woff2
 b30997fc126d808b1a9b20ab3f504ded88df957818c02d6249bba3ec114eb0ec  alpinejs/alpine.min.js
+9e3a335795581933ff93bf768da339c4c6af093b32f67a32b0e0a4a14d822195  altcha/altcha.i18n.min.js
 ```
