@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.api.errors import ApiError
+from seedrays.orchestrator.operations import OperationError
 from seedrays.chains import explorer_tx_url, supported_networks
 from seedrays.families import Family
 from seedrays.mail.base import MailSender
@@ -29,6 +30,7 @@ from seedrays.orchestrator import overview as overview_ops
 from seedrays.orchestrator import wallets as wallet_ops
 from seedrays.orchestrator.captcha import CaptchaGuard
 from seedrays.orchestrator.ratelimit import RateLimiter
+from seedrays.orchestrator.seclog import ACTOR_USER, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import create_sqlite_engine, now_utc, registry_db_path, user_db_path
 
@@ -150,6 +152,7 @@ def register_user_routes(
 	data_dir: Path,
 	mailer: MailSender | None = None,
 	captcha_cost: int | None = None,
+	seclog: SecurityLog | None = None,
 ) -> None:
 	"""Attach the /v1/user route group.
 
@@ -161,15 +164,32 @@ def register_user_routes(
 			operation (registration, adding an email).
 		captcha_cost: Proof-of-work cost override (tests); by default
 			the production cost of the captcha module.
+		seclog: The gateway's security journal; created here when the
+			caller did not pass the shared instance.
 	"""
 	login_limiter = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS)
 	register_limiter = RateLimiter(REGISTER_LIMIT, REGISTER_WINDOW_SECONDS)
 	reset_limiter = RateLimiter(RESET_LIMIT, RESET_WINDOW_SECONDS)
 	captcha_guard = CaptchaGuard(cost=captcha_cost) if captcha_cost else CaptchaGuard()
+	journal = seclog if seclog is not None else SecurityLog(data_dir)
 
-	def _check_captcha(payload: str) -> None:
-		"""Reject the request when its proof-of-work solution is not genuine."""
+	async def _check_captcha(
+		payload: str,
+		*,
+		registry: AsyncEngine,
+		event: str,
+		identifier: str | None,
+		client: str,
+	) -> None:
+		"""Reject the request when its proof-of-work solution is not genuine.
+
+		Отказ капчи — событие журнала безопасности (ADR-0023).
+		"""
 		if not captcha_guard.verify(payload):
+			await journal.event(
+				registry, event, actor=ACTOR_USER, outcome="captcha_failed",
+				identifier=identifier, client=client,
+			)
 			raise ApiError(
 				400, "captcha_failed", "the proof-of-work check failed; please try again"
 			)
@@ -267,19 +287,39 @@ def register_user_routes(
 		body: RegisterRequest, request: Request, registry: AsyncEngine = RegistryDep
 	) -> dict:
 		"""Create an account; sends the confirmation email when mail is set up."""
-		if not register_limiter.allow(_client_host(request)):
+		client = _client_host(request)
+		if not register_limiter.allow(client):
+			await journal.event(
+				registry, "register", actor=ACTOR_USER, outcome="rate_limited",
+				identifier=body.username, client=client,
+			)
 			raise ApiError(429, "rate_limited", "too many registrations; try again later")
-		_check_captcha(body.captcha)
+		await _check_captcha(
+			body.captcha, registry=registry, event="register",
+			identifier=body.username, client=client,
+		)
 		active_mailer, base_url, dev = await _mail_context(registry)
-		registered = await auth.register(
-			registry,
-			data_dir,
-			username=body.username,
-			email=body.email,
-			password=body.password,
-			mailer=active_mailer,
-			confirm_base_url=base_url,
-			dev_autoconfirm=dev,
+		try:
+			registered = await auth.register(
+				registry,
+				data_dir,
+				username=body.username,
+				email=body.email,
+				password=body.password,
+				mailer=active_mailer,
+				confirm_base_url=base_url,
+				dev_autoconfirm=dev,
+			)
+		except OperationError as exc:
+			# Точная причина отказа — в журнал; ответ наружу не меняется.
+			await journal.event(
+				registry, "register", actor=ACTOR_USER, outcome=exc.code,
+				identifier=body.username, client=client,
+			)
+			raise
+		await journal.event(
+			registry, "register", actor=ACTOR_USER, outcome=OUTCOME_SUCCESS,
+			identifier=registered.username, user_id=registered.user_id, client=client,
 		)
 		return {
 			"user": {"username": registered.username},
@@ -303,15 +343,25 @@ def register_user_routes(
 		registry: AsyncEngine = RegistryDep,
 	) -> dict:
 		"""Sign in by username or email; sets the session cookie."""
-		key = f"{_client_host(request)}|{body.identifier.strip().lower()}"
+		client = _client_host(request)
+		key = f"{client}|{body.identifier.strip().lower()}"
 		if not login_limiter.allow(key):
+			await journal.event(
+				registry, "login", actor=ACTOR_USER, outcome="rate_limited",
+				identifier=body.identifier.strip(), client=client,
+			)
 			raise ApiError(429, "rate_limited", "too many sign-in attempts; try again later")
-		_check_captcha(body.captcha)
+		await _check_captcha(
+			body.captcha, registry=registry, event="login",
+			identifier=body.identifier.strip(), client=client,
+		)
 		signed = await auth.sign_in(
 			registry,
 			identifier=body.identifier,
 			password=body.password,
 			remember=body.remember,
+			client=client,
+			seclog=journal,
 		)
 		_set_session_cookie(response, signed)
 		return {"user": {"username": signed.username}, "csrf": signed.csrf_token}
@@ -321,13 +371,34 @@ def register_user_routes(
 		body: ResetRequest, request: Request, registry: AsyncEngine = RegistryDep
 	) -> dict:
 		"""Send the reset link; the answer never reveals whether the email exists."""
-		if not reset_limiter.allow(_client_host(request)):
+		client = _client_host(request)
+		if not reset_limiter.allow(client):
+			await journal.event(
+				registry, "password_reset_request", actor=ACTOR_USER,
+				outcome="rate_limited", identifier=body.email, client=client,
+			)
 			raise ApiError(429, "rate_limited", "too many reset requests; try again later")
-		_check_captcha(body.captcha)
-		active_mailer, base_url, _dev = await _mail_context(registry)
-		await auth.request_password_reset(
-			registry, email=body.email, mailer=active_mailer, reset_base_url=base_url
+		await _check_captcha(
+			body.captcha, registry=registry, event="password_reset_request",
+			identifier=body.email, client=client,
 		)
+		active_mailer, base_url, _dev = await _mail_context(registry)
+		try:
+			await auth.request_password_reset(
+				registry,
+				email=body.email,
+				mailer=active_mailer,
+				reset_base_url=base_url,
+				client=client,
+				seclog=journal,
+			)
+		except OperationError as exc:
+			# Сбои почты (mail_not_configured / mail_failed) — тоже события.
+			await journal.event(
+				registry, "password_reset_request", actor=ACTOR_USER,
+				outcome=exc.code, identifier=body.email, client=client,
+			)
+			raise
 		return {"ok": True}
 
 	@app.post("/v1/user/password-reset/confirm")
@@ -335,10 +406,27 @@ def register_user_routes(
 		body: ResetConfirmRequest, request: Request, registry: AsyncEngine = RegistryDep
 	) -> dict:
 		"""Set a new password by the one-time token from the reset email."""
-		if not reset_limiter.allow(_client_host(request)):
+		client = _client_host(request)
+		if not reset_limiter.allow(client):
+			await journal.event(
+				registry, "password_reset_confirm", actor=ACTOR_USER,
+				outcome="rate_limited", client=client,
+			)
 			raise ApiError(429, "rate_limited", "too many reset requests; try again later")
-		await auth.reset_password(
-			registry, token=body.token, new_password=body.new_password
+		try:
+			user_id = await auth.reset_password(
+				registry, token=body.token, new_password=body.new_password
+			)
+		except OperationError as exc:
+			# Сам токен в журнал не пишется — это секрет из письма.
+			await journal.event(
+				registry, "password_reset_confirm", actor=ACTOR_USER,
+				outcome=exc.code, client=client,
+			)
+			raise
+		await journal.event(
+			registry, "password_reset_confirm", actor=ACTOR_USER,
+			outcome=OUTCOME_SUCCESS, user_id=user_id, client=client,
 		)
 		return {"ok": True}
 
@@ -642,14 +730,28 @@ def register_user_routes(
 
 	@app.post("/v1/user/password")
 	async def change_password(
-		body: ChangePasswordRequest, ctx: UserContext = MutatingSessionDep
+		body: ChangePasswordRequest,
+		request: Request,
+		ctx: UserContext = MutatingSessionDep,
 	) -> dict:
 		"""Change the password; other sessions of the user are dropped."""
-		await auth.change_password(
-			ctx.registry,
-			user_id=ctx.user.user_id,
-			current_password=body.current_password,
-			new_password=body.new_password,
-			session_token=ctx.session_token,
+		client = _client_host(request)
+		try:
+			await auth.change_password(
+				ctx.registry,
+				user_id=ctx.user.user_id,
+				current_password=body.current_password,
+				new_password=body.new_password,
+				session_token=ctx.session_token,
+			)
+		except OperationError as exc:
+			await journal.event(
+				ctx.registry, "password_change", actor=ACTOR_USER,
+				outcome=exc.code, user_id=ctx.user.user_id, client=client,
+			)
+			raise
+		await journal.event(
+			ctx.registry, "password_change", actor=ACTOR_USER,
+			outcome=OUTCOME_SUCCESS, user_id=ctx.user.user_id, client=client,
 		)
 		return {"ok": True}

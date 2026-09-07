@@ -19,7 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from seedrays.api.errors import ApiError
 from seedrays.orchestrator import operator as operator_ops
 from seedrays.orchestrator.captcha import CaptchaGuard
+from seedrays.orchestrator.operations import OperationError
 from seedrays.orchestrator.ratelimit import RateLimiter
+from seedrays.orchestrator.seclog import ACTOR_OPERATOR, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage.engine import create_sqlite_engine, now_utc, registry_db_path
 
 OPERATOR_COOKIE = "seedrays_operator"
@@ -65,7 +67,10 @@ class OperatorContext:
 
 
 def register_operator_routes(
-	app: FastAPI, data_dir: Path, captcha_cost: int | None = None
+	app: FastAPI,
+	data_dir: Path,
+	captcha_cost: int | None = None,
+	seclog: SecurityLog | None = None,
 ) -> None:
 	"""Attach the /v1/operator route group.
 
@@ -74,9 +79,12 @@ def register_operator_routes(
 		data_dir: The gateway data directory.
 		captcha_cost: Proof-of-work cost override (tests); by default
 			the production cost of the captcha module.
+		seclog: The gateway's security journal; created here when the
+			caller did not pass the shared instance.
 	"""
 	login_limiter = RateLimiter(LOGIN_LIMIT, LOGIN_WINDOW_SECONDS)
 	captcha_guard = CaptchaGuard(cost=captcha_cost) if captcha_cost else CaptchaGuard()
+	journal = seclog if seclog is not None else SecurityLog(data_dir)
 
 	async def registry_engine() -> AsyncIterator[AsyncEngine]:
 		"""Open the registry engine for one request."""
@@ -130,13 +138,22 @@ def register_operator_routes(
 		"""Operator sign-in; sets the panel session cookie."""
 		client = request.client.host if request.client else "unknown"
 		if not login_limiter.allow(f"{client}|{body.login.strip().lower()}"):
+			await journal.event(
+				registry, "login", actor=ACTOR_OPERATOR, outcome="rate_limited",
+				identifier=body.login.strip(), client=client,
+			)
 			raise ApiError(429, "rate_limited", "too many sign-in attempts; try again later")
 		if not captcha_guard.verify(body.captcha):
+			await journal.event(
+				registry, "login", actor=ACTOR_OPERATOR, outcome="captcha_failed",
+				identifier=body.login.strip(), client=client,
+			)
 			raise ApiError(
 				400, "captcha_failed", "the proof-of-work check failed; please try again"
 			)
 		signed = await operator_ops.sign_in(
-			registry, login=body.login, password=body.password
+			registry, login=body.login, password=body.password,
+			client=client, seclog=journal,
 		)
 		response.set_cookie(
 			OPERATOR_COOKIE,
@@ -168,15 +185,29 @@ def register_operator_routes(
 
 	@app.post("/v1/operator/password")
 	async def change_password(
-		body: OperatorPasswordRequest, ctx: OperatorContext = MutatingSessionDep
+		body: OperatorPasswordRequest,
+		request: Request,
+		ctx: OperatorContext = MutatingSessionDep,
 	) -> dict:
 		"""Change the operator's password; other panel sessions are dropped."""
-		await operator_ops.change_password(
-			ctx.registry,
-			operator_id=ctx.operator.operator_id,
-			current_password=body.current_password,
-			new_password=body.new_password,
-			session_token=ctx.session_token,
+		client = request.client.host if request.client else "unknown"
+		try:
+			await operator_ops.change_password(
+				ctx.registry,
+				operator_id=ctx.operator.operator_id,
+				current_password=body.current_password,
+				new_password=body.new_password,
+				session_token=ctx.session_token,
+			)
+		except OperationError as exc:
+			await journal.event(
+				ctx.registry, "password_change", actor=ACTOR_OPERATOR,
+				outcome=exc.code, operator_id=ctx.operator.operator_id, client=client,
+			)
+			raise
+		await journal.event(
+			ctx.registry, "password_change", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id, client=client,
 		)
 		return {"ok": True}
 
@@ -202,20 +233,34 @@ def register_operator_routes(
 	async def set_user_status(
 		user_id: int,
 		body: UserStatusRequest,
+		request: Request,
 		ctx: OperatorContext = MutatingSessionDep,
 	) -> dict:
 		"""Block or unblock a gateway user."""
 		await operator_ops.set_user_status(
 			ctx.registry, user_id=user_id, status=body.status
 		)
+		# Административное действие над чужой учёткой — событие журнала.
+		await journal.event(
+			ctx.registry, "user_status", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id,
+			client=request.client.host if request.client else "unknown",
+			detail={"target_user_id": user_id, "status": body.status},
+		)
 		return {"ok": True}
 
 	@app.post("/v1/operator/users/{user_id}/password-reset")
 	async def reset_user_password(
-		user_id: int, ctx: OperatorContext = MutatingSessionDep
+		user_id: int, request: Request, ctx: OperatorContext = MutatingSessionDep
 	) -> dict:
 		"""Set a random temporary password for a user; it is returned once."""
 		password = await operator_ops.reset_user_password(ctx.registry, user_id=user_id)
+		await journal.event(
+			ctx.registry, "user_password_reset", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id,
+			client=request.client.host if request.client else "unknown",
+			detail={"target_user_id": user_id},
+		)
 		return {"password": password}
 
 	@app.get("/v1/operator/settings")
@@ -225,10 +270,17 @@ def register_operator_routes(
 
 	@app.put("/v1/operator/settings")
 	async def update_settings(
-		body: SettingsRequest, ctx: OperatorContext = MutatingSessionDep
+		body: SettingsRequest, request: Request, ctx: OperatorContext = MutatingSessionDep
 	) -> dict:
 		"""Store the submitted settings (an empty secret means "keep")."""
 		await operator_ops.update_settings(ctx.registry, body.values)
+		# В журнал — только КЛЮЧИ изменённых настроек, никогда не значения.
+		await journal.event(
+			ctx.registry, "settings_update", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id,
+			client=request.client.host if request.client else "unknown",
+			detail={"keys": sorted(body.values)},
+		)
 		return {"settings": await operator_ops.get_settings(ctx.registry)}
 
 	@app.get("/v1/operator/watcher")

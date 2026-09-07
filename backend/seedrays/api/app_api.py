@@ -21,6 +21,7 @@ from seedrays.api.operator_api import register_operator_routes
 from seedrays.api.user_api import register_user_routes
 from seedrays.mail.base import MailSender
 from seedrays.orchestrator import operations as ops
+from seedrays.orchestrator.seclog import SecurityLog
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path
 
 
@@ -62,8 +63,12 @@ def create_app(
 	"""
 	app = FastAPI(title="SeedRays API", version="1")
 	register_error_handlers(app)
-	register_user_routes(app, data_dir, mailer=mailer, captcha_cost=captcha_cost)
-	register_operator_routes(app, data_dir, captcha_cost=captcha_cost)
+	# Общий журнал безопасности обеих групп: один файл на шлюз (ADR-0023).
+	seclog = SecurityLog(data_dir)
+	register_user_routes(
+		app, data_dir, mailer=mailer, captcha_cost=captcha_cost, seclog=seclog
+	)
+	register_operator_routes(app, data_dir, captcha_cost=captcha_cost, seclog=seclog)
 
 	async def caller(
 		x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,

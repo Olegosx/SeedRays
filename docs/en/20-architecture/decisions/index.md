@@ -31,6 +31,7 @@ considered, the choice made and its consequences.
 | [ADR-0020](0020-mail-provider.md) | Outgoing Mail — a Third-Party Service Behind an Abstraction | accepted |
 | [ADR-0021](0021-two-phase-scanning.md) | Two-Phase Scanning — Finalized Authority with a Provisional Preview | accepted |
 | [ADR-0022](0022-pow-captcha.md) | Anonymous Auth Endpoints Behind a Self-Hosted Proof-of-Work Captcha (ALTCHA) | accepted |
+| [ADR-0023](0023-security-journal.md) | Security Event Journal — Precise Inside, Neutral Outside | accepted |
 
 ## Related
 

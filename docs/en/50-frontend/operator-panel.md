@@ -43,6 +43,10 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
 - **Watcher**: the pass interval, the scan overlap. The watched token contract list
   (`watcher.contracts.<network>`) is not edited by the panel — the owner's decision,
   the setting is entered manually.
+- **Security journal ([ADR-0023](../20-architecture/decisions/0023-security-journal.md))**:
+  the file size before rotation (MB) and the number of compressed archives kept;
+  applied after a gateway restart. The journal itself is read on the server
+  (`logs/security.log` in the data directory) — the panel has no journal screen.
 - Secret values (API keys) are never returned: the form shows only a
   "configured / not configured" flag; an empty secret field on save means "keep".
 - Below — the per-network watcher status (read-only): the last processed block and the

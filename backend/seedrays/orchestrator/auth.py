@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.mail.base import MailError, MailSender
 from seedrays.orchestrator.operations import OperationError
+from seedrays.orchestrator.seclog import ACTOR_USER, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import now_utc
 
@@ -217,9 +218,19 @@ async def confirm_email(registry: AsyncEngine, token: str) -> bool:
 
 
 async def sign_in(
-	registry: AsyncEngine, *, identifier: str, password: str, remember: bool
+	registry: AsyncEngine,
+	*,
+	identifier: str,
+	password: str,
+	remember: bool,
+	client: str | None = None,
+	seclog: SecurityLog | None = None,
 ) -> SignedIn:
 	"""Sign in by username or email; issues a session with a CSRF token.
+
+	Точная причина отказа («нет пользователя», «заблокирован», «не тот
+	пароль») уходит в журнал безопасности здесь — наружу все три отвечают
+	одинаковым invalid_credentials (ADR-0023).
 
 	Raises:
 		OperationError: invalid_credentials / email_not_confirmed.
@@ -227,17 +238,35 @@ async def sign_in(
 	await registry_ops.delete_expired_sessions(registry, now=now_utc())
 
 	identifier = identifier.strip()
+
+	async def _journal(outcome: str, user_id: int | None = None) -> None:
+		if seclog is not None:
+			await seclog.event(
+				registry,
+				"login",
+				actor=ACTOR_USER,
+				outcome=outcome,
+				identifier=identifier,
+				user_id=user_id,
+				client=client,
+			)
+
 	user = await registry_ops.get_user_by_login(registry, identifier)
 	if user is None:
 		email = await registry_ops.get_email_by_address(registry, identifier.lower())
 		if email is not None:
 			user = await registry_ops.get_user_by_id(registry, email.user_id)
-	if user is None or user.status != "active":
+	if user is None:
+		await _journal("unknown_identifier")
 		# Одинаковый ответ для «нет пользователя» и «не тот пароль».
+		raise OperationError("invalid_credentials", "wrong username/email or password")
+	if user.status != "active":
+		await _journal("user_blocked", user.id)
 		raise OperationError("invalid_credentials", "wrong username/email or password")
 	try:
 		_hasher.verify(user.password_hash, password)
 	except (VerifyMismatchError, InvalidHashError) as exc:
+		await _journal("wrong_password", user.id)
 		raise OperationError(
 			"invalid_credentials", "wrong username/email or password"
 		) from exc
@@ -245,9 +274,11 @@ async def sign_in(
 	emails = await registry_ops.list_user_emails(registry, user.id)
 	primary = next((e for e in emails if e.is_primary), None)
 	if primary is not None and primary.confirmed_at is None:
+		await _journal("email_not_confirmed", user.id)
 		raise OperationError(
 			"email_not_confirmed", "confirm your email first (check your inbox)"
 		)
+	await _journal(OUTCOME_SUCCESS, user.id)
 
 	token = secrets.token_urlsafe(32)
 	csrf = secrets.token_urlsafe(32)
@@ -344,18 +375,35 @@ async def request_password_reset(
 	email: str,
 	mailer: MailSender | None,
 	reset_base_url: str,
+	client: str | None = None,
+	seclog: SecurityLog | None = None,
 ) -> None:
 	"""Send a password-reset link to a registered, confirmed email.
 
 	Ответ наружу всегда одинаковый (маршрут не раскрывает, существует ли
 	адрес), поэтому «адрес неизвестен» и «адрес не подтверждён» завершаются
-	молча — с отметкой в журнале. Токен одноразовый, живёт
-	:data:`RESET_TOKEN_HOURS` часов; новый запрос вытесняет прежний токен.
+	молча — с точной отметкой в журнале безопасности (ADR-0023). Токен
+	одноразовый, живёт :data:`RESET_TOKEN_HOURS` часов; новый запрос
+	вытесняет прежний токен.
 
 	Raises:
 		OperationError: mail_not_configured / mail_failed — сбои шлюза,
 			не раскрывающие ничего об адресе.
 	"""
+	address = email.strip().lower()
+
+	async def _journal(outcome: str, user_id: int | None = None) -> None:
+		if seclog is not None:
+			await seclog.event(
+				registry,
+				"password_reset_request",
+				actor=ACTOR_USER,
+				outcome=outcome,
+				identifier=address,
+				user_id=user_id,
+				client=client,
+			)
+
 	if mailer is None:
 		# Сброс без письма невозможен по сути: подтверждать личность нечем.
 		# Явный отказ и в режиме разработки — «сбросить кому угодно» дырой
@@ -364,14 +412,15 @@ async def request_password_reset(
 			"mail_not_configured",
 			"outgoing mail is not configured; ask the operator to set it up",
 		)
-	address = email.strip().lower()
 	record = await registry_ops.get_email_by_address(registry, address)
 	if record is None:
 		logger.info("password reset requested for an unknown email")
+		await _journal("unknown_email")
 		return
 	if record.confirmed_at is None:
 		# Неподтверждённый адрес мог вписать кто угодно — писать на него нельзя.
 		logger.info("password reset requested for an unconfirmed email, ignored")
+		await _journal("unconfirmed_email", record.user_id)
 		return
 
 	token = secrets.token_urlsafe(32)
@@ -395,10 +444,14 @@ async def request_password_reset(
 		raise OperationError(
 			"mail_failed", "could not send the reset email; try again later"
 		) from exc
+	await _journal(OUTCOME_SUCCESS, record.user_id)
 
 
-async def reset_password(registry: AsyncEngine, *, token: str, new_password: str) -> None:
+async def reset_password(registry: AsyncEngine, *, token: str, new_password: str) -> int:
 	"""Set a new password by a one-time reset token; drops every session.
+
+	Returns:
+		The id of the user whose password was reset (for the journal).
 
 	Raises:
 		OperationError: weak_password / invalid_token.
@@ -415,6 +468,7 @@ async def reset_password(registry: AsyncEngine, *, token: str, new_password: str
 	await registry_ops.set_user_password(registry, user_id, _hasher.hash(new_password))
 	# Пароль сброшен из-за потери доступа — все прежние сессии гасятся.
 	await registry_ops.delete_user_sessions(registry, user_id)
+	return user_id
 
 
 async def change_password(

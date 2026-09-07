@@ -147,7 +147,9 @@ through the same brute-force brake.
   after the rate limiter, a failure answers 400 `captcha_failed`.
 - Sign-in: one identifier field (username or email); until the primary email is
   confirmed, sign-in is closed (`email_not_confirmed`); "no such user" and "wrong
-  password" produce the same `invalid_credentials` answer.
+  password" produce the same `invalid_credentials` answer. The precise reason goes
+  to the security journal ([ADR-0023](../decisions/0023-security-journal.md)) —
+  the answers stay neutral, the journal does not.
 - Applications: the key itself is not stored — the user database keeps its fingerprint
   and the open first characters for identification, the registry keeps the "fingerprint →
   owner" index; the raw key is returned exactly once at creation and reissue; revocation

@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
 from seedrays.orchestrator.operations import OperationError
+from seedrays.orchestrator.seclog import ACTOR_OPERATOR, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_wallets
 from seedrays.storage.engine import create_sqlite_engine, now_utc, user_db_path
@@ -50,6 +51,8 @@ SETTING_FIELDS = (
 	{"key": "mail.from", "secret": False},
 	{"key": "gateway.base_url", "secret": False},
 	{"key": "mail.dev_autoconfirm", "secret": False},
+	{"key": "seclog.rotate_mb", "secret": False},
+	{"key": "seclog.backups", "secret": False},
 )
 _SECRET_KEYS = {field["key"] for field in SETTING_FIELDS if field["secret"]}
 _KNOWN_KEYS = {field["key"] for field in SETTING_FIELDS}
@@ -99,19 +102,49 @@ class CurrentOperator:
 	csrf_token: str
 
 
-async def sign_in(registry: AsyncEngine, *, login: str, password: str) -> OperatorSignedIn:
+async def sign_in(
+	registry: AsyncEngine,
+	*,
+	login: str,
+	password: str,
+	client: str | None = None,
+	seclog: SecurityLog | None = None,
+) -> OperatorSignedIn:
 	"""Operator sign-in; issues a panel session with a CSRF token.
+
+	Точная причина отказа уходит в журнал безопасности здесь — наружу
+	ответ всегда нейтральный invalid_credentials (ADR-0023).
 
 	Raises:
 		OperationError: invalid_credentials.
 	"""
-	operator = await registry_ops.get_operator_by_login(registry, login.strip())
-	if operator is None or operator.status != "active":
+	login = login.strip()
+
+	async def _journal(outcome: str, operator_id: int | None = None) -> None:
+		if seclog is not None:
+			await seclog.event(
+				registry,
+				"login",
+				actor=ACTOR_OPERATOR,
+				outcome=outcome,
+				identifier=login,
+				operator_id=operator_id,
+				client=client,
+			)
+
+	operator = await registry_ops.get_operator_by_login(registry, login)
+	if operator is None:
+		await _journal("unknown_login")
+		raise OperationError("invalid_credentials", "wrong login or password")
+	if operator.status != "active":
+		await _journal("operator_blocked", operator.id)
 		raise OperationError("invalid_credentials", "wrong login or password")
 	try:
 		_hasher.verify(operator.password_hash, password)
 	except (VerifyMismatchError, InvalidHashError) as exc:
+		await _journal("wrong_password", operator.id)
 		raise OperationError("invalid_credentials", "wrong login or password") from exc
+	await _journal(OUTCOME_SUCCESS, operator.id)
 
 	token = secrets.token_urlsafe(32)
 	csrf = secrets.token_urlsafe(32)
