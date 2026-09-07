@@ -54,3 +54,29 @@ def test_supervised_does_not_restart_when_stopping(monkeypatch) -> None:
 		assert attempts["n"] == 1
 
 	asyncio.run(scenario())
+
+
+def test_trusted_proxies_setting(tmp_path) -> None:
+	"""gateway.trusted_proxies is read from the registry; blank falls back."""
+
+	async def scenario() -> None:
+		from seedrays.storage import registry as registry_ops
+		from seedrays.storage.engine import create_sqlite_engine, registry_db_path
+		from seedrays.storage.migrations.runner import upgrade_registry
+
+		upgrade_registry(tmp_path)
+		assert await supervisor.resolve_trusted_proxies(tmp_path) == "127.0.0.1"
+
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		try:
+			await registry_ops.set_setting(
+				registry, "gateway.trusted_proxies", " 10.0.0.5, 173.245.48.0/20 "
+			)
+		finally:
+			await registry.dispose()
+		assert (
+			await supervisor.resolve_trusted_proxies(tmp_path)
+			== "10.0.0.5, 173.245.48.0/20"
+		)
+
+	asyncio.run(scenario())

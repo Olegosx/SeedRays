@@ -54,9 +54,11 @@ writes of the watcher.
   accepted cost of precision: an identifier mistyped into the login field — including
   a password entered there by mistake — lands in the journal verbatim. The file lives
   only in the gateway data directory, readable by whoever runs the server.
-- Behind a reverse proxy the client column currently shows the proxy address — the
-  known limitation shared with the rate limiter, to be fixed together with real-IP
-  support before deployment.
+- Behind a reverse proxy the client column shows the proxy address until the operator
+  lists the trusted intermediaries in the `gateway.trusted_proxies` setting (IPs and
+  CIDR ranges; applied on restart): the server then takes the visitor address from
+  `X-Forwarded-For` — but only on connections arriving from a listed proxy, so the
+  header cannot be spoofed from outside. The rate limiter shares the same resolution.
 - Rotation compresses synchronously: the single process pauses for a second or two
   when a full file rotates — under attack roughly once an hour, otherwise rare.
 - A panel screen for reading the journal is deliberately deferred: the operator of a

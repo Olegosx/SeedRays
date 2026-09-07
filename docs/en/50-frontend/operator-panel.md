@@ -43,6 +43,11 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
 - **Watcher**: the pass interval, the scan overlap. The watched token contract list
   (`watcher.contracts.<network>`) is not edited by the panel — the owner's decision,
   the setting is entered manually.
+- **Network & deployment**: the trusted reverse proxies (`gateway.trusted_proxies` —
+  IPs and CIDR ranges, comma-separated; e.g. the local nginx/Apache address, the
+  Cloudflare ranges). On connections from a listed proxy the gateway resolves the
+  visitor IP from `X-Forwarded-For` — the rate limiter and the security journal then
+  see real addresses; empty means "trust 127.0.0.1 only". Applied after a restart.
 - **Security journal ([ADR-0023](../20-architecture/decisions/0023-security-journal.md))**:
   the file size before rotation (MB) and the number of compressed archives kept;
   applied after a gateway restart. The journal itself is read on the server

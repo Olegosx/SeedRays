@@ -19,11 +19,39 @@ from typing import Awaitable, Callable, Generator
 import uvicorn
 
 from seedrays.api.app_api import create_app
+from seedrays.storage import registry as registry_ops
+from seedrays.storage.engine import create_sqlite_engine, registry_db_path
 from seedrays.watcher.loop import run_forever
 
 logger = logging.getLogger(__name__)
 
 RESTART_DELAY_SECONDS = 5.0
+
+# Доверенные обратные прокси (настройка реестра, применяется при старте):
+# адреса/диапазоны через запятую, чьим заголовкам X-Forwarded-For можно
+# верить. По умолчанию — только локальный прокси на этой же машине.
+SETTING_TRUSTED_PROXIES = "gateway.trusted_proxies"
+DEFAULT_TRUSTED_PROXIES = "127.0.0.1"
+
+
+async def resolve_trusted_proxies(data_dir: Path) -> str:
+	"""The trusted reverse-proxy list for uvicorn's X-Forwarded-For handling.
+
+	Reads the ``gateway.trusted_proxies`` registry setting (IPs and CIDR
+	ranges, comma-separated); an unset or blank value falls back to
+	``127.0.0.1``. uvicorn's ProxyHeadersMiddleware walks the header chain
+	right-to-left skipping trusted entries, so a "Cloudflare → local
+	proxy → gateway" chain resolves to the real visitor address when both
+	hops are listed.
+	"""
+	engine = create_sqlite_engine(registry_db_path(data_dir))
+	try:
+		value = await registry_ops.get_setting(engine, SETTING_TRUSTED_PROXIES)
+	finally:
+		await engine.dispose()
+	if value and value.strip():
+		return value.strip()
+	return DEFAULT_TRUSTED_PROXIES
 
 
 class _SupervisedServer(uvicorn.Server):
@@ -80,11 +108,17 @@ async def run(
 		port: API bind port.
 		frontend_dir: Static frontend directory; None — API only.
 	"""
+	trusted_proxies = await resolve_trusted_proxies(data_dir)
+	logger.info("trusted reverse proxies: %s", trusted_proxies)
 	config = uvicorn.Config(
 		create_app(data_dir, frontend_dir=frontend_dir),
 		host=host,
 		port=port,
 		log_level="info",
+		# За доверенным прокси адрес клиента берётся из X-Forwarded-For —
+		# иначе тормоз перебора и журнал безопасности видели бы адрес прокси.
+		proxy_headers=True,
+		forwarded_allow_ips=trusted_proxies,
 	)
 	stopping = asyncio.Event()
 	# Текущий экземпляр сервера: на каждый (пере)запуск создаётся новый —

@@ -139,7 +139,10 @@ through the same brute-force brake.
   turned on the development auto-confirm mode (`mail.dev_autoconfirm`).
 - Brute-force brake: sign-in and registration are rate-limited by in-process sliding
   windows (per client + identifier for sign-in, per client for registration); over the
-  limit the answer is 429 `rate_limited`.
+  limit the answer is 429 `rate_limited`. The client address behind a trusted reverse
+  proxy is resolved from `X-Forwarded-For` (the `gateway.trusted_proxies` setting;
+  connections from unlisted addresses keep their socket address — the header cannot
+  be spoofed from outside).
 - Proof-of-work captcha ([ADR-0022](../decisions/0022-pow-captcha.md)): sign-in,
   registration and the reset request carry a `captcha` field — the solution of a
   challenge from `GET /v1/user/captcha`, solved invisibly by the browser. Challenges

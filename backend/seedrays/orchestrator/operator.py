@@ -50,6 +50,7 @@ SETTING_FIELDS = (
 	{"key": "mail.resend.api_key", "secret": True},
 	{"key": "mail.from", "secret": False},
 	{"key": "gateway.base_url", "secret": False},
+	{"key": "gateway.trusted_proxies", "secret": False},
 	{"key": "mail.dev_autoconfirm", "secret": False},
 	{"key": "seclog.rotate_mb", "secret": False},
 	{"key": "seclog.backups", "secret": False},
