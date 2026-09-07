@@ -3,11 +3,49 @@
 # Operator Panel Scenarios
 
 Scenarios of what the gateway operator (superadmin) does in the control panel:
-managing users and gateway-wide settings. This document is written before
-implementation and serves as the basis for designing the operator API and the
-frontend pages.
+managing users and gateway-wide settings.
 
-> Work in progress: scenarios are added as they are agreed upon.
+## The Operator Account and Sign-In
+
+- Operator registration does not exist: the account is created by the console command
+  `seedrays operator-create --login …` on the server (the password — by hidden
+  interactive input). Whoever has server console access creates operators.
+- Sign-in is a separate page; the panel session lives in its own cookie, separate from
+  the user cabinet (the structural boundary of ADR-0004), and lasts 1 day. Sign-in is
+  limited by the same brute-force brake as the cabinet.
+- The operator password change lives on the settings page; a change drops the
+  operator's other sessions.
+
+## Panel Structure
+
+A sidebar of two sections — "Users" and "Settings"; the top bar is the same as in the
+cabinet (the language switcher and the operator menu with sign-out).
+
+## Users
+
+- The gateway user table: name, emails (unconfirmed ones flagged), status
+  (active / blocked), wallet count ("—" for an unreadable database), creation date.
+- **Blocking** goes through a confirmation dialog: the user and all their applications
+  lose access immediately, sessions are terminated. Unblocking is a single action.
+- **Password reset** — the fallback recovery path of the cabinet scenario: upon
+  confirmation a temporary password is generated and shown exactly once; every session
+  of the user is terminated; the password is handed to the user outside the gateway.
+
+## Settings
+
+Forms over the registry `settings` table ([ADR-0016](../20-architecture/decisions/0016-config-layers.md)):
+
+- **TRON provider (TronGrid)**: the API key, the request rate.
+- **Mail (Resend, [ADR-0020](../20-architecture/decisions/0020-mail-provider.md))**:
+  the API key, the sender address, the gateway base URL for links in emails, the
+  development-mode flag (auto-confirm emails without messages).
+- **Watcher**: the pass interval, the scan overlap. The watched token contract list
+  (`watcher.contracts.<network>`) is not edited by the panel — the owner's decision,
+  the setting is entered manually.
+- Secret values (API keys) are never returned: the form shows only a
+  "configured / not configured" flag; an empty secret field on save means "keep".
+- Below — the per-network watcher status (read-only): the last processed block and the
+  time of the last pass.
 
 ## Related
 

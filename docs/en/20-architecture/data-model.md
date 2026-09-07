@@ -103,6 +103,11 @@ The browser cookie carries a random token; the database keeps its SHA-256 finger
 the user, the expiry (7 days, 30 with "remember me") and the CSRF token checked against
 the `X-CSRF-Token` header of every mutating request. Expired rows are purged on sign-in.
 
+Operator panel sessions are a separate table of the same design (1-day expiry): the
+operators' and users' cookies and route groups never overlap. Password-reset tokens —
+the fingerprint of the one-time token from the email with an expiry; a user holds at
+most one active token.
+
 ### Asset Catalog
 
 Network-specific reference data: network, native coin or token contract, symbol, decimals.

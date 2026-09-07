@@ -160,10 +160,31 @@ through the same brute-force brake.
   redirects to the sign-in page, the files come from the `frontend/` directory
   (overridable with `SEEDRAYS_FRONTEND_DIR`, the bootstrap layer of ADR-0016).
 
+## Operator API: Implemented Routes
+
+```
+POST /v1/operator/login      body: {"login", "password"}
+POST /v1/operator/logout
+GET  /v1/operator/me
+POST /v1/operator/password   body: {"current_password", "new_password"}
+GET  /v1/operator/users
+POST /v1/operator/users/{id}/status          body: {"status": "active"|"blocked"}
+POST /v1/operator/users/{id}/password-reset  → a temporary password (once)
+GET  /v1/operator/settings
+PUT  /v1/operator/settings   body: {"values": {key: value}}
+GET  /v1/operator/watcher    (per-network watcher cursors, read-only)
+```
+
+- The panel session is its own HttpOnly/Secure cookie, separate from the cabinet; CSRF
+  and the brute-force brake are the same mechanisms as in the user group. Operator
+  accounts are created only by the `seedrays operator-create` console command.
+- Secret settings never appear in answers — only a "set" flag; an empty secret on save
+  means "keep". Blocking a user terminates their sessions, and their applications lose
+  Application API access immediately.
+
 ## Detailed Specifications
 
-_The remaining user-group routes (wallets, applications, history, settings) and the
-operator group — to be defined while implementing the next layers._
+_Request and response schemas are refined as the groups evolve._
 
 ## Related
 
