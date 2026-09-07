@@ -42,6 +42,9 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0018: Range Scanning as the Watcher's Primary Acquisition](20-architecture/decisions/0018-range-scanning.md)
     - [ADR-0019: Frontend Localization — Client-Side Dictionaries](20-architecture/decisions/0019-frontend-localization.md)
     - [ADR-0020: Outgoing Mail — a Third-Party Service Behind an Abstraction](20-architecture/decisions/0020-mail-provider.md)
+    - [ADR-0021: Two-Phase Scanning — Finalized Authority with a Provisional Preview](20-architecture/decisions/0021-two-phase-scanning.md)
+    - [ADR-0022: Anonymous Auth Endpoints Behind a Self-Hosted Proof-of-Work Captcha](20-architecture/decisions/0022-pow-captcha.md)
+    - [ADR-0023: Security Event Journal — Precise Inside, Neutral Outside](20-architecture/decisions/0023-security-journal.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)

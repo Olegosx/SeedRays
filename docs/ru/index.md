@@ -42,6 +42,9 @@
     - [ADR-0018: Диапазонное сканирование как основной съём watcher](20-architecture/decisions/0018-range-scanning.md)
     - [ADR-0019: Локализация фронтенда — клиентские словари](20-architecture/decisions/0019-frontend-localization.md)
     - [ADR-0020: Отправка почты — сторонний сервис за абстракцией](20-architecture/decisions/0020-mail-provider.md)
+    - [ADR-0021: Двухфазное сканирование — финализированная истина и предварительный показ](20-architecture/decisions/0021-two-phase-scanning.md)
+    - [ADR-0022: Анонимные маршруты аутентификации за самодостаточной proof-of-work капчей](20-architecture/decisions/0022-pow-captcha.md)
+    - [ADR-0023: Журнал событий безопасности — точность внутри, нейтральность наружу](20-architecture/decisions/0023-security-journal.md)
 - Безопасность
   - [Управление ключами](30-security/key-management.md)
   - [Модель угроз](30-security/threat-model.md)
