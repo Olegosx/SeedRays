@@ -6,7 +6,7 @@ deliberate separate task (see ADR-0012).
 
 | Library | Version | Source (pinned) |
 |---------|---------|-----------------|
-| Tabler | @tabler/core 1.4.0 | `cdn.jsdelivr.net/npm/@tabler/core@1.4.0/dist/` |
+| Tabler | @tabler/core 1.5.0 | `cdn.jsdelivr.net/npm/@tabler/core@1.5.0/dist/` |
 | Tabler Icons (webfont) | 3.46.0 | `cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.46.0/dist/` |
 | Alpine.js | 3.17.1 | `cdn.jsdelivr.net/npm/alpinejs@3.17.1/dist/cdn.min.js` |
 | ALTCHA widget (with all translations) | altcha 3.2.2 | `registry.npmjs.org/altcha/-/altcha-3.2.2.tgz` → `dist/main/altcha.i18n.min.js` |
@@ -23,11 +23,19 @@ workers from embedded `data:` URLs and performs network requests only to the
 challenge URL passed in by our pages; the `https://altcha.org/` string inside is
 the footer attribution link (an `href`, not a resource load).
 
+Review notes for Tabler 1.5.0 (2026-09-08): no external resource loads, no
+fetch/XHR calls; the only URLs inside are license/documentation strings in
+comments. Bootstrap (5.3.8) is now bundled into the Tabler source tree — there
+is no separate Bootstrap dependency; `data-bs-*` attributes keep working. The
+default color mode became `auto` (follows the OS), so every page pins
+`data-bs-theme="light"` on `<html>` to keep the approved light look. The default
+font stack is now the system one (upstream dropped the Inter reference).
+
 SHA-256 of the vendored files:
 
 ```
-7ef750bd10546a695d0b12767ad8048bd8f3ec5de7daefb1067f9d0daa3d1c9a  tabler/tabler.min.css
-b60c76160e97624574dbb8cf10abe6aee9a6493b60096fdfc15dd1dd2bd99eb9  tabler/tabler.min.js
+4cdeade29286540dff94acfeb6ea9ea6a16bad4a64ff5604f659414b7c954cd5  tabler/tabler.min.css
+0273fadc362ae4ddc8b68e9bd1fd98ae7c835b82fd9b6a4ff6ae2b7064839e55  tabler/tabler.min.js
 40d8d8fdbd0dc3401cecfc069065e20268a38f58662ef64d648c7905d5033deb  tabler-icons/tabler-icons.min.css
 9920d9866628db84af956877d04ff185ee3472a9716b03a9bb958b529ae1a9da  tabler-icons/fonts/tabler-icons.ttf
 ed0c7bc91df578809986d98917281921c6c9e64e9a726a46caacc5b1a0967eb2  tabler-icons/fonts/tabler-icons.woff
