@@ -284,7 +284,7 @@ export const en = {
 	"app.issueHint":
 		"Give the application user's identifier — the same one the application uses for them in the API. An unknown identifier is registered automatically; issuing again returns the addresses already given out.",
 	"app.issueUser": "User identifier",
-	"app.issueUserPlaceholder": "for example, order-1024",
+	"app.issueUserPlaceholder": "for example, user1",
 	"app.issueNetworks": "Networks",
 	"app.issueNoNetworks":
 		"Add at least one network in the \"Networks and wallets\" card first — addresses are issued from it.",
