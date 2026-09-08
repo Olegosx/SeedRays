@@ -84,6 +84,45 @@
 			}
 			this.expanded[externalId] = true;
 		},
+		issue: { externalId: '', networks: [], busy: false, error: '', result: null },
+		openIssue() {
+			// По умолчанию выдаём во всех настроенных сетях: типичный случай —
+			// плательщику нужен адрес везде, где приложение принимает платежи.
+			this.issue = {
+				externalId: '',
+				networks: this.networks.map((m) => m.network),
+				busy: false,
+				error: '',
+				result: null,
+			};
+			new window.tabler.Modal(document.getElementById('modal-issue')).show();
+		},
+		toggleIssueNetwork(network) {
+			const at = this.issue.networks.indexOf(network);
+			if (at === -1) { this.issue.networks.push(network); } else { this.issue.networks.splice(at, 1); }
+		},
+		async issueAddresses() {
+			if (!this.issue.externalId.trim() || !this.issue.networks.length) { return; }
+			this.issue.busy = true;
+			this.issue.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				const externalId = this.issue.externalId.trim();
+				const result = await api('POST', '/v1/user/applications/' + this.appId
+					+ '/users/' + encodeURIComponent(externalId) + '/addresses',
+					{ networks: this.issue.networks });
+				this.issue.result = result.addresses;
+				// Раскрытый список адресов этого пользователя устарел — сбросить,
+				// чтобы следующее раскрытие показало выданное только что.
+				delete this.userAddresses[externalId];
+				this.expanded[externalId] = false;
+				await this.load();
+			} catch (e) {
+				this.issue.error = this.$store.i18n.errorText(e);
+			} finally {
+				this.issue.busy = false;
+			}
+		},
 		confirmAction: '',
 		askConfirm(action) {
 			// Опасные действия — только через подтверждающий диалог.
@@ -263,6 +302,11 @@
 							<div class="card">
 								<div class="card-header">
 									<h3 class="card-title" x-text="$store.i18n.t('app.usersCard')"></h3>
+									<div class="card-actions">
+										<button type="button" class="btn btn-outline-primary" @click="openIssue()"
+											:disabled="!networks.length"
+											x-text="$store.i18n.t('app.issue')"></button>
+									</div>
 								</div>
 								<div class="table-responsive">
 									<table class="table table-vcenter card-table">
@@ -316,6 +360,81 @@
 								</div>
 							</div>
 						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Выпуск адресов пользователю приложения из панели -->
+		<div class="modal" id="modal-issue" tabindex="-1">
+			<div class="modal-dialog modal-dialog-centered" role="document">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" x-text="$store.i18n.t('app.issueTitle')"></h5>
+					</div>
+					<!-- Ввод и результат — один диалог: адреса показываются там же, где заказаны -->
+					<div class="modal-body" x-show="!issue.result">
+						<div class="alert alert-danger" x-show="issue.error" x-text="issue.error"></div>
+						<div class="alert alert-warning" x-show="!networks.length"
+							x-text="$store.i18n.t('app.issueNoNetworks')"></div>
+						<p class="text-secondary" x-text="$store.i18n.t('app.issueHint')"></p>
+						<div class="mb-3">
+							<label class="form-label" x-text="$store.i18n.t('app.issueUser')"></label>
+							<input type="text" class="form-control font-monospace" x-model="issue.externalId"
+								:placeholder="$store.i18n.t('app.issueUserPlaceholder')"
+								@keydown.enter.prevent="issueAddresses()"
+								list="issue-known-users" maxlength="255">
+							<!-- Подсказка уже известными пользователями: довыпуск без опечаток -->
+							<datalist id="issue-known-users">
+								<template x-for="user in users" :key="user.external_id">
+									<option :value="user.external_id"></option>
+								</template>
+							</datalist>
+						</div>
+						<div>
+							<label class="form-label" x-text="$store.i18n.t('app.issueNetworks')"></label>
+							<template x-for="mapping in networks" :key="mapping.network">
+								<label class="form-check">
+									<input class="form-check-input" type="checkbox"
+										:checked="issue.networks.includes(mapping.network)"
+										@change="toggleIssueNetwork(mapping.network)">
+									<span class="form-check-label">
+										<span class="badge bg-blue-lt" x-text="mapping.network"></span>
+										<span class="text-secondary ms-1"
+											x-text="mapping.wallet_label || walletName(mapping.wallet_id)"></span>
+									</span>
+								</label>
+							</template>
+						</div>
+					</div>
+					<div class="modal-body" x-show="issue.result">
+						<div class="text-secondary mb-2" x-text="$store.i18n.t('app.issueResult')"></div>
+						<table class="table table-sm">
+							<tbody>
+								<template x-for="binding in issue.result || []" :key="binding.network">
+									<tr>
+										<td class="w-1">
+											<span class="badge bg-blue-lt" x-text="binding.network"></span>
+										</td>
+										<td class="font-monospace" x-text="binding.address"></td>
+										<td class="text-secondary"
+											x-text="binding.memo ? 'memo: ' + binding.memo : ''"></td>
+									</tr>
+								</template>
+							</tbody>
+						</table>
+					</div>
+					<div class="modal-footer" x-show="!issue.result">
+						<button type="button" class="btn btn-link link-secondary" data-bs-dismiss="modal"
+							x-text="$store.i18n.t('app.issueCancel')"></button>
+						<button type="button" class="btn btn-primary" @click="issueAddresses()"
+							:class="issue.busy ? 'btn-loading' : ''"
+							:disabled="issue.busy || !issue.externalId.trim() || !issue.networks.length"
+							x-text="$store.i18n.t('app.issueGo')"></button>
+					</div>
+					<div class="modal-footer" x-show="issue.result">
+						<button type="button" class="btn btn-primary" data-bs-dismiss="modal"
+							x-text="$store.i18n.t('app.issueClose')"></button>
 					</div>
 				</div>
 			</div>

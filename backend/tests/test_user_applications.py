@@ -106,6 +106,87 @@ def test_application_lifecycle_and_key_bridge(tmp_path: Path) -> None:
 	asyncio.run(scenario())
 
 
+def test_issue_addresses_from_the_cabinet(tmp_path: Path) -> None:
+	"""The panel issues addresses through the same core as the Application API."""
+
+	async def scenario() -> None:
+		client, csrf = await signed_in_client(tmp_path)
+		headers = {"X-CSRF-Token": csrf}
+		try:
+			created = await client.post(
+				"/v1/user/applications", json={"name": "Shop"}, headers=headers
+			)
+			app_id = created.json()["application"]["id"]
+			key = created.json()["key"]
+			xpub = account_xpub(TEST_MNEMONIC, Family.TRON)
+			wallet = await client.post(
+				"/v1/user/wallets",
+				json={"family": "tron", "xpub": xpub, "label": "Main"},
+				headers=headers,
+			)
+			wallet_id = wallet.json()["wallet"]["id"]
+			await client.put(
+				f"/v1/user/applications/{app_id}/networks",
+				json={"network": "tron-nile", "wallet_id": wallet_id},
+				headers=headers,
+			)
+
+			# Незнакомый идентификатор заводит пользователя приложения сам.
+			issued = await client.post(
+				f"/v1/user/applications/{app_id}/users/order-1024/addresses",
+				json={"networks": "all"},
+				headers=headers,
+			)
+			assert issued.status_code == 200, issued.text
+			addresses = issued.json()["addresses"]
+			assert [b["network"] for b in addresses] == ["tron-nile"]
+
+			# Повтор идемпотентен: тот же адрес, второго пользователя нет.
+			again = await client.post(
+				f"/v1/user/applications/{app_id}/users/order-1024/addresses",
+				json={"networks": ["tron-nile"]},
+				headers=headers,
+			)
+			assert again.json()["addresses"] == addresses
+			detail = await client.get(f"/v1/user/applications/{app_id}")
+			assert detail.json()["application"]["users"] == 1
+
+			# Выданное из панели видно приложению по его ключу — один и тот же адрес.
+			via_api = await client.get(
+				"/v1/app/users/order-1024/addresses", headers={"X-API-Key": key}
+			)
+			assert via_api.json()["addresses"] == addresses
+
+			# Ненастроенная сеть отбивается машинным кодом, а не молча.
+			unconfigured = await client.post(
+				f"/v1/user/applications/{app_id}/users/order-1024/addresses",
+				json={"networks": ["tron"]},
+				headers=headers,
+			)
+			assert unconfigured.status_code == 400
+			assert unconfigured.json()["error"]["code"] == "network_not_configured"
+
+			# Чужого приложения не существует для этой сессии.
+			unknown = await client.post(
+				"/v1/user/applications/999/users/order-1024/addresses",
+				json={"networks": "all"},
+				headers=headers,
+			)
+			assert unknown.status_code == 404
+			assert unknown.json()["error"]["code"] == "unknown_application"
+
+			# Изменяющий запрос без CSRF отбивается.
+			refused = await client.post(
+				f"/v1/user/applications/{app_id}/users/order-1024/addresses",
+				json={"networks": "all"},
+			)
+			assert refused.status_code == 403
+		finally:
+			await client.aclose()
+
+	asyncio.run(scenario())
+
+
 def test_application_errors(tmp_path: Path) -> None:
 	"""Unknown ids, bad names and a missing wallet get machine codes."""
 

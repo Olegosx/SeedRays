@@ -98,6 +98,7 @@ GET    /v1/user/applications
 POST   /v1/user/applications      body: {"name"} → the key (shown once)
 GET    /v1/user/applications/{id}
 GET    /v1/user/applications/{id}/users/{id}/addresses
+POST   /v1/user/applications/{id}/users/{id}/addresses  body: {"networks": ["tron"] | "all"}
 POST   /v1/user/applications/{id}/key        (reissue — the new key shown once)
 DELETE /v1/user/applications/{id}/key        (revocation)
 PUT    /v1/user/applications/{id}/networks   body: {"network", "wallet_id"}
@@ -112,6 +113,14 @@ POST   /v1/user/password-reset/confirm  body: {"token", "new_password"}
 ```
 
 A password change drops every other session of the user (the current one stays).
+
+Issuing addresses from the cabinet (`POST …/users/{id}/addresses`) is the very same core
+call as the identically named [Application API](#application-api-implemented-routes)
+route: the gateway user can hand out an
+address by hand without standing up an integration. Every property is inherited —
+idempotency (a repeat returns what was already issued), the implicit registration of a
+previously unseen application user, and the `network_not_configured` error for a network
+outside the application's map.
 
 The cabinet history pages with "show more" (the owner's decision): the answer carries
 `next_cursor` — the opaque position of the last returned row; passing it back as

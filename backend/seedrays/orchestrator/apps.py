@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from seedrays.orchestrator import operations
 from seedrays.orchestrator.operations import OperationError, hash_api_key
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_apps, user_store, user_wallets
@@ -166,6 +167,44 @@ async def app_user_addresses(
 		)
 	rows = await user_store.list_bindings_of_app_user(engine, app_user_id)
 	return [{"network": r.network, "address": r.address, "memo": r.memo} for r in rows]
+
+
+async def issue_addresses(
+	engine: AsyncEngine,
+	*,
+	user_id: int,
+	app_id: int,
+	external_id: str,
+	networks: list[str] | str,
+) -> list[dict]:
+	"""Issue payment addresses for an application user from the cabinet.
+
+	The panel counterpart of the Application API create-addresses call:
+	both entry points run the same idempotent ``ensure_bindings`` core, so
+	their behaviour cannot diverge — including the implicit registration of
+	a previously unseen application user.
+
+	Args:
+		engine: The owner's user database.
+		user_id: The owner's registry id (serializes index allocation).
+		app_id: The application within the owner's database.
+		external_id: The application's own user identifier (opaque string).
+		networks: Network codes, or ``"all"`` for every configured network.
+
+	Returns:
+		Binding descriptions: network, address, memo.
+
+	Raises:
+		OperationError: unknown_application / network_not_configured.
+	"""
+	summary = await _require_summary(engine, app_id)
+	ctx = operations.AppContext(
+		user_id=user_id,
+		application_id=app_id,
+		application_name=summary.name,
+		engine=engine,
+	)
+	return await operations.ensure_bindings(ctx, external_id, networks)
 
 
 async def set_network_mapping(

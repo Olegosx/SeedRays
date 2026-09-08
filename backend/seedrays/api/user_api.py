@@ -11,7 +11,7 @@ import hmac
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, AsyncIterator
+from typing import Annotated, AsyncIterator, Literal
 
 from fastapi import Depends, FastAPI, Query, Request, Response
 from fastapi.responses import RedirectResponse
@@ -120,6 +120,14 @@ class CreateApplicationRequest(BaseModel):
 	"""Body of the create-application operation."""
 
 	name: str = Field(min_length=1, max_length=64)
+
+
+class IssueAddressesRequest(BaseModel):
+	"""Body of the cabinet issue-addresses operation."""
+
+	networks: list[str] | Literal["all"] = Field(
+		description="Network codes, or 'all' for every configured network"
+	)
 
 
 class NetworkMappingRequest(BaseModel):
@@ -578,6 +586,29 @@ def register_user_routes(
 		return {
 			"addresses": await app_ops.app_user_addresses(
 				engine, app_id=app_id, external_id=external_id
+			)
+		}
+
+	@app.post("/v1/user/applications/{app_id}/users/{external_id}/addresses")
+	async def issue_app_user_addresses(
+		app_id: int,
+		external_id: str,
+		body: IssueAddressesRequest,
+		ctx: UserContext = MutatingSessionDep,
+		engine: AsyncEngine = UserEngineDep,
+	) -> dict:
+		"""Issue payment addresses for an application user from the cabinet.
+
+		The same idempotent operation the Application API runs; an unseen
+		external_id registers the application user implicitly.
+		"""
+		return {
+			"addresses": await app_ops.issue_addresses(
+				engine,
+				user_id=ctx.user.user_id,
+				app_id=app_id,
+				external_id=external_id,
+				networks=body.networks,
 			)
 		}
 

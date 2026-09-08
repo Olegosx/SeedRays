@@ -277,6 +277,19 @@ export const ru = {
 	"app.colAddresses": "Адреса",
 	"app.colUserCreated": "Создан",
 	"app.addressesEmpty": "Адресов пока нет.",
+	"app.issue": "Выпустить адрес",
+	"app.issueTitle": "Выпуск адресов",
+	"app.issueHint":
+		"Укажите идентификатор пользователя приложения — тот же, каким приложение называет его в API. Незнакомый идентификатор заводится автоматически, повторный выпуск возвращает уже выданные адреса.",
+	"app.issueUser": "Идентификатор пользователя",
+	"app.issueUserPlaceholder": "например, order-1024",
+	"app.issueNetworks": "Сети",
+	"app.issueNoNetworks":
+		"Сначала добавьте хотя бы одну сеть в карточке «Сети и кошельки» — из неё выдаются адреса.",
+	"app.issueGo": "Выпустить",
+	"app.issueCancel": "Отмена",
+	"app.issueClose": "Готово",
+	"app.issueResult": "Адреса пользователя",
 
 	"history.pageTitle": "История операций — SeedRays",
 	"history.title": "История операций",

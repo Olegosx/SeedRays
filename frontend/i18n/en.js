@@ -275,6 +275,19 @@ export const en = {
 	"app.colAddresses": "Addresses",
 	"app.colUserCreated": "Created",
 	"app.addressesEmpty": "No addresses yet.",
+	"app.issue": "Issue an address",
+	"app.issueTitle": "Address issuance",
+	"app.issueHint":
+		"Give the application user's identifier — the same one the application uses for them in the API. An unknown identifier is registered automatically; issuing again returns the addresses already given out.",
+	"app.issueUser": "User identifier",
+	"app.issueUserPlaceholder": "for example, order-1024",
+	"app.issueNetworks": "Networks",
+	"app.issueNoNetworks":
+		"Add at least one network in the \"Networks and wallets\" card first — addresses are issued from it.",
+	"app.issueGo": "Issue",
+	"app.issueCancel": "Cancel",
+	"app.issueClose": "Done",
+	"app.issueResult": "The user's addresses",
 
 	"history.pageTitle": "Operation history — SeedRays",
 	"history.title": "Operation history",
