@@ -88,6 +88,7 @@ export const en = {
 	"menu.dashboard": "Dashboard",
 	"menu.wallets": "Wallets",
 	"menu.apps": "Applications (API)",
+	"menu.allApps": "All applications",
 	"menu.history": "Operation history",
 	"menu.settings": "Settings",
 	"menu.logout": "Sign out",

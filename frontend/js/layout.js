@@ -24,12 +24,15 @@ const MENU_OPERATOR = [
 	["settings", "operator-settings.html", "ti-settings", "op.menuSettings"],
 ];
 
-// Постоянно раскрытое подменю приложений под пунктом «Приложения (API)»:
-// штатное состояние Tabler «dropdown-menu show» без переключателя —
-// родительский пункт остаётся обычной ссылкой на общий список.
-// Список приходит асинхронно в $store.nav.apps (см. ниже).
-const APPS_SUBMENU = `
-						<div class="dropdown-menu show">
+// Подменю приложений под пунктом «Приложения (API)»: обычный дропдаун
+// Tabler со своим переключателем. Первый подпункт — общий список, дальше
+// сами приложения (приходят асинхронно в $store.nav.apps, см. ниже).
+// В разделе приложений подменю открыто сразу: иначе не видно, какое из
+// них выбрано. Свернуть можно кликом, как у любого дропдауна.
+const APPS_SUBMENU = (href, expanded) => `
+						<div class="dropdown-menu${expanded ? " show" : ""}">
+							<a class="dropdown-item" :class="{ active: $store.nav.allAppsActive }"
+								href="${href}" x-text="$store.i18n.t('menu.allApps')"></a>
 							<template x-for="app in $store.nav.apps" :key="app.id">
 								<a class="dropdown-item"
 									:class="{ active: app.id === $store.nav.activeAppId }"
@@ -38,15 +41,27 @@ const APPS_SUBMENU = `
 						</div>`;
 
 function sidebar(active, menu = MENU) {
-	const items = menu.map(
-		([key, href, icon, labelKey]) => `
-					<li class="nav-item${key === active ? " active" : ""}">
+	const items = menu.map(([key, href, icon, labelKey]) => {
+		const label = `<span class="nav-link-icon"><i class="ti ${icon}"></i></span>
+							<span class="nav-link-title" x-text="$store.i18n.t('${labelKey}')"></span>`;
+		const activeClass = key === active ? " active" : "";
+		if (key === "apps" && menu === MENU) {
+			const expanded = key === active;
+			return `
+					<li class="nav-item dropdown${activeClass}">
+						<a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown"
+							role="button" aria-expanded="${expanded}">
+							${label}
+						</a>${APPS_SUBMENU(href, expanded)}
+					</li>`;
+		}
+		return `
+					<li class="nav-item${activeClass}">
 						<a class="nav-link" href="${href}">
-							<span class="nav-link-icon"><i class="ti ${icon}"></i></span>
-							<span class="nav-link-title" x-text="$store.i18n.t('${labelKey}')"></span>
-						</a>${key === "apps" && menu === MENU ? APPS_SUBMENU : ""}
-					</li>`,
-	).join("");
+							${label}
+						</a>
+					</li>`;
+	}).join("");
 	return `<aside class="navbar navbar-vertical navbar-expand-lg" data-bs-theme="dark">
 		<div class="container-fluid">
 			<button class="navbar-toggler" type="button" data-bs-toggle="collapse"
@@ -161,6 +176,8 @@ document.addEventListener("alpine:init", () => {
 		activeAppId: location.pathname.endsWith("/application.html")
 			? Number(new URLSearchParams(location.search).get("id"))
 			: null,
+		// Первый подпункт подменю — общий список приложений.
+		allAppsActive: location.pathname.endsWith("/applications.html"),
 	});
 	window.Alpine.store("fmt", {
 		statusClass(status) {

@@ -85,9 +85,11 @@ The sidebar — five sections:
 - **Applications (API)** — application management: creating an application, issuing and
   revoking its API key, configuring the "network → wallet" mapping, viewing the
   application's users and their addresses. An API key belongs to an application, so the
-  section is organized by applications. The menu item carries a permanently expanded
-  list of the user's applications: each sub-item leads to its application's page, while
-  clicking the item itself opens the overall list.
+  section is organized by applications. The menu item is a collapsible submenu: the first
+  sub-item, "All applications", opens the overall list, the rest lead to the user's
+  application pages. Inside the applications section the submenu starts expanded
+  (otherwise the selected application is not visible); elsewhere it starts collapsed, and
+  a click on the item opens or closes it.
 - **Operation History** — incoming operations across all wallets with filters (wallet,
   network, asset, status).
 - **Settings** — the cabinet owner's personal settings: profile (the username — immutable

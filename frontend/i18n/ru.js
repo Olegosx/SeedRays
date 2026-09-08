@@ -89,6 +89,7 @@ export const ru = {
 	"menu.dashboard": "Дашборд",
 	"menu.wallets": "Кошельки",
 	"menu.apps": "Приложения (API)",
+	"menu.allApps": "Все приложения",
 	"menu.history": "История операций",
 	"menu.settings": "Настройки",
 	"menu.logout": "Выход",
