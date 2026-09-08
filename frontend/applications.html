@@ -22,6 +22,9 @@
 		async loadApps() {
 			const { api } = await import('/js/api.js');
 			this.apps = (await api('GET', '/v1/user/applications')).applications;
+			// Подменю в боковом меню держит свой список — обновляем и его,
+			// чтобы созданное приложение появлялось там без перехода.
+			this.$store.nav.apps = this.apps;
 		},
 		async create() {
 			this.error = '';
