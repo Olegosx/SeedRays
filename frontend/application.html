@@ -204,7 +204,8 @@
 								</div>
 								<div class="card-body">
 									<p class="text-secondary" x-text="$store.i18n.t('app.networksHint')"></p>
-									<div class="table-responsive">
+									<!-- mb-3 возвращает отступ, который Tabler обнуляет внутри table-responsive -->
+									<div class="table-responsive mb-3">
 										<table class="table table-vcenter">
 											<thead>
 												<tr>
