@@ -62,6 +62,14 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
   (`logs/security.log` in the data directory) — the panel has no journal screen.
 - Secret values (API keys) are never returned: the form shows only a
   "configured / not configured" flag; an empty secret field on save means "keep".
+- An empty non-secret field means "the setting is cleared": the reader falls back to its
+  own default instead of treating blankness as a broken value.
+- Numeric fields (the request rate, the watcher interval and overlap, the journal size
+  and archive count) are validated on save — intervals and the rate take a non-negative
+  number, the journal fields a whole number of one or more. A bad value rejects the whole
+  submission: half-saved settings are worse than a refusal. Both the form (which
+  highlights the field immediately) and the server check it — the server stays the source
+  of truth.
 - Below — the per-network watcher status (read-only): the last processed block and the
   time of the last pass.
 

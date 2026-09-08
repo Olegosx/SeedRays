@@ -337,3 +337,68 @@ def test_operator_settings_and_watcher(tmp_path: Path) -> None:
 			await client.aclose()
 
 	asyncio.run(scenario())
+
+
+def test_numeric_settings_are_validated(tmp_path: Path) -> None:
+	"""Numeric fields are checked before storage; blank clears them."""
+
+	async def scenario() -> None:
+		client, csrf = await _operator_client(tmp_path)
+		headers = {"X-CSRF-Token": csrf}
+		try:
+			for key, value in (
+				("watcher.interval_seconds", "часто"),
+				("watcher.overlap_minutes", "-5"),
+				("seclog.rotate_mb", "0"),
+				("seclog.backups", "2.5"),  # целое поле не принимает дробь
+			):
+				refused = await client.put(
+					"/v1/operator/settings",
+					json={"values": {key: value}},
+					headers=headers,
+				)
+				assert refused.status_code == 400, f"{key}={value!r}: {refused.text}"
+				assert refused.json()["error"]["code"] == "invalid_setting"
+
+			# Ни одно значение не записано: отказ целиком, а не половина формы.
+			current = {
+				s["key"]: s for s in (await client.get("/v1/operator/settings")).json()["settings"]
+			}
+			assert current["watcher.interval_seconds"]["value"] == ""
+			assert current["seclog.rotate_mb"]["value"] == ""
+
+			# Годные значения проходят; пустое поле — «снять настройку».
+			ok = await client.put(
+				"/v1/operator/settings",
+				json={
+					"values": {
+						"watcher.interval_seconds": "45",
+						"provider.trongrid.rate_per_sec": "2.5",
+						"seclog.backups": "3",
+						"watcher.overlap_minutes": "",
+					}
+				},
+				headers=headers,
+			)
+			assert ok.status_code == 200, ok.text
+			stored = {s["key"]: s for s in ok.json()["settings"]}
+			assert stored["watcher.interval_seconds"]["value"] == "45"
+			assert stored["provider.trongrid.rate_per_sec"]["value"] == "2.5"
+			assert stored["seclog.backups"]["value"] == "3"
+			assert stored["watcher.overlap_minutes"]["value"] == ""
+
+			# Одно негодное поле отменяет всю отправку, включая годные соседние.
+			mixed = await client.put(
+				"/v1/operator/settings",
+				json={"values": {"watcher.interval_seconds": "90", "seclog.backups": "нет"}},
+				headers=headers,
+			)
+			assert mixed.status_code == 400
+			after = {
+				s["key"]: s for s in (await client.get("/v1/operator/settings")).json()["settings"]
+			}
+			assert after["watcher.interval_seconds"]["value"] == "45"
+		finally:
+			await client.aclose()
+
+	asyncio.run(scenario())

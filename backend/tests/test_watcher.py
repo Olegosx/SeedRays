@@ -20,7 +20,11 @@ from seedrays.storage import registry as registry_ops
 from seedrays.storage import schema_user
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
 from seedrays.storage.migrations.runner import upgrade_registry
-from seedrays.watcher.single_pass import run_pass
+from seedrays.watcher.single_pass import (
+	read_datetime_setting,
+	read_float_setting,
+	run_pass,
+)
 
 NETWORK = "tron-nile"
 OUR_ADDRESS = "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH"
@@ -403,6 +407,31 @@ def test_invalid_settings_degrade_to_defaults(tmp_path: Path) -> None:
 		await registry_ops.set_setting(registry, "provider.trongrid.rate_per_sec", "fast")
 		await registry_ops.set_setting(registry, "watcher.scan_start", "not-a-date")
 		await registry.dispose()
+
+		stats = await run_pass(
+			tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=100, head=100)
+		)
+		assert stats.networks_scanned == 1
+
+	asyncio.run(scenario())
+
+
+def test_blank_settings_are_treated_as_unset(tmp_path: Path) -> None:
+	"""A cleared panel field means "use the default", not "broken value"."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		# Панель пишет снятую несекретную настройку пустой строкой.
+		await registry_ops.set_setting(registry, "watcher.overlap_minutes", "")
+		await registry_ops.set_setting(registry, "provider.trongrid.rate_per_sec", "")
+		await registry_ops.set_setting(registry, "watcher.scan_start", "")
+		try:
+			assert await read_float_setting(registry, "watcher.overlap_minutes", 10) == 10
+			moment = datetime(2026, 1, 1, tzinfo=timezone.utc)
+			assert await read_datetime_setting(registry, "watcher.scan_start", moment) == moment
+		finally:
+			await registry.dispose()
 
 		stats = await run_pass(
 			tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=100, head=100)

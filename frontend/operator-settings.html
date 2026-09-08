@@ -41,9 +41,37 @@
 				this.watcherRows = (await api('GET', '/v1/operator/watcher')).networks;
 			} catch (e) { this.loadError = this.$store.i18n.errorText(e); }
 		},
+		fieldErrors: {},
+		// Вид проверки числовых полей повторяет то, что принимает сервер:
+		// форма подсвечивает поле и говорит на языке интерфейса, сервер
+		// остаётся источником правды и защитой при обходе формы.
+		numberFields: {
+			'provider.trongrid.rate_per_sec': 'nonNegative',
+			'watcher.interval_seconds': 'nonNegative',
+			'watcher.overlap_minutes': 'nonNegative',
+			'seclog.rotate_mb': 'positiveInt',
+			'seclog.backups': 'positiveInt',
+		},
+		validate() {
+			this.fieldErrors = {};
+			for (const [key, kind] of Object.entries(this.numberFields)) {
+				const raw = (this.values[key] || '').trim();
+				// Пустое поле — «настройка снята», читатель возьмёт умолчание.
+				if (!raw) { continue; }
+				if (kind === 'positiveInt') {
+					if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+						this.fieldErrors[key] = this.$store.i18n.t('op.numberPositiveInt');
+					}
+				} else if (!/^\d+(\.\d+)?$/.test(raw)) {
+					this.fieldErrors[key] = this.$store.i18n.t('op.numberNonNegative');
+				}
+			}
+			return Object.keys(this.fieldErrors).length === 0;
+		},
 		async save() {
 			this.error = '';
 			this.saved = false;
+			if (!this.validate()) { return; }
 			try {
 				const { api } = await import('/js/api.js');
 				this.values['mail.dev_autoconfirm'] = this.devMode ? '1' : '';
@@ -114,7 +142,10 @@
 										<div class="mb-2">
 											<label class="form-label" x-text="$store.i18n.t('op.rateLabel')"></label>
 											<input type="text" class="form-control"
+												:class="fieldErrors['provider.trongrid.rate_per_sec'] ? 'is-invalid' : ''"
 												x-model="values['provider.trongrid.rate_per_sec']">
+											<div class="invalid-feedback"
+												x-text="fieldErrors['provider.trongrid.rate_per_sec']"></div>
 										</div>
 									</div>
 								</div>
@@ -162,12 +193,18 @@
 										<div class="mb-3">
 											<label class="form-label" x-text="$store.i18n.t('op.intervalLabel')"></label>
 											<input type="text" class="form-control"
+												:class="fieldErrors['watcher.interval_seconds'] ? 'is-invalid' : ''"
 												x-model="values['watcher.interval_seconds']">
+											<div class="invalid-feedback"
+												x-text="fieldErrors['watcher.interval_seconds']"></div>
 										</div>
 										<div class="mb-2">
 											<label class="form-label" x-text="$store.i18n.t('op.overlapLabel')"></label>
 											<input type="text" class="form-control"
+												:class="fieldErrors['watcher.overlap_minutes'] ? 'is-invalid' : ''"
 												x-model="values['watcher.overlap_minutes']">
+											<div class="invalid-feedback"
+												x-text="fieldErrors['watcher.overlap_minutes']"></div>
 										</div>
 									</div>
 								</div>
@@ -195,12 +232,18 @@
 										<div class="mb-3">
 											<label class="form-label" x-text="$store.i18n.t('op.seclogRotateLabel')"></label>
 											<input type="text" class="form-control"
+												:class="fieldErrors['seclog.rotate_mb'] ? 'is-invalid' : ''"
 												x-model="values['seclog.rotate_mb']" placeholder="100">
+											<div class="invalid-feedback"
+												x-text="fieldErrors['seclog.rotate_mb']"></div>
 										</div>
 										<div class="mb-2">
 											<label class="form-label" x-text="$store.i18n.t('op.seclogBackupsLabel')"></label>
 											<input type="text" class="form-control"
+												:class="fieldErrors['seclog.backups'] ? 'is-invalid' : ''"
 												x-model="values['seclog.backups']" placeholder="10">
+											<div class="invalid-feedback"
+												x-text="fieldErrors['seclog.backups']"></div>
 										</div>
 										<small class="form-hint" x-text="$store.i18n.t('op.seclogRestartHint')"></small>
 									</div>

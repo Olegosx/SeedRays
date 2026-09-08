@@ -74,9 +74,13 @@ async def read_float_setting(registry: AsyncEngine, key: str, default: float) ->
 	The single pattern for settings the watcher must survive: a broken
 	value in the registry must never crash the scanning loop (the same
 	policy as the watched-contracts setting).
+
+	Unset and blank are the same thing gateway-wide: the operator panel
+	stores a cleared field as an empty string, so treating it as "broken"
+	would log an error on every pass for a setting that is simply not set.
 	"""
 	raw = await registry_ops.get_setting(registry, key)
-	if raw is None:
+	if not raw:
 		return default
 	try:
 		return float(raw)
@@ -88,9 +92,12 @@ async def read_float_setting(registry: AsyncEngine, key: str, default: float) ->
 async def read_datetime_setting(
 	registry: AsyncEngine, key: str, default: datetime
 ) -> datetime:
-	"""Read an ISO-datetime setting; an invalid value degrades to the default with a log."""
+	"""Read an ISO-datetime setting; an invalid value degrades to the default with a log.
+
+	Unset and blank mean the same here as for numeric settings.
+	"""
 	raw = await registry_ops.get_setting(registry, key)
-	if raw is None:
+	if not raw:
 		return default
 	try:
 		return _aware_utc(datetime.fromisoformat(raw))

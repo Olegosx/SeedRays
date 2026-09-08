@@ -50,21 +50,31 @@ USER_STATUS_BLOCKED = "blocked"
 # Настройки, которыми управляет панель. Секретные значения наружу не
 # возвращаются никогда — только признак «задано»; пустая строка при
 # сохранении означает «не менять».
+#
+# "number" — вид проверки числового поля: значение должно быть таким,
+# каким его согласен принять читатель настройки. Иначе оператор увидит
+# «сохранено», а разойдётся это только строкой в журнале сервера.
+NUMBER_NON_NEGATIVE = "non_negative"  # дробное >= 0
+NUMBER_POSITIVE_INT = "positive_int"  # целое >= 1
+
 SETTING_FIELDS = (
 	{"key": "provider.trongrid.api_key", "secret": True},
-	{"key": "provider.trongrid.rate_per_sec", "secret": False},
-	{"key": "watcher.interval_seconds", "secret": False},
-	{"key": "watcher.overlap_minutes", "secret": False},
+	{"key": "provider.trongrid.rate_per_sec", "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": "watcher.interval_seconds", "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": "watcher.overlap_minutes", "secret": False, "number": NUMBER_NON_NEGATIVE},
 	{"key": "mail.resend.api_key", "secret": True},
 	{"key": "mail.from", "secret": False},
 	{"key": "gateway.base_url", "secret": False},
 	{"key": "gateway.trusted_proxies", "secret": False},
 	{"key": "mail.dev_autoconfirm", "secret": False},
-	{"key": "seclog.rotate_mb", "secret": False},
-	{"key": "seclog.backups", "secret": False},
+	{"key": "seclog.rotate_mb", "secret": False, "number": NUMBER_POSITIVE_INT},
+	{"key": "seclog.backups", "secret": False, "number": NUMBER_POSITIVE_INT},
 )
 _SECRET_KEYS = {field["key"] for field in SETTING_FIELDS if field["secret"]}
 _KNOWN_KEYS = {field["key"] for field in SETTING_FIELDS}
+_NUMBER_KINDS = {
+	field["key"]: field["number"] for field in SETTING_FIELDS if "number" in field
+}
 
 
 def _sha256(value: str) -> str:
@@ -438,19 +448,56 @@ async def get_settings(registry: AsyncEngine) -> list[dict]:
 	return result
 
 
+def _check_number(key: str, value: str) -> None:
+	"""Validate one numeric setting; blank passes as "cleared".
+
+	Raises:
+		OperationError: invalid_setting.
+	"""
+	kind = _NUMBER_KINDS[key]
+	if kind == NUMBER_POSITIVE_INT:
+		try:
+			number = int(value)
+		except ValueError:
+			raise OperationError(
+				"invalid_setting", f"setting {key!r} must be a whole number of at least 1"
+			) from None
+		if number < 1:
+			raise OperationError(
+				"invalid_setting", f"setting {key!r} must be a whole number of at least 1"
+			)
+		return
+	try:
+		number = float(value)
+	except ValueError:
+		raise OperationError(
+			"invalid_setting", f"setting {key!r} must be a non-negative number"
+		) from None
+	if number < 0:
+		raise OperationError(
+			"invalid_setting", f"setting {key!r} must be a non-negative number"
+		)
+
+
 async def update_settings(registry: AsyncEngine, values: dict[str, str]) -> None:
 	"""Store the submitted settings.
 
 	Для секретных ключей пустая строка означает «не менять» (форма не
 	видит текущее значение); для остальных пустая строка сохраняется как
-	есть — это явное «настройка снята».
+	есть — это явное «настройка снята», читатели берут своё умолчание.
+
+	Числовые поля проверяются до записи, и ни одно значение не пишется,
+	пока не проверены все: половина сохранённой формы хуже отказа.
 
 	Raises:
-		OperationError: unknown_setting.
+		OperationError: unknown_setting / invalid_setting.
 	"""
 	for key, value in values.items():
 		if key not in _KNOWN_KEYS:
 			raise OperationError("unknown_setting", f"unknown setting {key!r}")
+		if key in _NUMBER_KINDS and value.strip():
+			_check_number(key, value.strip())
+	for key, value in values.items():
 		if key in _SECRET_KEYS and value == "":
 			continue
 		await registry_ops.set_setting(registry, key, value.strip())
