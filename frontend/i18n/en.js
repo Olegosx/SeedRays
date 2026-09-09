@@ -275,6 +275,8 @@ export const en = {
 	"app.addNetwork": "Add a network",
 	"app.remove": "Remove",
 	"app.usersCard": "Application users",
+	"app.colInstance": "Instance",
+	"app.instanceDefault": "default",
 	"app.colUser": "Identifier",
 	"app.colAddresses": "Addresses",
 	"app.colUserCreated": "Created",
@@ -283,6 +285,10 @@ export const en = {
 	"app.issueTitle": "Address issuance",
 	"app.issueHint":
 		"Give the application user's identifier — the same one the application uses for them in the API. An unknown identifier is registered automatically; issuing again returns the addresses already given out.",
+	"app.issueInstance": "Application instance",
+	"app.issueInstancePlaceholder": "blank — the default instance",
+	"app.issueInstanceHint":
+		"Fill this in when several independent installations of the application share one key: the instance keeps their user identifiers apart. An application with a single installation leaves the field empty.",
 	"app.issueUser": "User identifier",
 	"app.issueUserPlaceholder": "for example, user1",
 	"app.issueNetworks": "Networks",

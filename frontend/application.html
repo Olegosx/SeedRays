@@ -64,31 +64,58 @@
 		},
 		expanded: {},
 		userAddresses: {},
-		async toggleUser(externalId) {
-			if (this.expanded[externalId]) {
-				this.expanded[externalId] = false;
+		userKey(user) {
+			// Идентичность пользователя приложения — пара «экземпляр +
+			// идентификатор»: по одному идентификатору две независимые
+			// установки схлопнулись бы в одну строку таблицы.
+			// Пара кодируется в JSON, а не склеивается разделителем: обе
+			// половины — произвольные строки, и любой разделитель может
+			// встретиться внутри них, дав совпадение ключей у разных людей.
+			return JSON.stringify([user.instance, user.external_id]);
+		},
+		instanceParams(instance) {
+			return new URLSearchParams({ instance: instance || '' }).toString();
+		},
+		async toggleUser(user) {
+			const key = this.userKey(user);
+			if (this.expanded[key]) {
+				this.expanded[key] = false;
 				return;
 			}
-			if (this.userAddresses[externalId] === undefined) {
+			if (this.userAddresses[key] === undefined) {
 				// Адреса грузятся лениво, при первом раскрытии.
 				this.error = '';
 				try {
 					const { api } = await import('/js/api.js');
 					const result = await api('GET', '/v1/user/applications/' + this.appId
-						+ '/users/' + encodeURIComponent(externalId) + '/addresses');
-					this.userAddresses[externalId] = result.addresses;
+						+ '/users/' + encodeURIComponent(user.external_id) + '/addresses?'
+						+ this.instanceParams(user.instance));
+					this.userAddresses[key] = result.addresses;
 				} catch (e) {
 					this.error = this.$store.i18n.errorText(e);
 					return;
 				}
 			}
-			this.expanded[externalId] = true;
+			this.expanded[key] = true;
 		},
-		issue: { externalId: '', networks: [], busy: false, error: '', result: null },
+		knownInstances() {
+			return [...new Set(this.users.map((u) => u.instance).filter(Boolean))];
+		},
+		knownUsers() {
+			// Подсказка ограничена выбранной установкой: идентификаторы чужой
+			// установки принадлежат другим плательщикам, подсказывать их нельзя.
+			const instance = this.issue.instance.trim();
+			return this.users.filter((u) => u.instance === instance)
+				.map((u) => u.external_id);
+		},
+		issue: {
+			instance: '', externalId: '', networks: [], busy: false, error: '', result: null,
+		},
 		openIssue() {
 			// По умолчанию выдаём во всех настроенных сетях: типичный случай —
 			// плательщику нужен адрес везде, где приложение принимает платежи.
 			this.issue = {
+				instance: '',
 				externalId: '',
 				networks: this.networks.map((m) => m.network),
 				busy: false,
@@ -108,14 +135,17 @@
 			try {
 				const { api } = await import('/js/api.js');
 				const externalId = this.issue.externalId.trim();
+				const instance = this.issue.instance.trim();
 				const result = await api('POST', '/v1/user/applications/' + this.appId
-					+ '/users/' + encodeURIComponent(externalId) + '/addresses',
+					+ '/users/' + encodeURIComponent(externalId) + '/addresses?'
+					+ this.instanceParams(instance),
 					{ networks: this.issue.networks });
 				this.issue.result = result.addresses;
 				// Раскрытый список адресов этого пользователя устарел — сбросить,
 				// чтобы следующее раскрытие показало выданное только что.
-				delete this.userAddresses[externalId];
-				this.expanded[externalId] = false;
+				const key = this.userKey({ instance, external_id: externalId });
+				delete this.userAddresses[key];
+				this.expanded[key] = false;
 				await this.load();
 			} catch (e) {
 				this.issue.error = this.$store.i18n.errorText(e);
@@ -312,18 +342,25 @@
 									<table class="table table-vcenter card-table">
 										<thead>
 											<tr>
+												<th x-text="$store.i18n.t('app.colInstance')"></th>
 												<th x-text="$store.i18n.t('app.colUser')"></th>
 												<th x-text="$store.i18n.t('app.colAddresses')"></th>
 												<th x-text="$store.i18n.t('app.colUserCreated')"></th>
 											</tr>
 										</thead>
 										<!-- По tbody на пользователя: строка + её раскрытие с адресами -->
-										<template x-for="user in users" :key="user.external_id">
+										<template x-for="user in users" :key="userKey(user)">
 											<tbody>
-												<tr role="button" @click="toggleUser(user.external_id)">
+												<tr role="button" @click="toggleUser(user)">
+													<td>
+														<span class="badge bg-purple-lt" x-show="user.instance"
+															x-text="user.instance"></span>
+														<span class="text-secondary" x-show="!user.instance"
+															x-text="$store.i18n.t('app.instanceDefault')"></span>
+													</td>
 													<td>
 														<i class="ti me-1 text-secondary"
-															:class="expanded[user.external_id]
+															:class="expanded[userKey(user)]
 																? 'ti-chevron-down' : 'ti-chevron-right'"></i>
 														<span class="font-monospace" x-text="user.external_id"></span>
 													</td>
@@ -331,15 +368,15 @@
 													<td class="text-secondary"
 														x-text="user.created_at ? user.created_at.slice(0, 10) : ''"></td>
 												</tr>
-												<tr x-show="expanded[user.external_id]">
-													<td colspan="3" class="bg-surface-secondary">
+												<tr x-show="expanded[userKey(user)]">
+													<td colspan="4" class="bg-surface-secondary">
 														<div class="text-secondary"
-															x-show="(userAddresses[user.external_id] || []).length === 0"
+															x-show="(userAddresses[userKey(user)] || []).length === 0"
 															x-text="$store.i18n.t('app.addressesEmpty')"></div>
 														<table class="table table-sm mb-0"
-															x-show="(userAddresses[user.external_id] || []).length">
+															x-show="(userAddresses[userKey(user)] || []).length">
 															<tbody>
-																<template x-for="binding in userAddresses[user.external_id] || []">
+																<template x-for="binding in userAddresses[userKey(user)] || []">
 																	<tr>
 																		<td class="w-1">
 																			<span class="badge bg-blue-lt"
@@ -379,15 +416,31 @@
 							x-text="$store.i18n.t('app.issueNoNetworks')"></div>
 						<p class="text-secondary" x-text="$store.i18n.t('app.issueHint')"></p>
 						<div class="mb-3">
+							<label class="form-label" x-text="$store.i18n.t('app.issueInstance')"></label>
+							<input type="text" class="form-control font-monospace" x-model="issue.instance"
+								:placeholder="$store.i18n.t('app.issueInstancePlaceholder')"
+								list="issue-known-instances" maxlength="64">
+							<!-- Подсказка идёт СРАЗУ за полем: отступ ей даёт правило соседства
+								 Tabler (.form-control + .form-hint), а вставленный между ними
+								 datalist его молча ломает. На связь list="…" порядок не влияет. -->
+							<small class="form-hint" x-text="$store.i18n.t('app.issueInstanceHint')"></small>
+							<datalist id="issue-known-instances">
+								<template x-for="value in knownInstances()" :key="value">
+									<option :value="value"></option>
+								</template>
+							</datalist>
+						</div>
+						<div class="mb-3">
 							<label class="form-label" x-text="$store.i18n.t('app.issueUser')"></label>
 							<input type="text" class="form-control font-monospace" x-model="issue.externalId"
 								:placeholder="$store.i18n.t('app.issueUserPlaceholder')"
 								@keydown.enter.prevent="issueAddresses()"
 								list="issue-known-users" maxlength="255">
-							<!-- Подсказка уже известными пользователями: довыпуск без опечаток -->
+							<!-- Подсказка известными пользователями ВЫБРАННОЙ установки:
+								 довыпуск без опечаток, но без чужих идентификаторов -->
 							<datalist id="issue-known-users">
-								<template x-for="user in users" :key="user.external_id">
-									<option :value="user.external_id"></option>
+								<template x-for="value in knownUsers()" :key="value">
+									<option :value="value"></option>
 								</template>
 							</datalist>
 						</div>
