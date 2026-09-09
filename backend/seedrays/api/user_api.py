@@ -579,13 +579,18 @@ def register_user_routes(
 	async def app_user_addresses(
 		app_id: int,
 		external_id: str,
+		instance: Annotated[str, Query(max_length=64)] = "",
 		ctx: UserContext = SessionDep,
 		engine: AsyncEngine = UserEngineDep,
 	) -> dict:
-		"""The bound addresses of one application user."""
+		"""The bound addresses of one application user.
+
+		Экземпляр приложения (ADR-0025) — тот же параметр с тем же именем и
+		тем же значением по умолчанию, что и в группе приложений.
+		"""
 		return {
 			"addresses": await app_ops.app_user_addresses(
-				engine, app_id=app_id, external_id=external_id
+				engine, app_id=app_id, instance=instance, external_id=external_id
 			)
 		}
 
@@ -594,19 +599,22 @@ def register_user_routes(
 		app_id: int,
 		external_id: str,
 		body: IssueAddressesRequest,
+		instance: Annotated[str, Query(max_length=64)] = "",
 		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
 	) -> dict:
 		"""Issue payment addresses for an application user from the cabinet.
 
 		The same idempotent operation the Application API runs; an unseen
-		external_id registers the application user implicitly.
+		external_id registers the application user implicitly — inside the
+		given instance (ADR-0025).
 		"""
 		return {
 			"addresses": await app_ops.issue_addresses(
 				engine,
 				user_id=ctx.user.user_id,
 				app_id=app_id,
+				instance=instance,
 				external_id=external_id,
 				networks=body.networks,
 			)

@@ -130,7 +130,11 @@ class AppDetail:
 
 
 async def get_application(engine: AsyncEngine, app_id: int) -> AppDetail:
-	"""The application with its network mappings and users."""
+	"""The application with its network mappings and users.
+
+	Пользователи перечисляются по всем экземплярам приложения (ADR-0025):
+	владельцу нужна полная картина, экземпляр показан отдельным полем.
+	"""
 	summary = await _require_summary(engine, app_id)
 	mappings = await user_apps.list_network_mappings(engine, app_id)
 	user_rows = await user_apps.list_app_users(engine, app_id)
@@ -140,6 +144,7 @@ async def get_application(engine: AsyncEngine, app_id: int) -> AppDetail:
 		mappings=mappings,
 		users=[
 			{
+				"instance": u.instance,
 				"external_id": u.external_id,
 				"addresses": address_counts.get(u.id, 0),
 				"created_at": u.created_at.isoformat() if u.created_at else None,
@@ -150,16 +155,23 @@ async def get_application(engine: AsyncEngine, app_id: int) -> AppDetail:
 
 
 async def app_user_addresses(
-	engine: AsyncEngine, *, app_id: int, external_id: str
+	engine: AsyncEngine, *, app_id: int, instance: str, external_id: str
 ) -> list[dict]:
 	"""The bound addresses of one application user (the expandable row).
+
+	Args:
+		engine: The owner's user database.
+		app_id: The application within the owner's database.
+		instance: Application instance the user belongs to (ADR-0025);
+			blank — the default instance.
+		external_id: The application's own user identifier.
 
 	Raises:
 		OperationError: unknown_application / unknown_app_user.
 	"""
 	await _require_summary(engine, app_id)
 	app_user_id = await user_apps.get_app_user_id(
-		engine, app_id=app_id, external_id=external_id
+		engine, app_id=app_id, instance=instance.strip(), external_id=external_id
 	)
 	if app_user_id is None:
 		raise OperationError(
@@ -174,6 +186,7 @@ async def issue_addresses(
 	*,
 	user_id: int,
 	app_id: int,
+	instance: str,
 	external_id: str,
 	networks: list[str] | str,
 ) -> list[dict]:
@@ -188,6 +201,8 @@ async def issue_addresses(
 		engine: The owner's user database.
 		user_id: The owner's registry id (serializes index allocation).
 		app_id: The application within the owner's database.
+		instance: Application instance to issue into (ADR-0025); blank —
+			the default instance.
 		external_id: The application's own user identifier (opaque string).
 		networks: Network codes, or ``"all"`` for every configured network.
 
@@ -202,6 +217,7 @@ async def issue_addresses(
 		user_id=user_id,
 		application_id=app_id,
 		application_name=summary.name,
+		instance=instance.strip(),
 		engine=engine,
 	)
 	return await operations.ensure_bindings(ctx, external_id, networks)

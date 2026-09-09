@@ -194,14 +194,23 @@ async def network_wallet_map(engine: AsyncEngine, app_id: int) -> dict[str, int]
 
 
 async def get_app_user_id(
-	engine: AsyncEngine, *, app_id: int, external_id: str
+	engine: AsyncEngine, *, app_id: int, instance: str, external_id: str
 ) -> int | None:
-	"""The internal id of an application user, or None."""
+	"""The internal id of an application user, or None.
+
+	Args:
+		engine: The owner's user-database engine.
+		app_id: The application the user belongs to.
+		instance: Application instance — the namespace of external ids
+			(ADR-0025); the empty string is the default instance.
+		external_id: The application's own user identifier.
+	"""
 	async with engine.connect() as conn:
 		row = (
 			await conn.execute(
 				select(app_users.c.id).where(
 					app_users.c.application_id == app_id,
+					app_users.c.instance == instance,
 					app_users.c.external_id == external_id,
 				)
 			)
@@ -209,27 +218,44 @@ async def get_app_user_id(
 	return None if row is None else row.id
 
 
-async def insert_app_user(engine: AsyncEngine, *, app_id: int, external_id: str) -> int:
+async def insert_app_user(
+	engine: AsyncEngine, *, app_id: int, instance: str, external_id: str
+) -> int:
 	"""Create an application user row; returns its id.
 
 	Raises:
-		IntegrityError: On a concurrent insert of the same external id —
+		IntegrityError: On a concurrent insert of the same identity —
 			the caller re-reads and reuses the winner.
 	"""
 	async with engine.begin() as conn:
 		result = await conn.execute(
-			insert(app_users).values(application_id=app_id, external_id=external_id)
+			insert(app_users).values(
+				application_id=app_id, instance=instance, external_id=external_id
+			)
 		)
 		return result.inserted_primary_key[0]
 
 
-async def list_app_users(engine: AsyncEngine, app_id: int, *, limit: int = 0) -> list:
-	"""Application user rows, oldest first; ``limit=0`` — all."""
+async def list_app_users(
+	engine: AsyncEngine, app_id: int, *, instance: str | None = None, limit: int = 0
+) -> list:
+	"""Application user rows, oldest first; ``limit=0`` — all.
+
+	Args:
+		engine: The owner's user-database engine.
+		app_id: The application to list.
+		instance: One instance's namespace, or None for every instance —
+			the cabinet shows the owner all of them, the Application API
+			stays inside the caller's own instance (ADR-0025).
+		limit: Page size; 0 means everything.
+	"""
 	query = (
 		select(app_users)
 		.where(app_users.c.application_id == app_id)
 		.order_by(app_users.c.id)
 	)
+	if instance is not None:
+		query = query.where(app_users.c.instance == instance)
 	if limit:
 		query = query.limit(limit)
 	async with engine.connect() as conn:

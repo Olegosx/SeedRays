@@ -63,9 +63,18 @@ app_users = Table(
 	metadata,
 	Column("id", Integer, primary_key=True),
 	Column("application_id", Integer, ForeignKey("applications.id"), nullable=False),
+	# Экземпляр приложения (ADR-0025) — пространство имён внешних
+	# идентификаторов: у независимых установок одного приложения «пользователь
+	# 42» — разные люди. Пустая строка вместо NULL у единственного экземпляра,
+	# иначе уникальность не работает — NULL в SQL не равен NULL.
+	Column("instance", String(64), nullable=False, server_default=""),
 	Column("external_id", String(255), nullable=False),
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
-	UniqueConstraint("application_id", "external_id", name="uq_app_users_app_external"),
+	# Идентичность пользователя приложения: приложение + экземпляр + внешний
+	# идентификатор.
+	UniqueConstraint(
+		"application_id", "instance", "external_id", name="uq_app_users_identity"
+	),
 	# Опора для составного внешнего ключа из bindings (согласованность ссылок).
 	UniqueConstraint("id", "application_id", name="uq_app_users_id_app"),
 )

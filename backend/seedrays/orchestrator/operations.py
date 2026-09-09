@@ -50,16 +50,28 @@ class AppContext:
 	user_id: int
 	application_id: int
 	application_name: str
+	# Экземпляр приложения (ADR-0025): пространство имён идентификаторов
+	# пользователей. Свойство вызывающего, а не отдельной операции, поэтому
+	# живёт здесь — операции ниже его сигнатур не меняют.
+	instance: str
 	engine: AsyncEngine
 
 
 async def resolve_application(
-	registry: AsyncEngine, data_dir: Path, api_key: str
+	registry: AsyncEngine, data_dir: Path, api_key: str, instance: str = ""
 ) -> AppContext | None:
 	"""Resolve an API key to its application, or None if the key is unknown.
 
 	Lookup: the registry key index gives the owning user, the user's own
 	database gives the application (ADR-0008, ADR-0009).
+
+	Args:
+		registry: Engine of the shared registry database.
+		data_dir: The gateway data directory.
+		api_key: The key the caller presented.
+		instance: Application instance the caller speaks for (ADR-0025);
+			blank — the default instance, which is what a single-instance
+			application always uses.
 	"""
 	key_hash = hash_api_key(api_key)
 	user = await registry_ops.resolve_api_key(registry, key_hash)
@@ -78,24 +90,34 @@ async def resolve_application(
 		user_id=user.id,
 		application_id=app_row.id,
 		application_name=app_row.name,
+		instance=instance.strip(),
 		engine=engine,
 	)
 
 
 async def _get_or_create_app_user(ctx: AppContext, external_id: str) -> int:
-	"""Implicit application-user registration (ADR-0011)."""
+	"""Implicit application-user registration (ADR-0011), inside the caller's instance."""
 	found = await user_apps.get_app_user_id(
-		ctx.engine, app_id=ctx.application_id, external_id=external_id
+		ctx.engine,
+		app_id=ctx.application_id,
+		instance=ctx.instance,
+		external_id=external_id,
 	)
 	if found is not None:
 		return found
 	try:
 		return await user_apps.insert_app_user(
-			ctx.engine, app_id=ctx.application_id, external_id=external_id
+			ctx.engine,
+			app_id=ctx.application_id,
+			instance=ctx.instance,
+			external_id=external_id,
 		)
 	except IntegrityError:
 		found = await user_apps.get_app_user_id(
-			ctx.engine, app_id=ctx.application_id, external_id=external_id
+			ctx.engine,
+			app_id=ctx.application_id,
+			instance=ctx.instance,
+			external_id=external_id,
 		)
 		if found is None:
 			raise RuntimeError(f"app user {external_id!r} vanished after insert") from None
@@ -103,9 +125,16 @@ async def _get_or_create_app_user(ctx: AppContext, external_id: str) -> int:
 
 
 async def _find_app_user(ctx: AppContext, external_id: str) -> int:
-	"""The application user's internal id, or an unknown-user error."""
+	"""The application user's internal id, or an unknown-user error.
+
+	Поиск идёт в экземпляре вызывающего: чужой экземпляр для него не
+	существует, а не «запрещён» (ADR-0025).
+	"""
 	found = await user_apps.get_app_user_id(
-		ctx.engine, app_id=ctx.application_id, external_id=external_id
+		ctx.engine,
+		app_id=ctx.application_id,
+		instance=ctx.instance,
+		external_id=external_id,
 	)
 	if found is None:
 		raise OperationError("unknown_app_user", f"application user {external_id!r} is unknown")
@@ -375,10 +404,16 @@ async def get_history(
 
 
 async def list_app_users(ctx: AppContext, limit: int = DEFAULT_PAGE_LIMIT) -> list[dict]:
-	"""The application's users, paginated (ADR-0011: default 10, 0 — all)."""
+	"""The application's users of the caller's instance, paginated.
+
+	ADR-0011: default 10, 0 — all. The listing stays inside the caller's own
+	instance (ADR-0025); the owner sees every instance at once in the cabinet.
+	"""
 	if limit < 0:
 		raise OperationError("invalid_limit", "limit must be non-negative (0 means all)")
-	rows = await user_apps.list_app_users(ctx.engine, ctx.application_id, limit=limit)
+	rows = await user_apps.list_app_users(
+		ctx.engine, ctx.application_id, instance=ctx.instance, limit=limit
+	)
 	return [
 		{
 			"external_id": row.external_id,

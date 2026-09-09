@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import insert, inspect
+from sqlalchemy import insert, inspect, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -155,6 +155,46 @@ def test_binding_constraints(tmp_path: Path) -> None:
 				await conn.execute(
 					insert(schema_user.bindings).values(_binding_values(1, 2, "Taddr3"))
 				)
+		await engine.dispose()
+
+	asyncio.run(scenario())
+
+
+def test_app_user_identity_spans_instances(tmp_path: Path) -> None:
+	"""One external id lives in many instances, but only once per instance (ADR-0025)."""
+
+	async def scenario() -> None:
+		db_path = tmp_path / "user.db"
+		upgrade_user_db(db_path)
+		engine = create_sqlite_engine(db_path)
+		async with engine.begin() as conn:
+			await conn.execute(
+				insert(schema_user.applications).values(name="shop", key_hash="k1")
+			)
+			# Экземпляр по умолчанию — пустая строка из server_default:
+			# приложение с единственной установкой о колонке не знает.
+			await conn.execute(
+				insert(schema_user.app_users).values(application_id=1, external_id="42")
+			)
+			# Тот же идентификатор в другой установке — другой человек.
+			await conn.execute(
+				insert(schema_user.app_users).values(
+					application_id=1, instance="munich", external_id="42"
+				)
+			)
+
+		# А вот дубль внутри одной установки по-прежнему невозможен.
+		with pytest.raises(IntegrityError):
+			async with engine.begin() as conn:
+				await conn.execute(
+					insert(schema_user.app_users).values(
+						application_id=1, instance="munich", external_id="42"
+					)
+				)
+
+		async with engine.connect() as conn:
+			rows = (await conn.execute(select(schema_user.app_users))).all()
+		assert sorted(row.instance for row in rows) == ["", "munich"]
 		await engine.dispose()
 
 	asyncio.run(scenario())

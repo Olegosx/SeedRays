@@ -187,6 +187,82 @@ def test_issue_addresses_from_the_cabinet(tmp_path: Path) -> None:
 	asyncio.run(scenario())
 
 
+def test_cabinet_issues_into_an_instance(tmp_path: Path) -> None:
+	"""The cabinet addresses a named installation; the owner sees them all (ADR-0025)."""
+
+	async def scenario() -> None:
+		client, csrf = await signed_in_client(tmp_path)
+		headers = {"X-CSRF-Token": csrf}
+		try:
+			created = await client.post(
+				"/v1/user/applications", json={"name": "Shop"}, headers=headers
+			)
+			app_id = created.json()["application"]["id"]
+			key = created.json()["key"]
+			wallet = await client.post(
+				"/v1/user/wallets",
+				json={
+					"family": "tron",
+					"xpub": account_xpub(TEST_MNEMONIC, Family.TRON),
+					"label": "Main",
+				},
+				headers=headers,
+			)
+			await client.put(
+				f"/v1/user/applications/{app_id}/networks",
+				json={"network": "tron-nile", "wallet_id": wallet.json()["wallet"]["id"]},
+				headers=headers,
+			)
+
+			issued = await client.post(
+				f"/v1/user/applications/{app_id}/users/42/addresses",
+				params={"instance": "munich"},
+				json={"networks": "all"},
+				headers=headers,
+			)
+			assert issued.status_code == 200, issued.text
+			address = issued.json()["addresses"][0]["address"]
+
+			# Чтение той же установки возвращает выданное.
+			read = await client.get(
+				f"/v1/user/applications/{app_id}/users/42/addresses",
+				params={"instance": "munich"},
+			)
+			assert [a["address"] for a in read.json()["addresses"]] == [address]
+
+			# А в установке по умолчанию такого пользователя не существует.
+			missing = await client.get(
+				f"/v1/user/applications/{app_id}/users/42/addresses"
+			)
+			assert missing.status_code == 404
+			assert missing.json()["error"]["code"] == "unknown_app_user"
+
+			# Приложение видит свой адрес по тому же имени установки.
+			via_api = await client.get(
+				"/v1/app/users/42/addresses",
+				params={"instance": "munich"},
+				headers={"X-API-Key": key},
+			)
+			assert [a["address"] for a in via_api.json()["addresses"]] == [address]
+
+			# Владельцу в кабинете видны пользователи всех установок сразу,
+			# и установка каждого названа явно.
+			await client.post(
+				f"/v1/user/applications/{app_id}/users/42/addresses",
+				json={"networks": "all"},
+				headers=headers,
+			)
+			detail = await client.get(f"/v1/user/applications/{app_id}")
+			listed = detail.json()["app_users"]
+			assert sorted(u["instance"] for u in listed) == ["", "munich"]
+			assert {u["external_id"] for u in listed} == {"42"}
+			assert detail.json()["application"]["users"] == 2
+		finally:
+			await client.aclose()
+
+	asyncio.run(scenario())
+
+
 def test_application_errors(tmp_path: Path) -> None:
 	"""Unknown ids, bad names and a missing wallet get machine codes."""
 

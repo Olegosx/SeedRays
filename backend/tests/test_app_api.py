@@ -176,6 +176,135 @@ def test_balances_and_history(tmp_path: Path) -> None:
 	asyncio.run(scenario())
 
 
+def test_instances_are_separate_namespaces(tmp_path: Path) -> None:
+	"""Independent installations sharing one key never share a payer (ADR-0025)."""
+
+	async def scenario() -> None:
+		await seed_gateway(tmp_path, NETWORKS)
+		async with _client(tmp_path) as client:
+			berlin = await client.post(
+				"/v1/app/users/42/addresses",
+				params={"instance": "berlin"},
+				json={"networks": ["tron-nile"]},
+				headers=HEADERS,
+			)
+			assert berlin.status_code == 200, berlin.text
+			berlin_address = berlin.json()["addresses"][0]["address"]
+			# Первый выданный индекс кошелька — эталонный адрес 0.
+			assert berlin_address == FIRST_TRON_ADDRESS
+
+			# Тот же ключ и тот же идентификатор, но другая установка:
+			# это другой плательщик, значит и адрес другой.
+			munich = await client.post(
+				"/v1/app/users/42/addresses",
+				params={"instance": "munich"},
+				json={"networks": ["tron-nile"]},
+				headers=HEADERS,
+			)
+			munich_address = munich.json()["addresses"][0]["address"]
+			assert munich_address != berlin_address
+
+			# Запрос без параметра — экземпляр по умолчанию, третье
+			# пространство имён, а не «какое-нибудь из существующих».
+			default = await client.post(
+				"/v1/app/users/42/addresses",
+				json={"networks": ["tron-nile"]},
+				headers=HEADERS,
+			)
+			default_address = default.json()["addresses"][0]["address"]
+			assert default_address not in (berlin_address, munich_address)
+
+			# Внутри своей установки выдача по-прежнему идемпотентна.
+			repeat = await client.post(
+				"/v1/app/users/42/addresses",
+				params={"instance": "munich"},
+				json={"networks": ["tron-nile"]},
+				headers=HEADERS,
+			)
+			assert repeat.json()["addresses"][0]["address"] == munich_address
+
+			# Чтение адресов ограничено своей установкой.
+			read = await client.get(
+				"/v1/app/users/42/addresses",
+				params={"instance": "berlin"},
+				headers=HEADERS,
+			)
+			assert [a["address"] for a in read.json()["addresses"]] == [berlin_address]
+
+			# И список пользователей: в каждой установке ровно свой «42»,
+			# а не все три сразу.
+			for instance in ("berlin", "munich"):
+				listed = await client.get(
+					"/v1/app/users", params={"instance": instance}, headers=HEADERS
+				)
+				assert [u["external_id"] for u in listed.json()["users"]] == ["42"]
+			default_list = await client.get("/v1/app/users", headers=HEADERS)
+			assert [u["external_id"] for u in default_list.json()["users"]] == ["42"]
+
+			# Слишком длинное имя экземпляра отбивается проверкой ввода
+			# в едином формате ошибок, а не падает в базе.
+			too_long = await client.get(
+				"/v1/app/users", params={"instance": "x" * 65}, headers=HEADERS
+			)
+			assert too_long.status_code == 400
+			assert too_long.json()["error"]["code"] == "validation"
+
+	asyncio.run(scenario())
+
+
+def test_instance_scopes_balances_and_history(tmp_path: Path) -> None:
+	"""Money observed on one installation's address never surfaces in another."""
+
+	async def scenario() -> None:
+		await seed_gateway(tmp_path, NETWORKS)
+		async with _client(tmp_path) as client:
+			# Берлинский плательщик получает индекс 0 — эталонный адрес,
+			# на который ниже кладутся тестовые поступления.
+			for instance in ("berlin", "munich"):
+				await client.post(
+					"/v1/app/users/42/addresses",
+					params={"instance": instance},
+					json={"networks": ["tron-nile"]},
+					headers=HEADERS,
+				)
+		await _seed_transactions(tmp_path)
+
+		async with _client(tmp_path) as client:
+			berlin = await client.get(
+				"/v1/app/users/42/balances",
+				params={"instance": "berlin"},
+				headers=HEADERS,
+			)
+			rows = berlin.json()["balances"]
+			assert len(rows) == 1
+			assert rows[0]["total_received"] == "1000000"
+			assert rows[0]["pending"] == "1000000"
+
+			# У мюнхенского «42» свой адрес, на него ничего не приходило.
+			munich = await client.get(
+				"/v1/app/users/42/balances",
+				params={"instance": "munich"},
+				headers=HEADERS,
+			)
+			assert munich.json()["balances"] == []
+
+			munich_history = await client.get(
+				"/v1/app/users/42/history",
+				params={"instance": "munich", "status": "all"},
+				headers=HEADERS,
+			)
+			assert munich_history.json()["history"] == []
+
+			berlin_history = await client.get(
+				"/v1/app/users/42/history",
+				params={"instance": "berlin", "status": "all"},
+				headers=HEADERS,
+			)
+			assert len(berlin_history.json()["history"]) == 2
+
+	asyncio.run(scenario())
+
+
 def test_concurrent_address_issue_gets_distinct_addresses(tmp_path: Path) -> None:
 	"""Concurrent issuance for different app users never shares an address."""
 

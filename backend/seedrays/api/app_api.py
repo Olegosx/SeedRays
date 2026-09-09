@@ -72,13 +72,23 @@ def create_app(
 
 	async def caller(
 		x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
+		instance: Annotated[str, Query(max_length=64)] = "",
 	) -> AsyncIterator[CallerContext]:
-		"""Authenticate the application key and open the caller's engines."""
+		"""Authenticate the application key and open the caller's engines.
+
+		``instance`` — экземпляр приложения (ADR-0025): независимые установки
+		одного приложения ходят общим ключом, и он разделяет пространства имён
+		их пользователей. Параметр объявлен здесь, а не в маршрутах, поэтому
+		появляется сразу во всей группе и не может быть забыт у нового
+		маршрута — маршрута без этой зависимости в группе не существует.
+		Пусто — экземпляр по умолчанию, режим приложения с единственной
+		установкой.
+		"""
 		if not x_api_key:
 			raise ApiError(401, "unauthorized", "the X-API-Key header is required")
 		registry = create_sqlite_engine(registry_db_path(data_dir))
 		try:
-			ctx = await ops.resolve_application(registry, data_dir, x_api_key)
+			ctx = await ops.resolve_application(registry, data_dir, x_api_key, instance)
 			if ctx is None:
 				raise ApiError(401, "unauthorized", "unknown API key")
 			try:
