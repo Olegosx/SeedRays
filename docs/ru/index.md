@@ -46,6 +46,7 @@
     - [ADR-0022: Анонимные маршруты аутентификации за самодостаточной proof-of-work капчей](20-architecture/decisions/0022-pow-captcha.md)
     - [ADR-0023: Журнал событий безопасности — точность внутри, нейтральность наружу](20-architecture/decisions/0023-security-journal.md)
     - [ADR-0024: Удаление пользователя — двухшаговое, через серверный архив](20-architecture/decisions/0024-user-deletion-archive.md)
+    - [ADR-0025: Экземпляры приложения — пространство имён пользователей приложения](20-architecture/decisions/0025-application-instances.md)
 - Безопасность
   - [Управление ключами](30-security/key-management.md)
   - [Модель угроз](30-security/threat-model.md)

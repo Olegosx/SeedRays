@@ -2,7 +2,8 @@
 
 # ADR-0011: Application API Principles
 
-**Status:** accepted
+**Status:** accepted; refined by [ADR-0025](0025-application-instances.md) — every operation
+is scoped to the caller's application instance
 
 ## Context
 

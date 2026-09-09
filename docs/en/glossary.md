@@ -11,6 +11,7 @@ Terms used across the project documentation.
 | ADR | Architecture Decision Record — a short document capturing one architecture decision: context, options considered, choice and consequences. |
 | API key | A secret identifier an application presents to access the Application API. |
 | Application | An external system connected to the gateway; belongs to a gateway user, is identified by its API key and has its own users. |
+| Application instance | One of several independent installations of the same application; sets the namespace of that application's user identifiers, so "user 42" of two installations are different people. An application with a single installation uses the empty instance. |
 | Asset | A network-specific unit of value: a network's native coin, or a token identified by its contract in that network. USDT on TRON and USDT on Ethereum are two different assets. |
 | BIP32 | The standard describing hierarchical deterministic (HD) wallets and key derivation. |
 | Binding | A permanent mapping "wallet + network + application + application user → payment address (+ memo)" — the gateway's core entity in its primary mode. |

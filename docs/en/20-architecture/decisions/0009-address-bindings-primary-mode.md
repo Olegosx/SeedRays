@@ -3,7 +3,9 @@
 # ADR-0009: Persistent Address Bindings as the Primary Mode
 
 **Status:** accepted; refined by [ADR-0010](0010-networks-assets-financial-data.md) — the
-binding gains a network column, uniqueness includes the network
+binding gains a network column, uniqueness includes the network; refined by
+[ADR-0025](0025-application-instances.md) — the identity of an application user gains the
+instance
 
 ## Context
 

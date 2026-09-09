@@ -41,8 +41,20 @@ themselves never see wallets (see
 
 ### Application Users
 
-Internal id, application, external identifier — an arbitrary string supplied by the
-application, opaque to the gateway. Unique within the application.
+Internal id, application, instance, external identifier — an arbitrary string supplied by
+the application, opaque to the gateway.
+
+- The **instance** is the namespace of external identifiers
+  (see [ADR-0025](decisions/0025-application-instances.md)): independent installations of
+  one application share an API key, and their own user numbering collides. Identity is
+  therefore the triple "application + instance + external identifier", unique at the schema
+  level.
+- The instance is an arbitrary string the gateway does not interpret, exactly like the
+  external identifier. An application with a single installation uses the **empty**
+  instance — an empty string rather than NULL, for the same reason as the memo of a
+  binding: NULL does not equal NULL in SQL, and uniqueness with it does not work.
+- Bindings reference the internal id of this row, so the instance separates payers without
+  appearing in the binding table at all.
 
 ### Balances
 

@@ -165,14 +165,19 @@ opened; a forgotten passphrase means permanently lost access to the funds.
     a confirmation dialog describing the consequences;
   - the "network → wallet" mapping ([ADR-0011](../20-architecture/decisions/0011-application-api-principles.md)):
     a table with row removal; adding — by picking from the not-yet-assigned networks;
-  - application users: identifier, address count, creation date; clicking a row expands
-    the user's address list (network, address, memo) — the addresses load on the first
-    expansion;
+  - application users: instance, identifier, address count, creation date; clicking a row
+    expands the user's address list (network, address, memo) — the addresses load on the
+    first expansion. The instance column names the installation the user belongs to
+    ([ADR-0025](../20-architecture/decisions/0025-application-instances.md)); users of a
+    single-installation application show "default" there. The owner sees every instance in
+    one list, and the same identifier used by two installations stays two separate rows;
   - issuing an address from the panel — the "Issue an address" button in the users card
     header (disabled while the application has no network assigned). The dialog takes the
-    application user's identifier — the same one the application uses for them in the
-    API; the field suggests the already known identifiers, so issuing more addresses to
-    an existing user goes without typos. Networks are picked with checkboxes from the
+    application instance and the application user's identifier — the same ones the
+    application uses in the API. The instance field is left empty by an application with a
+    single installation; both fields suggest what is already known, and the identifier
+    suggestions are limited to the chosen instance, so issuing more addresses to an
+    existing user goes without typos and without offering someone else's payers. Networks are picked with checkboxes from the
     ones assigned to the application, all checked by default. The issued addresses are
     shown in the same dialog. The operation is the one the application performs over the
     API: issuing again returns what was already given out, and an unknown identifier
