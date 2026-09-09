@@ -36,9 +36,9 @@ sudo -u seedrays .venv/bin/pip install -e .
 ```
 
 The editable install (`-e`) keeps the package running from the repository checkout —
-this is also how the process finds the `frontend/` directory next to it. With a
-regular (non-editable) install the static files must be pointed to explicitly via
-`SEEDRAYS_FRONTEND_DIR`.
+this is also how the process finds the `frontend/` directory next to it, and where it
+looks for a checkout-local configuration file. With a regular (non-editable) install the
+static files must be pointed to explicitly by `frontend_dir` in the configuration.
 
 The data directory must belong to the service user and not be world-readable
 (it holds the databases and the security journal):
@@ -47,16 +47,53 @@ The data directory must belong to the service user and not be world-readable
 sudo install -d -o seedrays -g seedrays -m 700 /var/lib/seedrays
 ```
 
-## Environment Variables
+## Configuration
 
-The deployment layer of [ADR-0016](../20-architecture/decisions/0016-config-layers.md);
-everything else is a registry setting managed from the operator panel.
+The deployment layer of [ADR-0016](../20-architecture/decisions/0016-config-layers.md) and
+[ADR-0026](../20-architecture/decisions/0026-configuration-file.md): a TOML file with what
+the process needs before it can open any database. Everything else is a registry setting
+managed from the operator panel, without a restart.
 
-| Variable | Required | Meaning |
-|----------|----------|---------|
-| `SEEDRAYS_DATA_DIR` | yes | The data directory: the registry database, per-user databases, the deleted-user archive (`archive/`), `logs/security.log`. |
-| `SEEDRAYS_BIND` | no | API bind address, `host:port`; default `127.0.0.1:8080`. Keep it on localhost — the reverse proxy is the public face. |
-| `SEEDRAYS_FRONTEND_DIR` | no | Static frontend directory; by default the `frontend/` directory of the repository checkout is served. |
+The gateway reads the first file it finds:
+
+1. `seedrays.toml` in the repository checkout — `/opt/seedrays/seedrays.toml` with the layout
+   above; this is the development location;
+2. `/etc/seedrays/seedrays.toml` — the server location.
+
+`--config <path>` overrides both. The file that was actually read is named in the log at
+startup, so `journalctl -u seedrays | grep 'configuration read from'` always answers which
+one won.
+
+On a server use `/etc/seedrays/seedrays.toml` and **make sure no `seedrays.toml` is left in
+the code directory** — it would silently outrank `/etc`. A `git pull` cannot bring one in:
+only `seedrays.example.toml` is committed.
+
+```bash
+sudo install -d -o seedrays -g seedrays -m 750 /etc/seedrays
+sudo install -o seedrays -g seedrays -m 600 \
+    /opt/seedrays/seedrays.example.toml /etc/seedrays/seedrays.toml
+sudoedit /etc/seedrays/seedrays.toml
+```
+
+```toml
+[gateway]
+# The data directory: the registry database, the per-user databases, the archive of
+# deleted users (archive/) and logs/security.log. Absolute on a server.
+data_dir = "/var/lib/seedrays"
+
+# API bind address; optional, defaults to 127.0.0.1:8080. Keep it on localhost —
+# the reverse proxy is the public face.
+bind = "127.0.0.1:8080"
+
+# Static frontend directory; optional, defaults to the frontend/ directory of the
+# checkout the package runs from.
+# frontend_dir = "/opt/seedrays/frontend"
+```
+
+The 600 permissions are not decoration: once the gateway moves to PostgreSQL, the registry
+connection string — password included — lands in this file. That is also why the deployment
+layer is a file and not the process environment, which `systemctl show` prints to any user
+([ADR-0026](../20-architecture/decisions/0026-configuration-file.md)).
 
 ## First Start
 
@@ -65,8 +102,7 @@ everything else is a registry setting managed from the operator panel.
 
    ```bash
    cd /opt/seedrays/backend
-   sudo -u seedrays SEEDRAYS_DATA_DIR=/var/lib/seedrays \
-       .venv/bin/python -m seedrays.cli operator-create --login admin
+   sudo -u seedrays .venv/bin/python -m seedrays.cli operator-create --login admin
    ```
 
    The password is asked interactively (hidden input). Database migrations run
@@ -106,8 +142,6 @@ Wants=network-online.target
 User=seedrays
 Group=seedrays
 WorkingDirectory=/opt/seedrays/backend
-Environment=SEEDRAYS_DATA_DIR=/var/lib/seedrays
-Environment=SEEDRAYS_BIND=127.0.0.1:8080
 ExecStart=/opt/seedrays/backend/.venv/bin/python -m seedrays.cli serve
 Restart=always
 RestartSec=5
@@ -263,6 +297,7 @@ Restore is the reverse: stop the service, put the directory back, start.
 - [Monitoring](monitoring.md)
 - [Architecture Overview](../20-architecture/overview.md)
 - [ADR-0016: Configuration Layers](../20-architecture/decisions/0016-config-layers.md)
+- [ADR-0026: A Configuration File as the Deployment Layer](../20-architecture/decisions/0026-configuration-file.md)
 - [ADR-0023: Security Event Journal](../20-architecture/decisions/0023-security-journal.md)
 - [Operator Panel Scenarios](../50-frontend/operator-panel.md)
 - [Threat Model](../30-security/threat-model.md)

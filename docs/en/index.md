@@ -47,6 +47,7 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0023: Security Event Journal — Precise Inside, Neutral Outside](20-architecture/decisions/0023-security-journal.md)
     - [ADR-0024: User Deletion — Two-Step, Through a Server-Side Archive](20-architecture/decisions/0024-user-deletion-archive.md)
     - [ADR-0025: Application Instances — the Namespace of Application User Ids](20-architecture/decisions/0025-application-instances.md)
+    - [ADR-0026: A Configuration File as the Deployment Layer](20-architecture/decisions/0026-configuration-file.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)

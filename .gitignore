@@ -3,3 +3,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 *.egg-info/
+# Настоящая конфигурация развёртывания: в репозитории живёт только образец
+# seedrays.example.toml (ADR-0026).
+seedrays.toml

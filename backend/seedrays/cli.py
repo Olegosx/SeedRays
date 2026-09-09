@@ -6,16 +6,13 @@ import argparse
 import asyncio
 import getpass
 import logging
-import os
 import sys
 from pathlib import Path
 
+from seedrays.config import ConfigError, GatewayConfig, load_config, search_paths
 from seedrays.derivation.derive import derive_address
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, generate_mnemonic
-
-# Адрес привязки API по умолчанию (переопределяется SEEDRAYS_BIND, ADR-0016).
-DEFAULT_BIND = "127.0.0.1:8080"
 
 _SEED_WARNING = (
 	"WARNING: the seed phrase below is shown ONCE and is not stored anywhere.\n"
@@ -62,21 +59,29 @@ def build_parser() -> argparse.ArgumentParser:
 	derive.add_argument("--index", type=int, default=0, help="first address index (default 0)")
 	derive.add_argument("--count", type=int, default=1, help="how many addresses (default 1)")
 
-	subparsers.add_parser(
-		"watch", help="run one watcher pass (data dir from SEEDRAYS_DATA_DIR)"
+	# Общий аргумент команд, работающих с данными шлюза: они читают
+	# конфигурацию (ADR-0026), команды keygen и derive — нет.
+	service = argparse.ArgumentParser(add_help=False)
+	service.add_argument(
+		"--config",
+		help="path to the gateway configuration file; by default the first of: "
+		+ ", ".join(str(p) for p in search_paths()),
 	)
+
+	subparsers.add_parser("watch", parents=[service], help="run one watcher pass")
 	subparsers.add_parser(
-		"serve",
-		help="run the gateway: API server + watcher (SEEDRAYS_DATA_DIR, SEEDRAYS_BIND)",
+		"serve", parents=[service], help="run the gateway: API server + watcher"
 	)
 	operator = subparsers.add_parser(
 		"operator-create",
-		help="create an operator account (interactive; SEEDRAYS_DATA_DIR)",
+		parents=[service],
+		help="create an operator account (interactive)",
 	)
 	operator.add_argument("--login", required=True, help="operator login (3-64 chars)")
 	restore = subparsers.add_parser(
 		"user-restore",
-		help="restore a deleted user from an archive directory (SEEDRAYS_DATA_DIR)",
+		parents=[service],
+		help="restore a deleted user from an archive directory",
 	)
 	restore.add_argument(
 		"--archive",
@@ -118,26 +123,32 @@ def _cmd_derive(args: argparse.Namespace) -> int:
 	return 0
 
 
-def _service_prologue() -> Path | None:
-	"""Common start of the service commands: the data dir and logging setup."""
-	data_dir = os.environ.get("SEEDRAYS_DATA_DIR")
-	if not data_dir:
-		print("error: SEEDRAYS_DATA_DIR is not set (see ADR-0016)", file=sys.stderr)
-		return None
+def _service_prologue(args: argparse.Namespace) -> GatewayConfig | None:
+	"""Common start of the service commands: logging and the configuration.
+
+	The file that was actually read is logged: with two search locations
+	(ADR-0026) the operator must never have to guess which one won.
+	"""
 	logging.basicConfig(
 		level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
 	)
-	return Path(data_dir)
+	try:
+		config = load_config(Path(args.config) if args.config else None)
+	except ConfigError as exc:
+		print(f"error: {exc}", file=sys.stderr)
+		return None
+	logging.getLogger(__name__).info("configuration read from %s", config.source)
+	return config
 
 
-def _cmd_watch() -> int:
+def _cmd_watch(args: argparse.Namespace) -> int:
 	"""Run one watcher pass over the gateway data directory."""
 	from seedrays.watcher.single_pass import run_pass
 
-	data_dir = _service_prologue()
-	if data_dir is None:
+	config = _service_prologue(args)
+	if config is None:
 		return 2
-	stats = asyncio.run(run_pass(data_dir))
+	stats = asyncio.run(run_pass(config.data_dir))
 	print(
 		f"pass done: networks={stats.networks_scanned}"
 		f" matched={stats.transfers_matched} recorded={stats.rows_recorded}"
@@ -147,30 +158,23 @@ def _cmd_watch() -> int:
 	return 0
 
 
-def _cmd_serve() -> int:
+def _cmd_serve(args: argparse.Namespace) -> int:
 	"""Run the whole gateway under the orchestrator supervisor."""
 	from seedrays.orchestrator.supervisor import run
 	from seedrays.storage.migrations.runner import upgrade_all
 
-	data_dir = _service_prologue()
-	if data_dir is None:
+	config = _service_prologue(args)
+	if config is None:
 		return 2
-	bind = os.environ.get("SEEDRAYS_BIND", DEFAULT_BIND)
-	host, _, port_raw = bind.rpartition(":")
-	if not host or not port_raw.isdigit():
-		print(f"error: SEEDRAYS_BIND is malformed: {bind!r}", file=sys.stderr)
-		return 2
-	# Каталог статики фронта: переменная окружения (развёрточный уровень,
-	# ADR-0016) или frontend/ рядом с пакетом при запуске из репозитория.
-	frontend_raw = os.environ.get("SEEDRAYS_FRONTEND_DIR")
-	if frontend_raw:
-		frontend_dir = Path(frontend_raw)
-	else:
+	# Каталог статики фронта: настройка конфига (ADR-0026) или frontend/
+	# рядом с пакетом при запуске из копии репозитория.
+	frontend_dir = config.frontend_dir
+	if frontend_dir is None:
 		repo_frontend = Path(__file__).resolve().parents[2] / "frontend"
 		frontend_dir = repo_frontend if repo_frontend.is_dir() else None
-	upgrade_all(data_dir)
+	upgrade_all(config.data_dir)
 	try:
-		asyncio.run(run(data_dir, host, int(port_raw), frontend_dir))
+		asyncio.run(run(config.data_dir, config.host, config.port, frontend_dir))
 	except KeyboardInterrupt:
 		print("gateway stopped")
 	return 0
@@ -183,9 +187,10 @@ def _cmd_operator_create(args: argparse.Namespace) -> int:
 	from seedrays.storage.engine import create_sqlite_engine, registry_db_path
 	from seedrays.storage.migrations.runner import upgrade_registry
 
-	data_dir = _service_prologue()
-	if data_dir is None:
+	config = _service_prologue(args)
+	if config is None:
 		return 2
+	data_dir = config.data_dir
 	# Пароль — только скрытым вводом: аргументы процесса видны всей системе.
 	password = getpass.getpass("Operator password: ")
 	if password != getpass.getpass("Repeat password: "):
@@ -217,9 +222,10 @@ def _cmd_user_restore(args: argparse.Namespace) -> int:
 	from seedrays.storage.engine import create_sqlite_engine, registry_db_path
 	from seedrays.storage.migrations.runner import upgrade_registry
 
-	data_dir = _service_prologue()
-	if data_dir is None:
+	config = _service_prologue(args)
+	if config is None:
 		return 2
+	data_dir = config.data_dir
 	archive_dir = Path(args.archive)
 
 	async def run_restore() -> int:
@@ -256,9 +262,9 @@ def main(argv: list[str] | None = None) -> int:
 	if args.command == "derive":
 		return _cmd_derive(args)
 	if args.command == "watch":
-		return _cmd_watch()
+		return _cmd_watch(args)
 	if args.command == "serve":
-		return _cmd_serve()
+		return _cmd_serve(args)
 	if args.command == "operator-create":
 		return _cmd_operator_create(args)
 	if args.command == "user-restore":

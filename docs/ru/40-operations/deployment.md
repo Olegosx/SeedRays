@@ -37,9 +37,9 @@ sudo -u seedrays .venv/bin/pip install -e .
 ```
 
 Установка в режиме разработки (`-e`) оставляет пакет работать из копии
-репозитория — так процесс и находит каталог `frontend/` рядом с собой. При обычной
-установке (без `-e`) путь к статике нужно задать явно переменной
-`SEEDRAYS_FRONTEND_DIR`.
+репозитория — так процесс и находит каталог `frontend/` рядом с собой, там же он ищет
+конфигурационный файл рядом с кодом. При обычной установке (без `-e`) путь к статике
+нужно задать явно настройкой `frontend_dir` конфигурации.
 
 Каталог данных должен принадлежать служебному пользователю и не читаться остальными
 (в нём базы и журнал безопасности):
@@ -48,16 +48,53 @@ sudo -u seedrays .venv/bin/pip install -e .
 sudo install -d -o seedrays -g seedrays -m 700 /var/lib/seedrays
 ```
 
-## Переменные окружения
+## Конфигурация
 
-Развёрточный уровень [ADR-0016](../20-architecture/decisions/0016-config-layers.md);
-всё остальное — настройки реестра, управляемые из панели оператора.
+Развёрточный уровень [ADR-0016](../20-architecture/decisions/0016-config-layers.md) и
+[ADR-0026](../20-architecture/decisions/0026-configuration-file.md): файл TOML с тем, что
+процессу нужно до открытия какой-либо базы. Всё остальное — настройки реестра, управляемые
+из панели оператора без перезапуска.
 
-| Переменная | Обязательна | Значение |
-|------------|-------------|----------|
-| `SEEDRAYS_DATA_DIR` | да | Каталог данных: реестровая база, базы пользователей, архив удалённых (`archive/`), `logs/security.log`. |
-| `SEEDRAYS_BIND` | нет | Адрес привязки API, `host:port`; по умолчанию `127.0.0.1:8080`. Держать на localhost — наружу смотрит обратный прокси. |
-| `SEEDRAYS_FRONTEND_DIR` | нет | Каталог статики фронтенда; по умолчанию раздаётся `frontend/` из копии репозитория. |
+Шлюз читает первый найденный файл:
+
+1. `seedrays.toml` в копии репозитория — при раскладке выше это
+   `/opt/seedrays/seedrays.toml`; место для разработки;
+2. `/etc/seedrays/seedrays.toml` — место для сервера.
+
+Аргумент `--config <путь>` перекрывает оба. Прочитанный файл называется в журнале при старте,
+поэтому `journalctl -u seedrays | grep 'configuration read from'` всегда отвечает, какой из
+них выиграл.
+
+На сервере используйте `/etc/seedrays/seedrays.toml` и **убедитесь, что в каталоге кода не
+остался `seedrays.toml`** — он молча перебьёт `/etc`. Через `git pull` он появиться не может:
+в репозиторий коммитится только `seedrays.example.toml`.
+
+```bash
+sudo install -d -o seedrays -g seedrays -m 750 /etc/seedrays
+sudo install -o seedrays -g seedrays -m 600 \
+    /opt/seedrays/seedrays.example.toml /etc/seedrays/seedrays.toml
+sudoedit /etc/seedrays/seedrays.toml
+```
+
+```toml
+[gateway]
+# The data directory: the registry database, the per-user databases, the archive of
+# deleted users (archive/) and logs/security.log. Absolute on a server.
+data_dir = "/var/lib/seedrays"
+
+# API bind address; optional, defaults to 127.0.0.1:8080. Keep it on localhost —
+# the reverse proxy is the public face.
+bind = "127.0.0.1:8080"
+
+# Static frontend directory; optional, defaults to the frontend/ directory of the
+# checkout the package runs from.
+# frontend_dir = "/opt/seedrays/frontend"
+```
+
+Права `600` здесь не для красоты: с переходом на PostgreSQL в этот файл ляжет строка
+подключения к реестру вместе с паролем. По этой же причине развёрточный уровень — файл, а не
+окружение процесса, которое `systemctl show` печатает любому пользователю
+([ADR-0026](../20-architecture/decisions/0026-configuration-file.md)).
 
 ## Первый запуск
 
@@ -66,8 +103,7 @@ sudo install -d -o seedrays -g seedrays -m 700 /var/lib/seedrays
 
    ```bash
    cd /opt/seedrays/backend
-   sudo -u seedrays SEEDRAYS_DATA_DIR=/var/lib/seedrays \
-       .venv/bin/python -m seedrays.cli operator-create --login admin
+   sudo -u seedrays .venv/bin/python -m seedrays.cli operator-create --login admin
    ```
 
    Пароль запрашивается интерактивно (скрытый ввод). Миграции базы выполняются
@@ -107,8 +143,6 @@ Wants=network-online.target
 User=seedrays
 Group=seedrays
 WorkingDirectory=/opt/seedrays/backend
-Environment=SEEDRAYS_DATA_DIR=/var/lib/seedrays
-Environment=SEEDRAYS_BIND=127.0.0.1:8080
 ExecStart=/opt/seedrays/backend/.venv/bin/python -m seedrays.cli serve
 Restart=always
 RestartSec=5
@@ -264,6 +298,7 @@ sqlite3 /var/lib/seedrays/registry.db ".backup /backup/registry.db"
 - [Наблюдение](monitoring.md)
 - [Обзор архитектуры](../20-architecture/overview.md)
 - [ADR-0016: Слои конфигурации](../20-architecture/decisions/0016-config-layers.md)
+- [ADR-0026: Конфигурационный файл как развёрточный уровень](../20-architecture/decisions/0026-configuration-file.md)
 - [ADR-0023: Журнал событий безопасности](../20-architecture/decisions/0023-security-journal.md)
 - [Сценарии панели оператора](../50-frontend/operator-panel.md)
 - [Модель угроз](../30-security/threat-model.md)

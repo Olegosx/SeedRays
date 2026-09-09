@@ -196,7 +196,8 @@ through the same brute-force brake.
   the network again.
 - The static frontend may be served by the gateway process itself (ADR-0012): `/`
   redirects to the sign-in page, the files come from the `frontend/` directory
-  (overridable with `SEEDRAYS_FRONTEND_DIR`, the bootstrap layer of ADR-0016).
+  (overridable with `frontend_dir` in the configuration file, the deployment layer of
+  ADR-0016 and [ADR-0026](../decisions/0026-configuration-file.md)).
 
 ## Operator API: Implemented Routes
 

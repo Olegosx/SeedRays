@@ -65,9 +65,10 @@ it is rescanned in full every pass.
 
 - Module: the single pass (`run_pass`) and the continuous loop over it; the loop is started
   and supervised by the orchestrator.
-- Console command `seedrays watch` — one pass; the data directory comes from the
-  `SEEDRAYS_DATA_DIR` environment variable (the bootstrap layer of
-  [ADR-0016](../decisions/0016-config-layers.md)).
+- Console command `seedrays watch` — one pass; the data directory comes from the gateway
+  configuration file (the deployment layer of
+  [ADR-0016](../decisions/0016-config-layers.md) and
+  [ADR-0026](../decisions/0026-configuration-file.md)).
 - Settings (registry): the provider API key and request rate, the pass interval, the
   cursor overlap, the scan start moment, and the watched token contracts per network
   (`watcher.contracts.<network>` — a JSON list of contract/symbol/decimals entries).

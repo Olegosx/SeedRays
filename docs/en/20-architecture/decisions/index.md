@@ -34,6 +34,7 @@ considered, the choice made and its consequences.
 | [ADR-0023](0023-security-journal.md) | Security Event Journal — Precise Inside, Neutral Outside | accepted |
 | [ADR-0024](0024-user-deletion-archive.md) | User Deletion — Two-Step, Through a Server-Side Archive | accepted |
 | [ADR-0025](0025-application-instances.md) | Application Instances — the Namespace of Application User Ids | accepted |
+| [ADR-0026](0026-configuration-file.md) | A Configuration File as the Deployment Layer | accepted |
 
 ## Related
 

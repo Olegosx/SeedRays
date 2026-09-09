@@ -1,0 +1,37 @@
+# SeedRays gateway — deployment-level configuration (see ADR-0026).
+#
+# Copy this file to seedrays.toml next to it, or to /etc/seedrays/seedrays.toml
+# on a server, and edit the values. The gateway reads the first of the two it
+# finds and logs which one it used at startup; `--config <path>` overrides both.
+#
+# Only what the process needs BEFORE it can open a database belongs here.
+# Everything the operator manages while the gateway runs — provider and mail
+# keys, watcher intervals, trusted proxies, journal rotation — lives in the
+# operator panel and needs no restart (ADR-0016).
+#
+# On a server keep this file readable by the service user only (chmod 600):
+# once the gateway moves to PostgreSQL, the connection string lands here.
+
+[gateway]
+
+# The data directory: the registry database, the per-user databases, the
+# archive of deleted users and the security journal. Everything the gateway
+# stores lives under it, so this is what a backup must cover.
+#
+# Use an ABSOLUTE path on a server. A relative one is resolved against the
+# directory holding this file, which is convenient for a development checkout
+# but surprising anywhere else.
+#
+# Permissions: 700, owned by the service user — it holds databases and the
+# security journal.
+data_dir = "/var/lib/seedrays"
+
+# The address the API binds to. Optional; defaults to 127.0.0.1:8080.
+# A reverse proxy terminates TLS and faces the network, so keep the gateway
+# itself on localhost.
+bind = "127.0.0.1:8080"
+
+# The static frontend directory. Optional: by default the gateway serves the
+# frontend/ directory of the repository checkout it runs from. Set it
+# explicitly when the package is installed outside the checkout.
+# frontend_dir = "/opt/seedrays/frontend"

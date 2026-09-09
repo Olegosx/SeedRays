@@ -2,7 +2,9 @@
 
 # ADR-0016: Configuration Layers
 
-**Status:** accepted
+**Status:** accepted; partially revised by [ADR-0026](0026-configuration-file.md) — the
+deployment layer lives in a configuration file, not in environment variables; the split
+between the two layers stands
 
 ## Context
 
