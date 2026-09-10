@@ -230,6 +230,44 @@ GET  /v1/operator/watcher    (per-network watcher cursors, read-only)
   The data moves into a server-side archive; restoring is the `seedrays user-restore`
   console command.
 
+## The Gateway Fee: Planned Routes
+
+The billing routes ([ADR-0027](../decisions/0027-gateway-fee-billing.md)) sit in a section
+of their own on purpose: the decision is made, the code is not written yet, and mixing them
+with the implemented routes above is not an option.
+
+The user group:
+
+```
+GET  /v1/user/billing            (invoices, details of the unpaid one, payment network)
+PUT  /v1/user/billing/network    body: {"network"}
+```
+
+The operator group:
+
+```
+GET    /v1/operator/billing/invoices                    [?status=&user_id=]
+POST   /v1/operator/billing/invoices/{id}/confirm       body: {"reason"}
+GET    /v1/operator/billing/wallets
+PUT    /v1/operator/billing/wallets                     body: {"network", "xpub"}
+DELETE /v1/operator/billing/wallets/{network}
+```
+
+- **Suspension for non-payment** is an access state of its own, independent of the account
+  status: an overdue invoice closes the Application API entirely (refused with the
+  `billing_suspended` code) and every cabinet route except billing itself, reading
+  `/v1/user/me` and signing out — otherwise there would be no way to pay. Access opens by
+  itself as soon as the invoice is credited.
+- **Changing the payment network** is refused while an invoice is unpaid: the details of an
+  issued invoice are immutable. Networks without the owner's master wallet are not offered.
+- **Manual payment confirmation** requires a reason, lands in the security journal and has
+  the same result as a credited payment.
+- The fee settings (rate, threshold, term, turnover assets, underpayment tolerance,
+  notifications) get no routes of their own — they live in the operator's general set of
+  settings, like everything else they manage while the gateway runs.
+- Amounts travel as strings, as everywhere; an invoice is denominated in USDT and paid with
+  a stablecoin of the chosen network.
+
 ## Detailed Specifications
 
 _Request and response schemas are refined as the groups evolve._
@@ -241,3 +279,4 @@ _Request and response schemas are refined as the groups evolve._
 - [Data Model](../data-model.md)
 - [Functional Requirements](../../10-requirements/functional.md)
 - [ADR-0011: Application API Principles](../decisions/0011-application-api-principles.md)
+- [ADR-0027: The Gateway Owner's Fee](../decisions/0027-gateway-fee-billing.md)

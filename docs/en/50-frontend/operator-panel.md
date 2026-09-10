@@ -19,8 +19,8 @@ managing users and gateway-wide settings.
 
 ## Panel Structure
 
-A sidebar of two sections — "Users" and "Settings"; the top bar is the same as in the
-cabinet (the language switcher and the operator menu with sign-out).
+A sidebar of three sections — "Users", "Invoices" and "Settings"; the top bar is the same
+as in the cabinet (the language switcher and the operator menu with sign-out).
 
 ## Users
 
@@ -40,6 +40,28 @@ cabinet (the language switcher and the operator menu with sign-out).
   Restoring is a server console command (`seedrays user-restore --archive …`); the
   status comes back as it was ("blocked"), unblocking is a separate panel action.
 
+## Invoices
+
+> Planned by [ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md); not
+> implemented yet.
+
+The section about the gateway owner's fee: what the users pay with, and what happens to
+those payments.
+
+- **Master wallets** per payment network: the account-level watch-only xpub every user's
+  permanent invoice address is derived from. The key is validated exactly like a user's
+  wallet, gateway-wide uniqueness included. A network with no wallet entered is not offered
+  to users for payment, and no invoice is issued in it — the operator is notified instead.
+- **Every user's invoices**: user, period, turnover, amount, due date, state, amount
+  credited; filtered by state.
+- **Manual payment confirmation** — for money that arrived outside the gateway: a confirming
+  dialog with a mandatory reason. The result is the same as a credited payment — suspended
+  access opens. The event lands in the security journal
+  ([ADR-0023](../20-architecture/decisions/0023-security-journal.md)) next to blocks and
+  password resets.
+- Users suspended for non-payment are marked in the user list as well — separately from an
+  administrative block, because these are different decisions and each is lifted its own way.
+
 ## Settings
 
 Forms over the registry `settings` table ([ADR-0016](../20-architecture/decisions/0016-config-layers.md)):
@@ -56,6 +78,11 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
   Cloudflare ranges). On connections from a listed proxy the gateway resolves the
   visitor IP from `X-Forwarded-For` — the rate limiter and the security journal then
   see real addresses; empty means "trust 127.0.0.1 only". Applied after a restart.
+- **The gateway fee ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md))**: the
+  switch (off by default — an installation must not start issuing invoices on its own), the
+  rate in percent, the turnover threshold in USDT, the payment term in days, the
+  underpayment tolerance, the per-network list of turnover assets (contract addresses) and
+  the notification parameters. Planned; not implemented yet.
 - **Security journal ([ADR-0023](../20-architecture/decisions/0023-security-journal.md))**:
   the file size before rotation (MB) and the number of compressed archives kept;
   applied after a gateway restart. The journal itself is read on the server
@@ -76,6 +103,7 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
 ## Related
 
 - [User Cabinet Scenarios](user-cabinet.md)
+- [ADR-0027: The Gateway Owner's Fee](../20-architecture/decisions/0027-gateway-fee-billing.md)
 - [ADR-0005: Multi-User Model](../20-architecture/decisions/0005-multi-user-model.md)
 - [ADR-0012: Frontend Stack](../20-architecture/decisions/0012-frontend-stack.md)
 - [HTTP API](../20-architecture/components/http-api.md)

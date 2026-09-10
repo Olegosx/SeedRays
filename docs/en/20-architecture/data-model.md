@@ -144,9 +144,71 @@ Per network: the cursors of the authoritative finalized scan
 and the time cursor of the token scan; scanning resumes from them with an overlap, and
 duplicates are extinguished by the transactions unique key. Not financial data.
 
+## The Billing Database
+
+The owner's billing data — the fee they take from the users (see
+[ADR-0027](decisions/0027-gateway-fee-billing.md)). A separate database, because the
+registry is no place for financial data, while a user's database is moved, restored from a
+copy and carried into the archive together with them.
+
+> Planned by ADR-0027; not implemented yet.
+
+### The owner's master wallets
+
+One per payment network: the network, an account-level xpub, the time it was entered. The
+key is watch-only, exactly like the users' ones; gateway-wide xpub uniqueness covers it
+too — a collision would give one address two owners at once, and the watcher would not
+know whose incoming payment it is.
+
+### Invoice addresses
+
+A permanent mapping "user + payment network → address + derivation index". The address is
+issued once and serves every later invoice of that user: a payment is attributed by the
+receiving address, and the address count stays equal to the number of paying users rather
+than to the number of invoices issued.
+
+### Invoices
+
+One row per "user + period", unique at the schema level: the period bounds, the period's
+turnover in USDT, the rate and threshold applied, the amount due, the due date, the
+payment network and address, the state (issued / paid / overdue), the amount credited,
+and the times of issue and payment.
+
+- The rate, the threshold and the term are a snapshot of the settings as the invoice was
+  issued: a later change of the settings never rewrites invoices that already exist.
+- The turnover is stored as a total: it is the result of a calculation over the user's
+  transactions, not a reference to them.
+
+### Invoice payments
+
+Transfers observed on invoice addresses: the address, the transaction id, the asset, the
+amount, the time and the finalization marker — plus the crediting: which invoice it went
+to and how much of it counted. A manual confirmation by the operator is a row of the same
+kind marked as confirmed by hand, with the operator and the reason.
+
+- An overpayment stays an uncredited remainder and counts against the next invoice; there
+  is no separate "credit balance" entity — that state follows from the payments.
+- A foreign asset arriving on an invoice address is recorded but attributed to no invoice.
+
+### A user's billing state
+
+The payment network (TRON by default) and the access state: in order, or suspended for
+non-payment, with the time of suspension. The state is independent of the account status
+in the registry — an administrative block and a suspension for non-payment are each
+lifted by their own action.
+
+### What counts as turnover
+
+The user's successful, finalized incoming operations in the assets from the operator's
+list (contract addresses, not symbols). Moving funds between one's own addresses is not
+income: such an operation has an outgoing leg of the same user, in the same transaction,
+for the same amount of the same asset — that is enough to recognize it, and no
+counterparty has to be stored in the transaction for it.
+
 ## Related
 
 - [Storage Layer](components/storage.md)
 - [Watcher](components/watcher.md)
 - [ADR-0009: Persistent Address Bindings as the Primary Mode](decisions/0009-address-bindings-primary-mode.md)
 - [ADR-0010: Networks, Assets and Financial Data Structures](decisions/0010-networks-assets-financial-data.md)
+- [ADR-0027: The Gateway Owner's Fee](decisions/0027-gateway-fee-billing.md)
