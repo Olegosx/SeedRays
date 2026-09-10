@@ -17,6 +17,7 @@ from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub, generate_mnemonic
 from seedrays.orchestrator.operations import OperationError
+from seedrays.storage import billing as billing_store
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_wallets
 from seedrays.storage.user_wallets import WalletRecord
@@ -44,6 +45,7 @@ async def list_wallets(engine: AsyncEngine) -> list[WalletInfo]:
 async def attach_wallet(
 	engine: AsyncEngine,
 	registry: AsyncEngine,
+	billing: AsyncEngine,
 	*,
 	user_id: int,
 	family: str,
@@ -52,13 +54,17 @@ async def attach_wallet(
 ) -> WalletInfo:
 	"""Attach a watch-only wallet: validate the xpub by deriving address 0.
 
-	The xpub must be unique across the whole gateway (the registry index):
-	a duplicate is rejected with the same neutral error as a broken key —
+	The xpub must be unique across the whole gateway: the registry index
+	covers the users' wallets, and the billing database covers the owner's
+	master wallets (ADR-0027) — a key serving invoice addresses must not
+	also serve a user, or one address would have two recipients. A duplicate
+	on either side is rejected with the same neutral error as a broken key —
 	the response must not reveal that the key is attached elsewhere.
 
 	Args:
 		engine: The user's database engine.
 		registry: Engine of the shared registry database.
+		billing: The billing database engine (the master-wallet half).
 		user_id: The attaching user (owner recorded in the xpub index).
 		family: Chain family code.
 		xpub: Account-level extended public key.
@@ -81,6 +87,9 @@ async def attach_wallet(
 	except InvalidKeyError as exc:
 		raise OperationError("invalid_xpub", "the xpub was not accepted") from exc
 	xpub_hash = hashlib.sha256(cleaned.encode()).hexdigest()
+	if await billing_store.find_master_wallet_by_hash(billing, xpub_hash) is not None:
+		# Ключ обслуживает счета шлюза: тот же нейтральный отказ.
+		raise OperationError("invalid_xpub", "the xpub was not accepted")
 	if not await registry_ops.reserve_wallet_xpub(
 		registry, user_id=user_id, xpub_hash=xpub_hash
 	):

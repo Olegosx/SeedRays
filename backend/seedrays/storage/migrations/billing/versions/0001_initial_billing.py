@@ -19,6 +19,7 @@ def upgrade() -> None:
 		"master_wallets",
 		sa.Column("network", sa.String(32), primary_key=True),
 		sa.Column("xpub", sa.Text, nullable=False),
+		sa.Column("xpub_hash", sa.String(128), nullable=False, unique=True),
 		sa.Column("added_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
 	)
 	op.create_table(

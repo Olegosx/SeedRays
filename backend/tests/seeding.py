@@ -19,7 +19,7 @@ from seedrays.orchestrator.operations import hash_api_key
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import schema_registry, schema_user
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
-from seedrays.storage.migrations.runner import upgrade_registry
+from seedrays.storage.migrations.runner import upgrade_all
 
 TEST_MNEMONIC = (
 	"abandon abandon abandon abandon abandon abandon "
@@ -72,7 +72,7 @@ async def signed_in_client(
 	Мигрирует реестр, включает dev-режим почты, регистрирует пользователя
 	alice (с подтверждением по письму, если передан почтовик) и входит.
 	"""
-	upgrade_registry(data_dir)
+	upgrade_all(data_dir)
 	await enable_dev_mail(data_dir)
 	transport = httpx.ASGITransport(
 		app=create_app(data_dir, mailer=mailer, captcha_cost=TEST_CAPTCHA_COST)
@@ -115,7 +115,7 @@ async def seed_gateway(data_dir: Path, networks: tuple[str, ...] = ("tron-nile",
 	The wallet is the reference test wallet (TRON family), the application
 	is mapped to the given networks and authenticated by TEST_API_KEY.
 	"""
-	upgrade_registry(data_dir)
+	upgrade_all(data_dir)
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	user = await registry_ops.create_user(registry, data_dir, "alice", "password-hash")
 

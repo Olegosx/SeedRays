@@ -32,7 +32,13 @@ from seedrays.orchestrator.captcha import CaptchaGuard
 from seedrays.orchestrator.ratelimit import RateLimiter
 from seedrays.orchestrator.seclog import ACTOR_USER, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import registry as registry_ops
-from seedrays.storage.engine import create_sqlite_engine, now_utc, registry_db_path, user_db_path
+from seedrays.storage.engine import (
+	billing_db_path,
+	create_sqlite_engine,
+	now_utc,
+	registry_db_path,
+	user_db_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -460,6 +466,16 @@ def register_user_routes(
 
 	UserEngineDep = Depends(user_engine)
 
+	async def billing_engine() -> AsyncIterator[AsyncEngine]:
+		"""Open the billing database for one request."""
+		engine = create_sqlite_engine(billing_db_path(data_dir))
+		try:
+			yield engine
+		finally:
+			await engine.dispose()
+
+	BillingDep = Depends(billing_engine)
+
 	def _wallet_json(wallet: wallet_ops.WalletInfo) -> dict:
 		return {
 			"id": wallet.id,
@@ -501,11 +517,13 @@ def register_user_routes(
 		body: AttachWalletRequest,
 		ctx: UserContext = MutatingSessionDep,
 		engine: AsyncEngine = UserEngineDep,
+		billing: AsyncEngine = BillingDep,
 	) -> dict:
 		"""Attach a watch-only wallet (the recommended path of ADR-0002)."""
 		wallet = await wallet_ops.attach_wallet(
 			engine,
 			ctx.registry,
+			billing,
 			user_id=ctx.user.user_id,
 			family=body.family,
 			xpub=body.xpub,

@@ -37,6 +37,10 @@ master_wallets = Table(
 	metadata,
 	Column("network", String(32), primary_key=True),
 	Column("xpub", Text, nullable=False),
+	# Отпечаток ключа: по нему идёт перекрёстная проверка «один xpub — один
+	# кошелёк» с реестровым индексом пользовательских ключей, и он же не даёт
+	# внести один и тот же кошелёк в две сети.
+	Column("xpub_hash", String(128), nullable=False, unique=True),
 	Column("added_at", DateTime, nullable=False, server_default=func.now()),
 )
 

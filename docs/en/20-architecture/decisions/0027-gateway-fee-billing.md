@@ -83,7 +83,10 @@ attributed by the receiving address.
   the number of paying users.
 - The master wallet goes through **the same gateway-wide xpub uniqueness check** as the users'
   wallets: a collision would give one address two owners, and the watcher would not know whose
-  the incoming payment is.
+  the incoming payment is. The rule is held by a check across the two databases rather than by
+  a single schema key: the registry index covers the users' keys, the billing database covers
+  the master wallets, and each of the two operations looks into both. The owner's key gets no
+  row in the registry — there it would stand for a user who does not exist.
 
 ### 4. Observing payments
 
@@ -194,7 +197,9 @@ foreign assets.
 - Funds are swept from many addresses; in TRON every transfer costs a fee and a reserve of the
   native coin on the source address.
 - A user's first, partial period counts in full: the threshold filters out the small change.
-- Gateway-wide xpub uniqueness extends to the owner's master wallets.
+- Gateway-wide xpub uniqueness extends to the owner's master wallets — through two facing
+  checks, so a single schema key no longer guarantees it; entering one key from both sides at
+  once is serialized by an in-process lock, the way derivation indexes already are (ADR-0003).
 
 ## Related
 

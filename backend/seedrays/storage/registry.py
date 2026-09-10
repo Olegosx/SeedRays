@@ -809,6 +809,23 @@ async def reserve_wallet_xpub(
 	return True
 
 
+async def wallet_xpub_taken(registry: AsyncEngine, xpub_hash: str) -> bool:
+	"""Whether a key fingerprint is already reserved by some user's wallet.
+
+	A read without a reservation: the billing side checks the owner's master
+	wallet against this index, and reserving there would be wrong — the
+	master wallet belongs to no user and lives in the billing database
+	(ADR-0027).
+	"""
+	async with registry.connect() as conn:
+		row = (
+			await conn.execute(
+				select(wallet_xpubs.c.id).where(wallet_xpubs.c.xpub_hash == xpub_hash)
+			)
+		).first()
+	return row is not None
+
+
 async def release_wallet_xpub(registry: AsyncEngine, xpub_hash: str) -> None:
 	"""Release a reserved xpub fingerprint (compensation for a failed attach)."""
 	async with registry.begin() as conn:

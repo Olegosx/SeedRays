@@ -1,10 +1,10 @@
-"""The orchestrator supervisor: API server + watcher loop in one process.
+"""The orchestrator supervisor: API server, watcher and billing in one process.
 
-One backend process (ADR-0003): the supervisor launches both activities as
+One backend process (ADR-0003): the supervisor launches the activities as
 parallel tasks and owns the process lifecycle. A component crash restarts
-that component without taking down the other; a stop signal (SIGTERM /
+that component without taking down the others; a stop signal (SIGTERM /
 SIGINT) shuts the whole gateway down gracefully — the API server finishes
-its connections, the watcher task is cancelled between passes.
+its connections, the watcher and billing tasks are cancelled between passes.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from typing import Awaitable, Callable, Generator
 import uvicorn
 
 from seedrays.api.app_api import create_app
+from seedrays.orchestrator.billing import run_forever as run_billing
 from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path
 from seedrays.watcher.loop import run_forever
@@ -151,15 +152,19 @@ async def run(
 	watcher_task = asyncio.create_task(
 		_supervised("watcher", lambda: run_forever(data_dir), stopping)
 	)
+	billing_task = asyncio.create_task(
+		_supervised("billing", lambda: run_billing(data_dir), stopping)
+	)
 	logger.info("gateway starting: api on %s:%d, data dir %s", host, port, data_dir)
 	try:
 		await stopping.wait()
 		# Плавная остановка: API дорабатывает открытые соединения,
-		# watcher отменяется между проходами (проход идемпотентен).
+		# watcher и биллинг отменяются между проходами (проходы идемпотентны).
 		if current_server is not None:
 			current_server.should_exit = True
 		watcher_task.cancel()
-		await asyncio.gather(api_task, watcher_task, return_exceptions=True)
+		billing_task.cancel()
+		await asyncio.gather(api_task, watcher_task, billing_task, return_exceptions=True)
 		logger.info("gateway stopped")
 	finally:
 		for sig in handled:
