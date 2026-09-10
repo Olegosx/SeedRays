@@ -20,6 +20,9 @@ def now_utc() -> datetime:
 
 REGISTRY_DB_FILENAME = "registry.db"
 USER_DB_FILENAME = "user.db"
+# База биллинга — расчётные данные владельца шлюза (ADR-0027); финансовым
+# данным не место в реестре, а база пользователя уезжает вместе с ним.
+BILLING_DB_FILENAME = "billing.db"
 USERS_DIR_NAME = "users"
 # Архив удалённых пользователей — ВНЕ users/: базы в users/ миграции и
 # watcher считают живыми, архивные базы трогать нельзя.
@@ -29,6 +32,11 @@ ARCHIVE_DIR_NAME = "archive"
 def registry_db_path(data_dir: Path) -> Path:
 	"""Path of the shared registry database inside the gateway data directory."""
 	return data_dir / REGISTRY_DB_FILENAME
+
+
+def billing_db_path(data_dir: Path) -> Path:
+	"""Path of the billing database inside the gateway data directory."""
+	return data_dir / BILLING_DB_FILENAME
 
 
 def users_root(data_dir: Path) -> Path:

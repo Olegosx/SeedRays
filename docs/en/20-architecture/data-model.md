@@ -170,9 +170,13 @@ than to the number of invoices issued.
 ### Invoices
 
 One row per "user + period", unique at the schema level: the period bounds, the period's
-turnover in USDT, the rate and threshold applied, the amount due, the due date, the
-payment network and address, the state (issued / paid / overdue), the amount credited,
-and the times of issue and payment.
+turnover, the rate and threshold applied, the amount due, the due date, the payment
+network and address, the state (issued / paid / overdue), the amount credited, the times
+of issue and payment, and the mark of a manual confirmation — the operator and the reason.
+
+- The billing money values are integers in **micro-USDT** (the sixth decimal place, the
+  way USDT itself is denominated in TRON), stored as strings like every amount in the
+  gateway.
 
 - The rate, the threshold and the term are a snapshot of the settings as the invoice was
   issued: a later change of the settings never rewrites invoices that already exist.
@@ -183,8 +187,9 @@ and the times of issue and payment.
 
 Transfers observed on invoice addresses: the address, the transaction id, the asset, the
 amount, the time and the finalization marker — plus the crediting: which invoice it went
-to and how much of it counted. A manual confirmation by the operator is a row of the same
-kind marked as confirmed by hand, with the operator and the reason.
+to and how much of it counted. A manual confirmation by the operator lives in the invoice
+itself rather than here: it has neither a transaction nor an asset, and a synthetic
+payment row would only muddy the record of observations.
 
 - An overpayment stays an uncredited remainder and counts against the next invoice; there
   is no separate "credit balance" entity — that state follows from the payments.

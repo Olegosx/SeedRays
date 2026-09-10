@@ -9,11 +9,13 @@ point of truth of the financial model.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.storage.schema_user import applications, balances, bindings, transactions, wallets
-from seedrays.storage.user_store import DIRECTION_IN, STATUS_SUCCESS
+from seedrays.storage.user_store import DIRECTION_IN, DIRECTION_OUT, STATUS_SUCCESS
 
 
 async def overview_counters(engine: AsyncEngine) -> tuple[int, int, int]:
@@ -90,6 +92,57 @@ async def pending_incoming(engine: AsyncEngine, *, addresses: list[str] | None =
 	)
 	if addresses is not None:
 		query = query.where(transactions.c.address.in_(addresses))
+	async with engine.connect() as conn:
+		return (await conn.execute(query)).all()
+
+
+async def turnover_incoming(
+	engine: AsyncEngine, *, since: datetime, until: datetime, asset_ids: set[int]
+) -> list:
+	"""Rows counting towards the fee turnover of one period (ADR-0027).
+
+	Successful, finalized incoming rows of the listed assets whose block time
+	falls into ``[since, until)``. A row the provider gave no block time for
+	is dated by the moment the gateway first saw it — otherwise it would drop
+	out of every period and quietly shrink the turnover.
+
+	Moving funds between the user's own addresses is not income and is left
+	out: such a row has an outgoing leg of the same transaction, asset and
+	amount inside the same database, and that is enough to recognize it —
+	the transaction row need not carry a counterparty.
+
+	Args:
+		engine: The owner's user-database engine.
+		since: Period start, inclusive (naive UTC).
+		until: Period end, exclusive (naive UTC).
+		asset_ids: Assets the operator counts towards the turnover.
+
+	Returns:
+		Rows of (asset_id, amount); an empty asset set yields nothing.
+	"""
+	if not asset_ids:
+		return []
+	outgoing = transactions.alias("outgoing_leg")
+	own_transfer = (
+		select(outgoing.c.id)
+		.where(
+			outgoing.c.txid == transactions.c.txid,
+			outgoing.c.asset_id == transactions.c.asset_id,
+			outgoing.c.amount == transactions.c.amount,
+			outgoing.c.direction == DIRECTION_OUT,
+		)
+		.exists()
+	)
+	dated = func.coalesce(transactions.c.tx_time, transactions.c.first_seen_at)
+	query = select(transactions.c.asset_id, transactions.c.amount).where(
+		transactions.c.direction == DIRECTION_IN,
+		transactions.c.status == STATUS_SUCCESS,
+		transactions.c.finalized_at.is_not(None),
+		transactions.c.asset_id.in_(asset_ids),
+		dated >= since,
+		dated < until,
+		~own_transfer,
+	)
 	async with engine.connect() as conn:
 		return (await conn.execute(query)).all()
 
