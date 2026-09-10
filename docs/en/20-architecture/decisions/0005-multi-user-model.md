@@ -3,7 +3,9 @@
 # ADR-0005: Multi-User Model — Per-User Database and Directory, Three Roles
 
 **Status:** accepted; extended by [ADR-0008](0008-shared-registry-db.md) — a small shared
-registry database for non-financial gateway-global data
+registry database for non-financial gateway-global data; extended by
+[ADR-0027](0027-gateway-fee-billing.md) — a user gains a second access state, independent of
+the administrative block
 
 ## Context
 

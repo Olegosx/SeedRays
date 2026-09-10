@@ -48,6 +48,7 @@ Entry point for the project documentation. Every document in this tree is listed
     - [ADR-0024: User Deletion — Two-Step, Through a Server-Side Archive](20-architecture/decisions/0024-user-deletion-archive.md)
     - [ADR-0025: Application Instances — the Namespace of Application User Ids](20-architecture/decisions/0025-application-instances.md)
     - [ADR-0026: A Configuration File as the Deployment Layer](20-architecture/decisions/0026-configuration-file.md)
+    - [ADR-0027: The Gateway Owner's Fee — Turnover, Invoices and Access Suspension](20-architecture/decisions/0027-gateway-fee-billing.md)
 - Security
   - [Key Management](30-security/key-management.md)
   - [Threat Model](30-security/threat-model.md)

@@ -11,12 +11,12 @@ considered, the choice made and its consequences.
 |----|-------|--------|
 | [ADR-0001](0001-library-first-core.md) | Library-First Core with Thin Adapters | accepted |
 | [ADR-0002](0002-watch-only-online-part.md) | Watch-Only Online Part; Key Generation Paths | accepted |
-| [ADR-0003](0003-single-process-supervised.md) | Single Backend Process with a Supervising Orchestrator | accepted |
+| [ADR-0003](0003-single-process-supervised.md) | Single Backend Process with a Supervising Orchestrator | accepted, extended by ADR-0027 |
 | [ADR-0004](0004-two-api-groups.md) | Two API Route Groups with Different Access Rights | accepted, extended by ADR-0005 |
-| [ADR-0005](0005-multi-user-model.md) | Multi-User Model — Per-User Database and Directory, Three Roles | accepted, extended by ADR-0008 |
+| [ADR-0005](0005-multi-user-model.md) | Multi-User Model — Per-User Database and Directory, Three Roles | accepted, extended by ADR-0008 and ADR-0027 |
 | [ADR-0006](0006-storage-abstraction.md) | Storage Abstraction at the Domain-Operation Level | accepted, extended by ADR-0013 |
 | [ADR-0007](0007-address-centric-watcher.md) | Address-Centric Watcher Pass | accepted, refined by ADR-0018 |
-| [ADR-0008](0008-shared-registry-db.md) | Shared Registry Database | accepted, extended by ADR-0010 |
+| [ADR-0008](0008-shared-registry-db.md) | Shared Registry Database | accepted, extended by ADR-0010 and ADR-0027 |
 | [ADR-0009](0009-address-bindings-primary-mode.md) | Persistent Address Bindings as the Primary Mode | accepted, refined by ADR-0010 |
 | [ADR-0010](0010-networks-assets-financial-data.md) | Networks, Assets and Financial Data Structures | accepted, partly superseded by ADR-0017 |
 | [ADR-0011](0011-application-api-principles.md) | Application API Principles | accepted |
@@ -35,6 +35,7 @@ considered, the choice made and its consequences.
 | [ADR-0024](0024-user-deletion-archive.md) | User Deletion — Two-Step, Through a Server-Side Archive | accepted |
 | [ADR-0025](0025-application-instances.md) | Application Instances — the Namespace of Application User Ids | accepted |
 | [ADR-0026](0026-configuration-file.md) | A Configuration File as the Deployment Layer | accepted |
+| [ADR-0027](0027-gateway-fee-billing.md) | The Gateway Owner's Fee — Turnover, Invoices and Access Suspension | accepted |
 
 ## Related
 

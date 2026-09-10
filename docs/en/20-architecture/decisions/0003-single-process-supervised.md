@@ -2,7 +2,8 @@
 
 # ADR-0003: Single Backend Process with a Supervising Orchestrator
 
-**Status:** accepted
+**Status:** accepted; extended by [ADR-0027](0027-gateway-fee-billing.md) — a third
+background task runs under the supervisor: billing
 
 ## Context
 

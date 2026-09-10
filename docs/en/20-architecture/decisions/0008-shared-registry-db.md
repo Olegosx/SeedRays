@@ -3,7 +3,9 @@
 # ADR-0008: Shared Registry Database
 
 **Status:** accepted; extended by [ADR-0010](0010-networks-assets-financial-data.md) — the
-registry also holds the asset catalog and the watcher's per-network service state
+registry also holds the asset catalog and the watcher's per-network service state; extended by
+[ADR-0027](0027-gateway-fee-billing.md) — the owner's billing data lives in a separate billing
+database, not in the registry
 
 ## Context
 
