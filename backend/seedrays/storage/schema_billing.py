@@ -55,6 +55,9 @@ invoice_addresses = Table(
 	Column("address", String(128), nullable=False),
 	Column("derivation_index", Integer, nullable=False),
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+	# Докуда адрес уже проверен у провайдера: следующий опрос идёт от этой
+	# отметки с перекрытием, а не с начала истории адреса.
+	Column("checked_at", DateTime),
 	UniqueConstraint("user_id", "network", name="uq_invoice_addresses_owner"),
 	UniqueConstraint("network", "address", name="uq_invoice_addresses_address"),
 	UniqueConstraint("network", "derivation_index", name="uq_invoice_addresses_index"),
@@ -106,7 +109,11 @@ invoice_payments = Table(
 	Column("txid", String(128), nullable=False),
 	Column("asset_id", Integer, nullable=False),
 	Column("event_index", Integer, nullable=False, server_default="0"),
+	# Сумма — в минимальных единицах актива, как пришла; оценка — она же в
+	# микро-USDT, единице счёта. Ноль означает «деньгами счёта не является»:
+	# так выглядит чужой токен, случайно присланный на адрес счёта.
 	Column("amount", Text, nullable=False),
+	Column("value", Text, nullable=False, server_default="0"),
 	Column("tx_time", DateTime),
 	Column("first_seen_at", DateTime, nullable=False, server_default=func.now()),
 	Column("finalized_at", DateTime),

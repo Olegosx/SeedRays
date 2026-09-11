@@ -17,7 +17,7 @@ import json
 import logging
 from calendar import monthrange
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -25,11 +25,13 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
+from seedrays.chains.base import ChainDataSourceError, Direction, TransferStatus
 from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_address
 from seedrays.orchestrator.operations import OperationError
 from seedrays.storage import billing as billing_store
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_views
+from seedrays.storage.registry import KIND_NATIVE, KIND_TOKEN
 from seedrays.storage.engine import (
 	billing_db_path,
 	create_sqlite_engine,
@@ -61,10 +63,21 @@ SETTING_RATE = "billing.rate_percent"
 SETTING_THRESHOLD = "billing.threshold_usdt"
 SETTING_DUE_DAYS = "billing.due_days"
 
+# Активы, которыми принимается оплата счетов, по сетям: JSON-список адресов
+# контрактов. Всё остальное, пришедшее на адрес счёта, — чужой актив.
+SETTING_PAYMENT_ASSETS_PREFIX = "billing.payment_assets."
+# Допуск недоплаты в процентах от суммы счёта: перевод, недошедший на копейку
+# из-за округления на стороне плательщика, не должен требовать разбирательства.
+SETTING_TOLERANCE = "billing.underpayment_tolerance_percent"
+
 DEFAULT_DUE_DAYS = 7
-# Проход биллинга раз в сутки: выставление привязано к календарю, а не к
-# частоте опроса, поэтому чаще смысла нет.
-PASS_INTERVAL_SECONDS = 24 * 60 * 60
+# Проход биллинга раз в час: выставление привязано к календарю, а проверка
+# оплаты — редкая точечная операция (ADR-0027), мгновенность ей не нужна.
+PASS_INTERVAL_SECONDS = 60 * 60
+# Перекрытие при опросе адреса счёта: провайдер индексирует переводы не мгно-
+# венно, поэтому следующий опрос начинается чуть раньше прошлой отметки.
+# Повторы гасит ключ идемпотентности платежа.
+CHECK_OVERLAP = timedelta(hours=1)
 
 
 def period_bounds(moment: datetime) -> tuple[datetime, datetime]:
@@ -485,6 +498,10 @@ async def _issue_invoices(
 		if not db_path.exists():
 			logger.warning("user %s has no database at %s, skipping", user.login, db_path)
 			continue
+		if await billing_store.invoice_exists(
+			billing, user_id=user.id, period_start=period_start
+		):
+			continue
 		engine = create_sqlite_engine(db_path)
 		try:
 			turnover = await user_turnover(
@@ -548,9 +565,15 @@ async def run_forever(data_dir: Path) -> None:
 	"""
 	while True:
 		try:
+			checked = await check_payments(data_dir)
 			stats = await run_pass(data_dir)
 			logger.info(
-				"billing pass done: billed=%d issued=%d overdue=%d no_wallet=%s",
+				"billing pass done: checked=%d payments=%d settled=%d foreign=%d"
+				" billed=%d issued=%d overdue=%d no_wallet=%s",
+				checked.addresses_checked,
+				checked.payments_recorded,
+				checked.invoices_settled,
+				checked.foreign_assets,
 				stats.users_billed,
 				stats.invoices_issued,
 				stats.invoices_overdue,
@@ -561,3 +584,272 @@ async def run_forever(data_dir: Path) -> None:
 		except Exception:
 			logger.exception("billing pass failed; continuing")
 		await asyncio.sleep(PASS_INTERVAL_SECONDS)
+
+
+async def _payment_assets(registry: AsyncEngine, network: str) -> set[str]:
+	"""Token contracts accepted as payment in one network.
+
+	A broken setting degrades to "nothing is accepted here" with an error in
+	the log: a typo must not turn a stranger's token into a settled invoice.
+	"""
+	raw = await registry_ops.get_setting(
+		registry, f"{SETTING_PAYMENT_ASSETS_PREFIX}{network}"
+	)
+	if not raw:
+		return set()
+	try:
+		entries = json.loads(raw)
+	except ValueError as exc:
+		logger.error(
+			"invalid %s%s setting ignored: %s", SETTING_PAYMENT_ASSETS_PREFIX, network, exc
+		)
+		return set()
+	if not isinstance(entries, list):
+		logger.error(
+			"setting %s%s must be a JSON list of contract addresses; ignored",
+			SETTING_PAYMENT_ASSETS_PREFIX,
+			network,
+		)
+		return set()
+	return {e.strip() for e in entries if isinstance(e, str) and e.strip()}
+
+
+async def _tolerance(registry: AsyncEngine) -> Decimal:
+	"""The underpayment tolerance, in percent of the invoice amount."""
+	return _decimal_setting(
+		await registry_ops.get_setting(registry, SETTING_TOLERANCE), Decimal(0), SETTING_TOLERANCE
+	)
+
+
+def _required(amount: int, tolerance: Decimal) -> int:
+	"""How much must be credited for an invoice to count as settled."""
+	if tolerance <= 0:
+		return amount
+	return int(amount - (amount * tolerance) // 100)
+
+
+@dataclass
+class CheckStats:
+	"""Outcome of one payment check."""
+
+	addresses_checked: int = 0
+	payments_recorded: int = 0
+	invoices_settled: int = 0
+	# Поступления на адреса счетов в активах, которыми оплата не принимается.
+	foreign_assets: int = 0
+
+
+async def check_payments(
+	data_dir: Path,
+	*,
+	now: datetime | None = None,
+	source_factory=None,
+) -> CheckStats:
+	"""Poll the addresses of unpaid invoices and credit what arrived (ADR-0027).
+
+	The billing check is deliberately independent of the watcher: it asks the
+	provider for the confirmed transfers of a handful of addresses, and only
+	of those whose invoices still await money. Nothing provisional is stored,
+	so a chain reorganization has nothing to take back here — the provider
+	reports finalized transfers only.
+
+	Args:
+		data_dir: The gateway data directory.
+		now: The moment the check runs at; defaults to the current time.
+		source_factory: Data source constructor; tests substitute a fake one.
+
+	Returns:
+		Statistics of the check.
+	"""
+	moment = now if now is not None else now_utc()
+	factory = source_factory if source_factory is not None else chains.create_source
+	stats = CheckStats()
+	registry = create_sqlite_engine(registry_db_path(data_dir))
+	billing = create_sqlite_engine(billing_db_path(data_dir))
+	try:
+		unpaid = await billing_store.list_unpaid(billing)
+		if not unpaid:
+			return stats
+		api_key = await registry_ops.get_setting(registry, chains.SETTING_API_KEY)
+		rate = _decimal_setting(
+			await registry_ops.get_setting(registry, chains.SETTING_RATE),
+			Decimal(chains.DEFAULT_RATE_PER_SEC),
+			chains.SETTING_RATE,
+		)
+		interval = float(1 / rate) if rate > 0 else 0.0
+		tolerance = await _tolerance(registry)
+
+		# По адресу может ждать несколько счетов: неоплаченный прошлый и
+		# свежий. Опрашивается адрес один раз, зачёт идёт по порядку периодов.
+		by_address: dict[tuple[str, str], list] = {}
+		for invoice in unpaid:
+			by_address.setdefault((invoice.network, invoice.address), []).append(invoice)
+
+		for (network, address), invoices_here in sorted(by_address.items()):
+			accepted = await _payment_assets(registry, network)
+			try:
+				source = factory(network, api_key, interval)
+			except ValueError:
+				logger.error("network %s has no data source; payments not checked", network)
+				continue
+			checked_at = min(
+				(i.checked_at for i in invoices_here if i.checked_at is not None),
+				default=None,
+			)
+			since = (checked_at - CHECK_OVERLAP) if checked_at is not None else None
+			try:
+				transfers = await source.transfers(address, since, True)
+			except ChainDataSourceError as exc:
+				# Провайдер недоступен или просит сбавить темп: курсор не
+				# двигаем, следующий проход спросит то же самое.
+				logger.warning("payment check for %s failed: %s", address, exc)
+				continue
+			finally:
+				await source.aclose()
+			stats.addresses_checked += 1
+
+			for transfer in transfers:
+				if transfer.direction != Direction.IN:
+					continue
+				if transfer.status != TransferStatus.SUCCESS:
+					continue
+				await _record_transfer(
+					registry, billing, transfer, accepted=accepted, moment=moment, stats=stats
+				)
+			await billing_store.set_address_checked(
+				billing, user_id=invoices_here[0].user_id, network=network, checked_at=moment
+			)
+			settled = await _credit_address(
+				billing, address=address, invoices_here=invoices_here,
+				tolerance=tolerance, moment=moment,
+			)
+			stats.invoices_settled += settled
+	finally:
+		await billing.dispose()
+		await registry.dispose()
+	return stats
+
+
+async def _record_transfer(
+	registry: AsyncEngine,
+	billing: AsyncEngine,
+	transfer,
+	*,
+	accepted: set[str],
+	moment: datetime,
+	stats: CheckStats,
+) -> None:
+	"""Store one observed transfer on an invoice address."""
+	asset = await registry_ops.get_or_create_asset(
+		registry,
+		network=transfer.asset.network,
+		kind=KIND_NATIVE if transfer.asset.contract_address == "" else KIND_TOKEN,
+		contract_address=transfer.asset.contract_address,
+		symbol=transfer.asset.symbol,
+		decimals=transfer.asset.decimals,
+	)
+	is_payment = transfer.asset.contract_address in accepted
+	value = to_micro_usdt(transfer.amount, transfer.asset.decimals) if is_payment else 0
+	recorded = await billing_store.record_payment(
+		billing,
+		network=transfer.network,
+		address=transfer.address,
+		txid=transfer.txid,
+		asset_id=asset.id,
+		amount=transfer.amount,
+		value=value,
+		tx_time=_naive(transfer.timestamp),
+		finalized_at=moment,
+	)
+	if not recorded:
+		return
+	stats.payments_recorded += 1
+	if is_payment:
+		logger.info(
+			"payment of %s USDT observed on invoice address %s (tx %s)",
+			format_usdt(value),
+			transfer.address,
+			transfer.txid,
+		)
+	else:
+		stats.foreign_assets += 1
+		logger.warning(
+			"foreign asset %s arrived on invoice address %s (tx %s); not credited",
+			transfer.asset.symbol or transfer.asset.contract_address,
+			transfer.address,
+			transfer.txid,
+		)
+
+
+async def _credit_address(
+	billing: AsyncEngine,
+	*,
+	address: str,
+	invoices_here: list,
+	tolerance: Decimal,
+	moment: datetime,
+) -> int:
+	"""Credit an address's uncredited money to its invoices, oldest first.
+
+	Money follows the invoices in order, and whatever is left over stays
+	uncredited on the payment — that leftover is the credit balance the next
+	invoice will draw on (ADR-0027).
+
+	Returns:
+		How many invoices became settled.
+	"""
+	payments = await billing_store.creditable_payments(billing, address=address)
+	# (id платежа, свободный остаток, уже зачтено) — расходуется по порядку.
+	purse = [
+		[row.id, int(row.value) - int(row.credited), int(row.credited)] for row in payments
+	]
+	settled = 0
+	for invoice in sorted(invoices_here, key=lambda i: i.id):
+		needed = _required(invoice.amount, tolerance) - invoice.credited
+		if needed <= 0:
+			continue
+		allocations: list[tuple[int, int]] = []
+		credited_total = invoice.credited
+		for entry in purse:
+			if needed <= 0:
+				break
+			if entry[1] <= 0:
+				continue
+			take = min(entry[1], needed)
+			entry[1] -= take
+			entry[2] += take
+			credited_total += take
+			needed -= take
+			allocations.append((entry[0], entry[2]))
+		if not allocations:
+			continue
+		paid = credited_total >= _required(invoice.amount, tolerance)
+		await billing_store.apply_credits(
+			billing,
+			invoice_id=invoice.id,
+			allocations=allocations,
+			credited_total=credited_total,
+			paid_at=moment if paid else None,
+		)
+		if paid:
+			settled += 1
+			logger.info(
+				"invoice %d settled: %s USDT credited",
+				invoice.id,
+				format_usdt(credited_total),
+			)
+		else:
+			logger.warning(
+				"invoice %d underpaid: %s of %s USDT credited, access stays closed",
+				invoice.id,
+				format_usdt(credited_total),
+				format_usdt(invoice.amount),
+			)
+	return settled
+
+
+def _naive(moment: datetime | None) -> datetime | None:
+	"""Provider times are aware UTC; the storage layer keeps naive UTC."""
+	if moment is None:
+		return None
+	return moment.astimezone(timezone.utc).replace(tzinfo=None)

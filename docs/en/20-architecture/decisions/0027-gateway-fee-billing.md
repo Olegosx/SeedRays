@@ -90,9 +90,18 @@ attributed by the receiving address.
 
 ### 4. Observing payments
 
-- The master-account addresses join **the same local matching filter** of the watcher
-  ([ADR-0018](0018-range-scanning.md)); their transfers are written into the billing database
-  rather than a user's. No separate observation mechanism appears.
+- **Billing watches its own addresses and shares nothing with the watcher** beyond the chain
+  data source interface. The check is a per-address poll in "confirmed only" mode, once an
+  hour, and only for addresses carrying an unpaid invoice. This is exactly the targeted task
+  [ADR-0018](0018-range-scanning.md) kept per-address queries for while rejecting them as the
+  watcher's main intake: a handful of addresses, a low frequency, and a cost that does not
+  grow with the number of gateway users.
+- **No second copy of the two-phase logic appears.** The watcher's two phases exist to show a
+  pending payment immediately; billing does not need immediacy, and the provider itself can
+  return finalized transfers only. Billing stores nothing provisional — so a chain
+  reorganization has nothing to take back here.
+- The check cursor lives on the invoice address: the next poll resumes from it with an
+  overlap, and repeats are absorbed by the payment's idempotency key.
 - A payment is credited **on finalization**, like everything else in the gateway.
 - **The full amount** (within a configurable underpayment tolerance) settles the invoice and
   restores access automatically, without the operator.
@@ -104,6 +113,13 @@ attributed by the receiving address.
 - **Manual confirmation by the operator** covers money that arrived outside the gateway. It
   requires a stated reason, lands in the security journal
   ([ADR-0023](0023-security-journal.md)) and has exactly the effect of a credited payment.
+- The price of this design, accepted deliberately: **the provider sees the invoice addresses**.
+  A per-address poll publishes them, unlike range scanning, and the provider can tie them to
+  the gateway. For the owner's revenue addresses the risk is moderate, and it goes away with a
+  node of one's own.
+- A known limitation: "confirmed only" is a property of the source. TronGrid has it
+  ([ADR-0015](0015-tron-provider.md)); in a network whose source does not, billing will have
+  to count confirmation depth itself.
 
 ### 5. Storage — a separate billing database
 
@@ -132,10 +148,12 @@ and their crediting, and the billing state of users.
 ### 7. The billing task
 
 A third background task under the same supervisor as the API server and the watcher
-([ADR-0003](0003-single-process-supervised.md)): once a day it issues invoices (which in
-practice happens on the first of the month) and marks the overdue ones. Crediting payments
-needs no task of its own — it happens along the watcher's pass. Running twice in one day
-duplicates nothing: idempotency rests on the invoice key, not on the schedule.
+([ADR-0003](0003-single-process-supervised.md)). Once an hour it does two things in order:
+first it checks for payments (otherwise an invoice paid yesterday would have time to turn
+overdue), then it issues the invoices of the finished period and marks the overdue ones.
+Issuing is not tied to a calendar day: a pass always bills the last period that has ended, so
+a gateway that was down on the first of the month issues at its next start. Repeats duplicate
+nothing — idempotency rests on the invoice key, not on the schedule.
 
 ### 8. Settings
 
@@ -187,8 +205,11 @@ foreign assets.
 
 - The data directory gains a third database and a third migration stream; a backup of the
   directory still covers everything.
-- The watcher starts observing addresses that belong to no user: the matching filter gains
-  entries of a second nature, and a pass gains a second destination for its results.
+- The watcher is left untouched: all it shares with billing is the chain data source
+  interface and the provider access settings, which moved into the chains layer — the key and
+  the request rate were always a gateway-wide resource rather than the watcher's property.
+- Two components poll the provider independently, but billing's share is tiny: one request per
+  address with an unpaid invoice, once an hour.
 - The access check appears in both route groups — the application one and the user one — next
   to the status check.
 - The gateway owner becomes a payee inside their own product: a miscalculation or a false

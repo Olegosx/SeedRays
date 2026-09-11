@@ -23,7 +23,6 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
-from seedrays.chains import tron
 from seedrays.chains.base import ChainDataSource, ChainDataSourceError, RangeTransfer, RateLimitedError
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_store
@@ -33,13 +32,14 @@ from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user
 
 logger = logging.getLogger(__name__)
 
-# Ключи настроек (реестр, ADR-0016).
-SETTING_API_KEY = "provider.trongrid.api_key"
-SETTING_RATE = "provider.trongrid.rate_per_sec"
+# Ключи настроек (реестр, ADR-0016). Доступ к провайдеру — общий ресурс шлюза,
+# поэтому его ключи живут в слое цепочек, а не здесь.
+SETTING_API_KEY = chains.SETTING_API_KEY
+SETTING_RATE = chains.SETTING_RATE
 SETTING_OVERLAP = "watcher.overlap_minutes"
 SETTING_SCAN_START = "watcher.scan_start"
 
-DEFAULT_RATE_PER_SEC = 3.0
+DEFAULT_RATE_PER_SEC = chains.DEFAULT_RATE_PER_SEC
 DEFAULT_OVERLAP_MINUTES = 10
 # Предохранитель на догон нативного сканирования за один проход (~1 час цепочки TRON).
 MAX_BLOCKS_PER_PASS = 1200
@@ -52,8 +52,8 @@ SourceFactory = Callable[[str, str | None, float], ChainDataSource]
 
 
 def _default_source_factory(network: str, api_key: str | None, interval: float) -> ChainDataSource:
-	"""Create the real data source for a network (TRON family for now)."""
-	return tron.create_source(network, api_key=api_key, request_interval=interval)
+	"""Create the real data source for a network."""
+	return chains.create_source(network, api_key=api_key, request_interval=interval)
 
 
 def _naive_utc(moment: datetime | None) -> datetime | None:

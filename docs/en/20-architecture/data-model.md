@@ -165,7 +165,9 @@ know whose incoming payment it is.
 A permanent mapping "user + payment network → address + derivation index". The address is
 issued once and serves every later invoice of that user: a payment is attributed by the
 receiving address, and the address count stays equal to the number of paying users rather
-than to the number of invoices issued.
+than to the number of invoices issued. Next to it sits the mark of how far the address has
+been checked with the provider: the next poll resumes from there instead of re-reading the
+address's whole history.
 
 ### Invoices
 
@@ -187,7 +189,14 @@ of issue and payment, and the mark of a manual confirmation — the operator and
 
 Transfers observed on invoice addresses: the address, the transaction id, the asset, the
 amount, the time and the finalization marker — plus the crediting: which invoice it went
-to and how much of it counted. A manual confirmation by the operator lives in the invoice
+to and how much of it counted.
+
+- The amount is kept twice: in the minimal units of the asset that arrived (as is, for the
+  record of observations) and valued in micro-USDT, the invoice's unit. A zero valuation
+  means "not invoice money" — that is what a stray token on an invoice address looks like.
+- Crediting goes in order: an address's money covers invoices from the oldest to the
+  newest, and the leftover stays uncredited on the payment — that leftover is the credit
+  the next invoice draws on. A manual confirmation by the operator lives in the invoice
 itself rather than here: it has neither a transaction nor an asset, and a synthetic
 payment row would only muddy the record of observations.
 

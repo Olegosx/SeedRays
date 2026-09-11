@@ -565,3 +565,244 @@ def test_overdue_is_marked_even_when_the_fee_is_switched_off(tmp_path: Path) -> 
 	assert stats.invoices_overdue == 1
 	assert state == "overdue"
 	assert stats.invoices_issued == 0
+
+
+PAY_USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
+
+
+class FakePaymentSource:
+	"""A chain source that answers the billing check with canned transfers."""
+
+	def __init__(self, transfers_by_address: dict[str, list]) -> None:
+		self.network = PAY_NETWORK
+		self._transfers = transfers_by_address
+		self.calls: list[tuple[str, object, object]] = []
+		self.closed = False
+
+	async def transfers(self, address, since=None, only_confirmed=None):
+		self.calls.append((address, since, only_confirmed))
+		return list(self._transfers.get(address, []))
+
+	async def aclose(self) -> None:
+		self.closed = True
+
+
+def _incoming(address: str, amount: int, *, txid: str, contract: str = PAY_USDT,
+              symbol: str = "USDT", decimals: int = 6):
+	"""One confirmed incoming transfer as the chain source reports it."""
+	from datetime import timezone
+
+	from seedrays.chains.base import AssetInfo, Direction, TransferEvent, TransferStatus
+
+	return TransferEvent(
+		network=PAY_NETWORK,
+		address=address,
+		txid=txid,
+		direction=Direction.IN,
+		asset=AssetInfo(
+			network=PAY_NETWORK, contract_address=contract, symbol=symbol, decimals=decimals
+		),
+		amount=amount,
+		block_number=None,
+		timestamp=datetime(2026, 10, 7, 9, 0, tzinfo=timezone.utc),
+		status=TransferStatus.SUCCESS,
+	)
+
+
+async def _gateway_with_invoice(tmp_path: Path) -> tuple[AsyncEngine, str]:
+	"""A gateway with one issued invoice; returns the billing engine and its address."""
+	from seedrays.storage import billing as billing_store
+
+	billing_engine = await _billing_gateway(tmp_path)
+	registry = create_sqlite_engine(registry_db_path(tmp_path))
+	await registry_ops.set_setting(
+		registry, f"{billing.SETTING_PAYMENT_ASSETS_PREFIX}{PAY_NETWORK}", f'["{PAY_USDT}"]'
+	)
+	await registry.dispose()
+	await billing.run_pass(tmp_path, now=datetime(2026, 10, 5))
+	invoices = await billing_store.list_invoices(billing_engine)
+	return billing_engine, invoices[0].address
+
+
+def test_full_payment_settles_the_invoice(tmp_path: Path) -> None:
+	"""The exact amount closes the invoice, and a re-check changes nothing."""
+
+	async def scenario() -> tuple[billing.CheckStats, object, billing.CheckStats]:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			# Счёт на 15 USDT: ровно столько и присылают.
+			source = FakePaymentSource({address: [_incoming(address, 15 * 10**6, txid="pay1")]})
+			first = await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			settled = (await billing_store.list_invoices(billing_engine))[0]
+			# Повторный проход видит тот же перевод: ключ идемпотентности не
+			# даёт зачесть его дважды.
+			again = await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 8), source_factory=lambda n, k, i: source
+			)
+			return first, settled, again
+		finally:
+			await billing_engine.dispose()
+
+	first, settled, again = asyncio.run(scenario())
+	assert first.payments_recorded == 1
+	assert first.invoices_settled == 1
+	assert settled.state == "paid"
+	assert settled.credited == str(15 * 10**6)
+	assert settled.paid_at is not None
+	assert again.payments_recorded == 0, "повтор не создаёт второй платёж"
+	assert again.addresses_checked == 0, "оплаченный счёт больше не опрашивается"
+
+
+def test_underpayment_leaves_the_invoice_open(tmp_path: Path) -> None:
+	"""Short money is credited but does not settle the invoice; the rest can follow."""
+
+	async def scenario() -> tuple[object, object]:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			short = FakePaymentSource({address: [_incoming(address, 10 * 10**6, txid="part1")]})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: short
+			)
+			after_part = (await billing_store.list_invoices(billing_engine))[0]
+			rest = FakePaymentSource({
+				address: [
+					_incoming(address, 10 * 10**6, txid="part1"),
+					_incoming(address, 5 * 10**6, txid="part2"),
+				]
+			})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 8), source_factory=lambda n, k, i: rest
+			)
+			after_rest = (await billing_store.list_invoices(billing_engine))[0]
+			return after_part, after_rest
+		finally:
+			await billing_engine.dispose()
+
+	after_part, after_rest = asyncio.run(scenario())
+	assert after_part.state == "issued", "недоплата не открывает доступ"
+	assert after_part.credited == str(10 * 10**6)
+	assert after_rest.state == "paid", "доплата закрывает счёт"
+	assert after_rest.credited == str(15 * 10**6)
+
+
+def test_overpayment_becomes_credit_for_the_next_invoice(tmp_path: Path) -> None:
+	"""What exceeds the invoice stays uncredited and settles the next one."""
+
+	async def scenario() -> tuple[object, object]:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			# Присылают 40 USDT на счёт в 15: 25 остаются авансом.
+			source = FakePaymentSource({address: [_incoming(address, 40 * 10**6, txid="big")]})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			first = (await billing_store.list_invoices(billing_engine))[0]
+			# Ноябрьский проход выставляет счёт за октябрь; оборот тот же.
+			await _record_october_turnover(tmp_path)
+			await billing.run_pass(tmp_path, now=datetime(2026, 11, 2))
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 11, 3), source_factory=lambda n, k, i: source
+			)
+			rows = await billing_store.list_invoices(billing_engine)
+			return first, rows[0]
+		finally:
+			await billing_engine.dispose()
+
+	first, second = asyncio.run(scenario())
+	assert first.state == "paid"
+	assert second.period_start == datetime(2026, 10, 1)
+	assert second.state == "paid", "аванс закрыл следующий счёт без нового перевода"
+
+
+async def _record_october_turnover(tmp_path: Path) -> None:
+	"""Give the user an October turnover equal to the September one."""
+	registry = create_sqlite_engine(registry_db_path(tmp_path))
+	user = await registry_ops.get_user_by_login(registry, "alice")
+	assets = await registry_ops.list_assets(registry, NETWORK)
+	usdt = next(a for a in assets if a.contract_address == USDT)
+	engine = create_sqlite_engine(user_db_path(tmp_path, user.directory))
+	await _record(
+		engine, asset_id=usdt.id, amount=1000 * billing.MICRO_USDT, txid="october",
+		tx_time=datetime(2026, 10, 15), first_seen_at=datetime(2026, 10, 15),
+	)
+	await engine.dispose()
+	await registry.dispose()
+
+
+def test_foreign_asset_is_recorded_but_not_credited(tmp_path: Path) -> None:
+	"""A stray token on an invoice address never settles anything."""
+
+	async def scenario() -> tuple[billing.CheckStats, object]:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			source = FakePaymentSource({
+				address: [
+					_incoming(
+						address, 99 * 10**6, txid="spam",
+						contract="TSpamContract00000000000000000000", symbol="USDT",
+					)
+				]
+			})
+			stats = await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			invoice = (await billing_store.list_invoices(billing_engine))[0]
+			return stats, invoice
+		finally:
+			await billing_engine.dispose()
+
+	stats, invoice = asyncio.run(scenario())
+	assert stats.foreign_assets == 1
+	assert stats.invoices_settled == 0
+	assert invoice.state == "issued"
+	assert invoice.credited == "0"
+
+
+def test_check_polls_only_addresses_with_unpaid_invoices(tmp_path: Path) -> None:
+	"""No unpaid invoice — no provider request at all."""
+
+	async def scenario() -> tuple[billing.CheckStats, list]:
+		upgrade_all(tmp_path)
+		source = FakePaymentSource({})
+		stats = await billing.check_payments(
+			tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+		)
+		return stats, source.calls
+
+	stats, calls = asyncio.run(scenario())
+	assert stats.addresses_checked == 0
+	assert calls == [], "без неоплаченных счетов провайдера не беспокоим"
+
+
+def test_check_asks_for_confirmed_transfers_from_the_cursor(tmp_path: Path) -> None:
+	"""The check asks for confirmed transfers only, resuming from the address cursor."""
+
+	async def scenario() -> list:
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			source = FakePaymentSource({address: []})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 8), source_factory=lambda n, k, i: source
+			)
+			return source.calls
+		finally:
+			await billing_engine.dispose()
+
+	calls = asyncio.run(scenario())
+	assert [c[2] for c in calls] == [True, True], "спрашиваем только подтверждённые"
+	assert calls[0][1] is None, "первый опрос идёт без нижней границы"
+	# Второй опрос продолжает от прошлой отметки с перекрытием.
+	assert calls[1][1] == datetime(2026, 10, 7) - billing.CHECK_OVERLAP
