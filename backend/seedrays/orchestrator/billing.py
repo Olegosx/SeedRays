@@ -942,3 +942,128 @@ def _naive(moment: datetime | None) -> datetime | None:
 	if moment is None:
 		return None
 	return moment.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+@dataclass(frozen=True)
+class PanelInvoice:
+	"""One invoice as the operator panel shows it."""
+
+	id: int
+	user_id: int
+	username: str
+	period: str
+	turnover: str
+	rate_percent: str
+	amount: str
+	credited: str
+	due_at: str
+	state: str
+	network: str
+	address: str
+	paid_at: str | None
+	manual_reason: str
+
+
+def supported_payment_networks() -> set[str]:
+	"""Networks an invoice can be issued in — those the gateway can watch at all."""
+	return set(chains.supported_networks())
+
+
+async def panel_invoices(
+	billing: AsyncEngine, registry: AsyncEngine, *, state: str | None = None
+) -> list[PanelInvoice]:
+	"""Every user's invoices for the panel, newest period first.
+
+	Args:
+		billing: The billing database engine.
+		registry: Engine of the shared registry database (for the logins).
+		state: Filter by invoice state, or None for all of them.
+
+	Raises:
+		OperationError: invalid_state.
+	"""
+	if state is not None and state not in (
+		billing_store.STATE_ISSUED,
+		billing_store.STATE_PAID,
+		billing_store.STATE_OVERDUE,
+	):
+		raise OperationError("invalid_state", f"unknown invoice state {state!r}")
+	logins = {user.id: user.login for user in await registry_ops.list_users(registry)}
+	rows = await billing_store.list_invoices(billing, state=state)
+	return [
+		PanelInvoice(
+			id=row.id,
+			user_id=row.user_id,
+			# Пользователь мог быть удалён (ADR-0024), а счёт остаётся: долг
+			# и его история переживают учётную запись.
+			username=logins.get(row.user_id, "—"),
+			period=row.period_start.date().isoformat(),
+			turnover=format_usdt(int(row.turnover)),
+			rate_percent=row.rate_percent,
+			amount=format_usdt(int(row.amount)),
+			credited=format_usdt(int(row.credited)),
+			due_at=row.due_at.isoformat(sep=" ", timespec="minutes"),
+			state=row.state,
+			network=row.network,
+			address=row.address,
+			paid_at=row.paid_at.isoformat(sep=" ", timespec="minutes") if row.paid_at else None,
+			manual_reason=row.manual_reason,
+		)
+		for row in rows
+	]
+
+
+async def confirm_manually(
+	billing: AsyncEngine,
+	registry: AsyncEngine,
+	journal: SecurityLog,
+	*,
+	invoice_id: int,
+	operator_id: int,
+	reason: str,
+	now: datetime | None = None,
+) -> int:
+	"""Settle an invoice on the operator's word and reopen the user's access.
+
+	The path for money that reached the owner outside the gateway (ADR-0027).
+	The result is exactly that of a credited payment, including the automatic
+	restoration of access.
+
+	Args:
+		billing: The billing database engine.
+		registry: Engine of the shared registry database.
+		journal: The gateway's security journal.
+		invoice_id: The invoice to settle.
+		operator_id: The operator taking responsibility.
+		reason: Why it is being settled by hand; stored with the invoice.
+		now: Settlement time; defaults to the current moment.
+
+	Returns:
+		The id of the user whose invoice was settled.
+
+	Raises:
+		OperationError: unknown_invoice / invoice_already_paid / reason_required.
+	"""
+	if not reason.strip():
+		# Причина обязательна: ручное закрытие долга — административное
+		# действие над деньгами, и оно должно объяснять себя (ADR-0023).
+		raise OperationError("reason_required", "state why the invoice is settled by hand")
+	invoice = await billing_store.get_invoice(billing, invoice_id)
+	if invoice is None:
+		raise OperationError("unknown_invoice", f"invoice {invoice_id} does not exist")
+	if invoice.state == billing_store.STATE_PAID:
+		raise OperationError("invoice_already_paid", "this invoice is already settled")
+	moment = now if now is not None else now_utc()
+	await billing_store.mark_paid_manually(
+		billing,
+		invoice_id=invoice_id,
+		operator_id=operator_id,
+		reason=reason.strip(),
+		paid_at=moment,
+		amount=int(invoice.amount),
+	)
+	logger.info(
+		"invoice %d settled manually by operator %d: %s", invoice_id, operator_id, reason.strip()
+	)
+	await _restore(registry, billing, journal, user_id=invoice.user_id, invoice_id=invoice_id)
+	return invoice.user_id

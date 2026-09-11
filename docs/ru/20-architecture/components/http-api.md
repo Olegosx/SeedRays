@@ -211,6 +211,11 @@ POST /v1/operator/users/{id}/delete          тело: {"username"} (логин,
 GET  /v1/operator/settings
 PUT  /v1/operator/settings   тело: {"values": {ключ: значение}}
 GET  /v1/operator/watcher    (курсоры watcher по сетям, только чтение)
+GET    /v1/operator/billing/wallets
+PUT    /v1/operator/billing/wallets                тело: {"network", "xpub"}
+DELETE /v1/operator/billing/wallets/{network}
+GET    /v1/operator/billing/invoices               [?state=]
+POST   /v1/operator/billing/invoices/{id}/confirm  тело: {"reason"}
 ```
 
 - Сессия панели — собственная кука HttpOnly/Secure, отдельная от кабинета; CSRF,
@@ -238,15 +243,7 @@ GET  /v1/user/billing            (счета, реквизиты неоплач�
 PUT  /v1/user/billing/network    тело: {"network"}
 ```
 
-Группа оператора:
-
-```
-GET    /v1/operator/billing/invoices                    [?status=&user_id=]
-POST   /v1/operator/billing/invoices/{id}/confirm       тело: {"reason"}
-GET    /v1/operator/billing/wallets
-PUT    /v1/operator/billing/wallets                     тело: {"network", "xpub"}
-DELETE /v1/operator/billing/wallets/{network}
-```
+Группа оператора уже реализована — её маршруты перечислены выше.
 
 - **Приостановка за неуплату уже действует** (в отличие от самих маршрутов выше) —
   отдельное состояние доступа, независимое от статуса учётной записи: просроченный счёт
@@ -255,8 +252,12 @@ DELETE /v1/operator/billing/wallets/{network}
   Доступ открывается сам, как только счёт зачтён.
 - **Смена сети оплаты** запрещена, пока есть неоплаченный счёт: реквизиты выставленного
   счёта неизменны. Сети без мастер-кошелька владельца в выборе не предлагаются.
-- **Ручное подтверждение оплаты** требует причины, попадает в журнал безопасности и даёт
-  тот же результат, что зачтённый платёж.
+- **Ручное подтверждение оплаты** требует причины (пустая отвергается кодом
+  `reason_required`), попадает в журнал безопасности и даёт тот же результат, что зачтённый
+  платёж, включая возврат доступа.
+- **Мастер-кошелёк** вносится по сети; ключ проверяется выводом нулевого адреса, приватный
+  отвергается кодом `private_key_rejected`, а уже занятый где-либо на шлюзе — нейтральным
+  `invalid_xpub`.
 - Настройки вознаграждения (ставка, порог, срок, активы оборота, допуск недоплаты,
   уведомления) отдельных маршрутов не получают — они живут в общем наборе настроек
   оператора, как и всё остальное, чем он управляет на ходу.

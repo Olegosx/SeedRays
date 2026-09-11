@@ -17,12 +17,19 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.api.errors import ApiError
+from seedrays.orchestrator import billing as billing_ops
 from seedrays.orchestrator import operator as operator_ops
 from seedrays.orchestrator.captcha import CaptchaGuard
 from seedrays.orchestrator.operations import OperationError
 from seedrays.orchestrator.ratelimit import RateLimiter
 from seedrays.orchestrator.seclog import ACTOR_OPERATOR, OUTCOME_SUCCESS, SecurityLog
-from seedrays.storage.engine import create_sqlite_engine, now_utc, registry_db_path
+from seedrays.storage import billing as billing_store
+from seedrays.storage.engine import (
+	billing_db_path,
+	create_sqlite_engine,
+	now_utc,
+	registry_db_path,
+)
 
 OPERATOR_COOKIE = "seedrays_operator"
 
@@ -63,6 +70,19 @@ class SettingsRequest(BaseModel):
 	values: dict[str, str]
 
 
+class MasterWalletRequest(BaseModel):
+	"""Body of the master-wallet operation (ADR-0027)."""
+
+	network: str = Field(min_length=1, max_length=32)
+	xpub: str = Field(min_length=1, max_length=256)
+
+
+class ConfirmPaymentRequest(BaseModel):
+	"""Body of the manual payment confirmation: why it is settled by hand."""
+
+	reason: str = Field(min_length=1, max_length=500)
+
+
 @dataclass
 class OperatorContext:
 	"""Per-request registry engine and the resolved operator session."""
@@ -101,6 +121,16 @@ def register_operator_routes(
 			await engine.dispose()
 
 	RegistryDep = Depends(registry_engine)
+
+	async def billing_engine() -> AsyncIterator[AsyncEngine]:
+		"""Open the billing database for one request."""
+		engine = create_sqlite_engine(billing_db_path(data_dir))
+		try:
+			yield engine
+		finally:
+			await engine.dispose()
+
+	BillingDep = Depends(billing_engine)
 
 	async def operator_session(
 		request: Request, registry: AsyncEngine = RegistryDep
@@ -307,6 +337,88 @@ def register_operator_routes(
 			detail={"keys": sorted(body.values)},
 		)
 		return {"settings": await operator_ops.get_settings(ctx.registry)}
+
+	@app.get("/v1/operator/billing/wallets")
+	async def list_master_wallets(
+		ctx: OperatorContext = SessionDep, billing: AsyncEngine = BillingDep
+	) -> dict:
+		"""The owner's master wallets by payment network (ADR-0027)."""
+		wallets = await billing_store.list_master_wallets(billing)
+		return {
+			"wallets": [{"network": w.network, "xpub": w.xpub} for w in wallets],
+			"networks": sorted(billing_ops.supported_payment_networks()),
+		}
+
+	@app.put("/v1/operator/billing/wallets")
+	async def set_master_wallet(
+		body: MasterWalletRequest,
+		request: Request,
+		ctx: OperatorContext = MutatingSessionDep,
+		billing: AsyncEngine = BillingDep,
+	) -> dict:
+		"""Set the master wallet of one payment network; the xpub must be free."""
+		await billing_ops.attach_master_wallet(
+			billing, ctx.registry, network=body.network, xpub=body.xpub
+		)
+		await journal.event(
+			ctx.registry, "billing_master_wallet", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id,
+			client=request.client.host if request.client else "unknown",
+			detail={"network": body.network},
+		)
+		return {"ok": True}
+
+	@app.delete("/v1/operator/billing/wallets/{network}")
+	async def delete_master_wallet(
+		network: str,
+		request: Request,
+		ctx: OperatorContext = MutatingSessionDep,
+		billing: AsyncEngine = BillingDep,
+	) -> dict:
+		"""Drop the master wallet of one network; issued invoices keep their addresses."""
+		await billing_store.delete_master_wallet(billing, network)
+		await journal.event(
+			ctx.registry, "billing_master_wallet_removed", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id,
+			client=request.client.host if request.client else "unknown",
+			detail={"network": network},
+		)
+		return {"ok": True}
+
+	@app.get("/v1/operator/billing/invoices")
+	async def list_invoices(
+		ctx: OperatorContext = SessionDep,
+		billing: AsyncEngine = BillingDep,
+		state: str | None = None,
+	) -> dict:
+		"""Every user's invoices, newest period first; filterable by state."""
+		invoices = await billing_ops.panel_invoices(billing, ctx.registry, state=state)
+		return {"invoices": [vars(invoice) for invoice in invoices]}
+
+	@app.post("/v1/operator/billing/invoices/{invoice_id}/confirm")
+	async def confirm_invoice(
+		invoice_id: int,
+		body: ConfirmPaymentRequest,
+		request: Request,
+		ctx: OperatorContext = MutatingSessionDep,
+		billing: AsyncEngine = BillingDep,
+	) -> dict:
+		"""Settle an invoice by hand: money that arrived outside the gateway."""
+		user_id = await billing_ops.confirm_manually(
+			billing,
+			ctx.registry,
+			journal,
+			invoice_id=invoice_id,
+			operator_id=ctx.operator.operator_id,
+			reason=body.reason,
+		)
+		await journal.event(
+			ctx.registry, "billing_manual_payment", actor=ACTOR_OPERATOR,
+			outcome=OUTCOME_SUCCESS, operator_id=ctx.operator.operator_id,
+			client=request.client.host if request.client else "unknown",
+			detail={"invoice_id": invoice_id, "target_user_id": user_id, "reason": body.reason},
+		)
+		return {"ok": True}
 
 	@app.get("/v1/operator/watcher")
 	async def watcher(ctx: OperatorContext = SessionDep) -> dict:

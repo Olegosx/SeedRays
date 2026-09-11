@@ -42,9 +42,6 @@ as in the cabinet (the language switcher and the operator menu with sign-out).
 
 ## Invoices
 
-> Planned by [ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md); not
-> implemented yet.
-
 The section about the gateway owner's fee: what the users pay with, and what happens to
 those payments.
 
@@ -81,8 +78,10 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
 - **The gateway fee ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md))**: the
   switch (off by default — an installation must not start issuing invoices on its own), the
   rate in percent, the turnover threshold in USDT, the payment term in days, the
-  underpayment tolerance, the per-network list of turnover assets (contract addresses) and
-  the notification parameters. Planned; not implemented yet.
+  underpayment tolerance, the per-network lists of turnover assets and accepted payment
+  assets (JSON lists of contract addresses) and the notification parameters. The lists are
+  validated on save just like the numeric fields: a typo is refused outright, otherwise the
+  turnover would quietly stop being counted.
 - **Security journal ([ADR-0023](../20-architecture/decisions/0023-security-journal.md))**:
   the file size before rotation (MB) and the number of compressed archives kept;
   applied after a gateway restart. The journal itself is read on the server

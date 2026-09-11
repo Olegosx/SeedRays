@@ -214,6 +214,11 @@ POST /v1/operator/users/{id}/delete          body: {"username"} (the login retyp
 GET  /v1/operator/settings
 PUT  /v1/operator/settings   body: {"values": {key: value}}
 GET  /v1/operator/watcher    (per-network watcher cursors, read-only)
+GET    /v1/operator/billing/wallets
+PUT    /v1/operator/billing/wallets                body: {"network", "xpub"}
+DELETE /v1/operator/billing/wallets/{network}
+GET    /v1/operator/billing/invoices               [?state=]
+POST   /v1/operator/billing/invoices/{id}/confirm  body: {"reason"}
 ```
 
 - The panel session is its own HttpOnly/Secure cookie, separate from the cabinet; CSRF,
@@ -243,15 +248,7 @@ GET  /v1/user/billing            (invoices, details of the unpaid one, payment n
 PUT  /v1/user/billing/network    body: {"network"}
 ```
 
-The operator group:
-
-```
-GET    /v1/operator/billing/invoices                    [?status=&user_id=]
-POST   /v1/operator/billing/invoices/{id}/confirm       body: {"reason"}
-GET    /v1/operator/billing/wallets
-PUT    /v1/operator/billing/wallets                     body: {"network", "xpub"}
-DELETE /v1/operator/billing/wallets/{network}
-```
+The operator group is already implemented — its routes are listed above.
 
 - **Suspension for non-payment is already in force** (unlike the routes above) — an access
   state of its own, independent of the account status: an overdue invoice closes the
@@ -260,8 +257,12 @@ DELETE /v1/operator/billing/wallets/{network}
   way to pay. Access opens by itself as soon as the invoice is credited.
 - **Changing the payment network** is refused while an invoice is unpaid: the details of an
   issued invoice are immutable. Networks without the owner's master wallet are not offered.
-- **Manual payment confirmation** requires a reason, lands in the security journal and has
-  the same result as a credited payment.
+- **Manual payment confirmation** requires a reason (an empty one is refused with
+  `reason_required`), lands in the security journal and has the same result as a credited
+  payment, restored access included.
+- **The master wallet** is entered per network; the key is validated by deriving address
+  zero, a private one is refused with `private_key_rejected`, and one already taken anywhere
+  in the gateway with the neutral `invalid_xpub`.
 - The fee settings (rate, threshold, term, turnover assets, underpayment tolerance,
   notifications) get no routes of their own — they live in the operator's general set of
   settings, like everything else they manage while the gateway runs.

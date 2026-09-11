@@ -21,6 +21,7 @@ const MENU = [
 // Боковое меню панели оператора (см. docs, operator-panel).
 const MENU_OPERATOR = [
 	["users", "operator-users.html", "ti-users", "op.menuUsers"],
+	["billing", "operator-billing.html", "ti-receipt", "op.menuBilling"],
 	["settings", "operator-settings.html", "ti-settings", "op.menuSettings"],
 ];
 

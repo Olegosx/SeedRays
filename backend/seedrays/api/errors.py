@@ -56,6 +56,11 @@ _OPERATION_STATUS = {
 	"invalid_setting": 400,
 	"username_mismatch": 400,
 	"user_not_blocked": 409,
+	"unknown_network": 400,
+	"unknown_invoice": 404,
+	"invoice_already_paid": 409,
+	"reason_required": 400,
+	"invalid_state": 400,
 }
 
 

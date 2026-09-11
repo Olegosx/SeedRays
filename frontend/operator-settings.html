@@ -17,6 +17,8 @@
 		values: {},
 		secretsSet: {},
 		devMode: false,
+		feeOn: false,
+		assetNetworks: [],
 		watcherRows: [],
 		loadError: '',
 		error: '',
@@ -38,6 +40,14 @@
 					}
 				}
 				this.devMode = this.values['mail.dev_autoconfirm'] === '1';
+				this.feeOn = this.values['billing.enabled'] === '1';
+				// Списки активов задаются по сети: какие именно сети — видно
+				// по ключам, которые прислал сервер, своего списка фронт не держит.
+				this.assetNetworks = data.settings
+					.map((s) => s.key)
+					.filter((key) => key.startsWith('billing.assets.'))
+					.map((key) => key.slice('billing.assets.'.length))
+					.sort();
 				this.watcherRows = (await api('GET', '/v1/operator/watcher')).networks;
 			} catch (e) { this.loadError = this.$store.i18n.errorText(e); }
 		},
@@ -51,6 +61,10 @@
 			'watcher.overlap_minutes': 'nonNegative',
 			'seclog.rotate_mb': 'positiveInt',
 			'seclog.backups': 'positiveInt',
+			'billing.rate_percent': 'nonNegative',
+			'billing.threshold_usdt': 'nonNegative',
+			'billing.underpayment_tolerance_percent': 'nonNegative',
+			'billing.due_days': 'positiveInt',
 		},
 		validate() {
 			this.fieldErrors = {};
@@ -66,6 +80,20 @@
 					this.fieldErrors[key] = this.$store.i18n.t('op.numberNonNegative');
 				}
 			}
+			// Списки контрактов — JSON: проверяем тем же правилом, что сервер,
+			// чтобы опечатка подсвечивалась на месте, а не гасила расчёт молча.
+			for (const network of this.assetNetworks) {
+				for (const prefix of ['billing.assets.', 'billing.payment_assets.']) {
+					const key = prefix + network;
+					const raw = (this.values[key] || '').trim();
+					if (!raw) { continue; }
+					let parsed = null;
+					try { parsed = JSON.parse(raw); } catch (_e) { parsed = null; }
+					const ok = Array.isArray(parsed)
+						&& parsed.every((e) => typeof e === 'string' && e.trim());
+					if (!ok) { this.fieldErrors[key] = this.$store.i18n.t('op.contractListHint'); }
+				}
+			}
 			return Object.keys(this.fieldErrors).length === 0;
 		},
 		async save() {
@@ -75,6 +103,7 @@
 			try {
 				const { api } = await import('/js/api.js');
 				this.values['mail.dev_autoconfirm'] = this.devMode ? '1' : '';
+				this.values['billing.enabled'] = this.feeOn ? '1' : '';
 				const data = await api('PUT', '/v1/operator/settings', { values: this.values });
 				for (const setting of data.settings) {
 					if (setting.secret) {
@@ -221,6 +250,81 @@
 												placeholder="127.0.0.1, 173.245.48.0/20">
 										</div>
 										<small class="form-hint" x-text="$store.i18n.t('op.trustedProxiesHint')"></small>
+									</div>
+								</div>
+
+								<div class="card mb-3">
+									<div class="card-header">
+										<h3 class="card-title" x-text="$store.i18n.t('op.secFee')"></h3>
+									</div>
+									<div class="card-body">
+										<label class="form-check form-switch mb-3">
+											<input class="form-check-input" type="checkbox" x-model="feeOn">
+											<span class="form-check-label" x-text="$store.i18n.t('op.feeEnabled')"></span>
+										</label>
+										<div class="row">
+											<div class="col-md-6 mb-3">
+												<label class="form-label" x-text="$store.i18n.t('op.feeRateLabel')"></label>
+												<input type="text" class="form-control"
+													:class="fieldErrors['billing.rate_percent'] ? 'is-invalid' : ''"
+													x-model="values['billing.rate_percent']" placeholder="1.5">
+												<div class="invalid-feedback"
+													x-text="fieldErrors['billing.rate_percent']"></div>
+											</div>
+											<div class="col-md-6 mb-3">
+												<label class="form-label" x-text="$store.i18n.t('op.feeThresholdLabel')"></label>
+												<input type="text" class="form-control"
+													:class="fieldErrors['billing.threshold_usdt'] ? 'is-invalid' : ''"
+													x-model="values['billing.threshold_usdt']" placeholder="1000">
+												<div class="invalid-feedback"
+													x-text="fieldErrors['billing.threshold_usdt']"></div>
+											</div>
+											<div class="col-md-6 mb-3">
+												<label class="form-label" x-text="$store.i18n.t('op.feeDueDaysLabel')"></label>
+												<input type="text" class="form-control"
+													:class="fieldErrors['billing.due_days'] ? 'is-invalid' : ''"
+													x-model="values['billing.due_days']" placeholder="7">
+												<div class="invalid-feedback"
+													x-text="fieldErrors['billing.due_days']"></div>
+											</div>
+											<div class="col-md-6 mb-3">
+												<label class="form-label" x-text="$store.i18n.t('op.feeToleranceLabel')"></label>
+												<input type="text" class="form-control"
+													:class="fieldErrors['billing.underpayment_tolerance_percent'] ? 'is-invalid' : ''"
+													x-model="values['billing.underpayment_tolerance_percent']" placeholder="0">
+												<div class="invalid-feedback"
+													x-text="fieldErrors['billing.underpayment_tolerance_percent']"></div>
+											</div>
+										</div>
+										<template x-for="network in assetNetworks" :key="network">
+											<div class="mb-3">
+												<div class="mb-2">
+													<label class="form-label">
+														<span x-text="$store.i18n.t('op.feeTurnoverAssets')"></span>
+														<span class="text-secondary ms-1" x-text="network"></span>
+													</label>
+													<input type="text" class="form-control font-monospace"
+														:class="fieldErrors['billing.assets.' + network] ? 'is-invalid' : ''"
+														x-model="values['billing.assets.' + network]"
+														placeholder='["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"]'>
+													<div class="invalid-feedback"
+														x-text="fieldErrors['billing.assets.' + network]"></div>
+												</div>
+												<div>
+													<label class="form-label">
+														<span x-text="$store.i18n.t('op.feePaymentAssets')"></span>
+														<span class="text-secondary ms-1" x-text="network"></span>
+													</label>
+													<input type="text" class="form-control font-monospace"
+														:class="fieldErrors['billing.payment_assets.' + network] ? 'is-invalid' : ''"
+														x-model="values['billing.payment_assets.' + network]"
+														placeholder='["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"]'>
+													<div class="invalid-feedback"
+														x-text="fieldErrors['billing.payment_assets.' + network]"></div>
+												</div>
+											</div>
+										</template>
+										<small class="form-hint" x-text="$store.i18n.t('op.feeHint')"></small>
 									</div>
 								</div>
 

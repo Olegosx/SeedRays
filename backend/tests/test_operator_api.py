@@ -1,6 +1,7 @@
 """Operator API: sign-in, gateway users, settings, watcher status."""
 
 import asyncio
+from datetime import datetime
 import json
 from pathlib import Path
 
@@ -402,3 +403,134 @@ def test_numeric_settings_are_validated(tmp_path: Path) -> None:
 			await client.aclose()
 
 	asyncio.run(scenario())
+
+
+async def _operator_client_with_billing(tmp_path: Path):
+	"""A signed-in operator and a gateway whose billing database is ready."""
+	client, csrf = await _operator_client(tmp_path)
+	return client, csrf
+
+
+def test_operator_manages_master_wallets(tmp_path: Path) -> None:
+	"""The owner enters a master wallet per network and can take it back."""
+
+	async def scenario() -> tuple[list, list, int, str]:
+		from seedrays.families import Family
+		from seedrays.keygen.generate import account_xpub
+
+		client, csrf = await _operator_client_with_billing(tmp_path)
+		headers = {"X-CSRF-Token": csrf}
+		xpub = account_xpub(
+			"legal winner thank year wave sausage worth useful legal winner thank yellow",
+			Family.TRON,
+		)
+		put = await client.put(
+			"/v1/operator/billing/wallets",
+			json={"network": "tron", "xpub": xpub},
+			headers=headers,
+		)
+		assert put.status_code == 200, put.text
+		listed = (await client.get("/v1/operator/billing/wallets")).json()
+		# Приватный ключ отвергается так же, как у кошелька пользователя.
+		private = await client.put(
+			"/v1/operator/billing/wallets",
+			json={"network": "tron-nile", "xpub": "xprvBADKEY"},
+			headers=headers,
+		)
+		await client.delete("/v1/operator/billing/wallets/tron", headers=headers)
+		empty = (await client.get("/v1/operator/billing/wallets")).json()
+		await client.aclose()
+		return listed["wallets"], empty["wallets"], private.status_code, listed["networks"][0]
+
+	wallets, empty, private_status, first_network = asyncio.run(scenario())
+	assert [w["network"] for w in wallets] == ["tron"]
+	assert empty == []
+	assert private_status == 400
+	assert first_network in ("tron", "tron-nile")
+
+
+def test_operator_sees_invoices_and_confirms_payment(tmp_path: Path) -> None:
+	"""The panel lists invoices and settles one on the operator's word."""
+
+	async def scenario() -> tuple[dict, int, dict, int]:
+		import sys
+
+		sys.path.insert(0, "tests")
+		import test_billing as tb
+
+		from seedrays.orchestrator import billing
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, _address = await tb._gateway_with_invoice(tmp_path)
+		try:
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
+			client, csrf = await _operator_client_with_billing(tmp_path)
+			headers = {"X-CSRF-Token": csrf}
+			listed = (await client.get("/v1/operator/billing/invoices?state=overdue")).json()
+			invoice_id = listed["invoices"][0]["id"]
+			# Без причины подтверждение не проходит.
+			no_reason = await client.post(
+				f"/v1/operator/billing/invoices/{invoice_id}/confirm",
+				json={"reason": "   "},
+				headers=headers,
+			)
+			confirmed = await client.post(
+				f"/v1/operator/billing/invoices/{invoice_id}/confirm",
+				json={"reason": "paid by bank transfer"},
+				headers=headers,
+			)
+			assert confirmed.status_code == 200, confirmed.text
+			after = (await client.get("/v1/operator/billing/invoices")).json()
+			from seedrays.storage import registry as registry_ops
+
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			user = await registry_ops.get_user_by_login(registry, "alice")
+			await registry.dispose()
+			state = await billing_store.access_state(billing_engine, user.id)
+			await client.aclose()
+			return listed["invoices"][0], no_reason.status_code, after["invoices"][0], state
+		finally:
+			await billing_engine.dispose()
+
+	overdue, no_reason_status, settled, access = asyncio.run(scenario())
+	assert overdue["state"] == "overdue"
+	assert overdue["username"] == "alice"
+	assert overdue["amount"] == "15"
+	assert no_reason_status == 400, "причина обязательна"
+	assert settled["state"] == "paid"
+	assert settled["manual_reason"] == "paid by bank transfer"
+	assert access == "ok", "ручное подтверждение возвращает доступ"
+
+
+def test_billing_settings_are_validated(tmp_path: Path) -> None:
+	"""The fee fields join the settings page and refuse junk before storing."""
+
+	async def scenario() -> tuple[set, int, int]:
+		client, csrf = await _operator_client_with_billing(tmp_path)
+		headers = {"X-CSRF-Token": csrf}
+		keys = {s["key"] for s in (await client.get("/v1/operator/settings")).json()["settings"]}
+		bad_list = await client.put(
+			"/v1/operator/settings",
+			json={"values": {"billing.assets.tron": "not json"}},
+			headers=headers,
+		)
+		good = await client.put(
+			"/v1/operator/settings",
+			json={
+				"values": {
+					"billing.enabled": "1",
+					"billing.rate_percent": "1.5",
+					"billing.assets.tron": '["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"]',
+				}
+			},
+			headers=headers,
+		)
+		await client.aclose()
+		return keys, bad_list.status_code, good.status_code
+
+	keys, bad_status, good_status = asyncio.run(scenario())
+	assert "billing.rate_percent" in keys
+	assert "billing.assets.tron" in keys
+	assert "billing.payment_assets.tron-nile" in keys
+	assert bad_status == 400, "сломанный список контрактов отвергается целиком"
+	assert good_status == 200

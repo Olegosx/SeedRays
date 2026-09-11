@@ -521,3 +521,37 @@ async def invoice_exists(engine: AsyncEngine, *, user_id: int, period_start: dat
 			)
 		).first()
 	return row is not None
+
+
+async def get_invoice(engine: AsyncEngine, invoice_id: int):
+	"""One invoice row by id, or None."""
+	async with engine.connect() as conn:
+		return (await conn.execute(select(invoices).where(invoices.c.id == invoice_id))).first()
+
+
+async def mark_paid_manually(
+	engine: AsyncEngine,
+	*,
+	invoice_id: int,
+	operator_id: int,
+	reason: str,
+	paid_at: datetime,
+	amount: int,
+) -> None:
+	"""Settle an invoice by the operator's word: money that arrived outside the gateway.
+
+	The invoice carries who confirmed it and why — that is the only trace such
+	a payment leaves, since it has neither a transaction nor an asset behind it.
+	"""
+	async with engine.begin() as conn:
+		await conn.execute(
+			update(invoices)
+			.where(invoices.c.id == invoice_id)
+			.values(
+				state=STATE_PAID,
+				paid_at=paid_at,
+				credited=str(amount),
+				manual_operator_id=operator_id,
+				manual_reason=reason,
+			)
+		)

@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en" data-bs-theme="light" data-title-key="op.billingPageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script type="module" src="js/operator-guard.js"></script>
+	<script type="module" src="js/layout.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		wallets: [],
+		networks: [],
+		invoices: [],
+		filter: '',
+		newWallet: { network: '', xpub: '' },
+		walletError: '',
+		loadError: '',
+		error: '',
+		confirming: null,
+		reason: '',
+		async init() {
+			try {
+				const { api } = await import('/js/api.js');
+				const data = await api('GET', '/v1/operator/billing/wallets');
+				this.wallets = data.wallets;
+				this.networks = data.networks;
+				await this.loadInvoices();
+			} catch (e) { this.loadError = this.$store.i18n.errorText(e); }
+		},
+		async loadInvoices() {
+			const { api } = await import('/js/api.js');
+			const path = this.filter
+				? '/v1/operator/billing/invoices?state=' + this.filter
+				: '/v1/operator/billing/invoices';
+			this.invoices = (await api('GET', path)).invoices;
+		},
+		freeNetworks() {
+			return this.networks.filter((n) => !this.wallets.some((w) => w.network === n));
+		},
+		short(xpub) {
+			return xpub.slice(0, 12) + '…' + xpub.slice(-6);
+		},
+		async addWallet() {
+			this.walletError = '';
+			if (!this.newWallet.network || !this.newWallet.xpub.trim()) { return; }
+			try {
+				const { api } = await import('/js/api.js');
+				await api('PUT', '/v1/operator/billing/wallets', {
+					network: this.newWallet.network,
+					xpub: this.newWallet.xpub.trim(),
+				});
+				const data = await api('GET', '/v1/operator/billing/wallets');
+				this.wallets = data.wallets;
+				this.newWallet = { network: '', xpub: '' };
+			} catch (e) { this.walletError = this.$store.i18n.errorText(e); }
+		},
+		async removeWallet(network) {
+			this.walletError = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api('DELETE', '/v1/operator/billing/wallets/' + network);
+				this.wallets = this.wallets.filter((w) => w.network !== network);
+			} catch (e) { this.walletError = this.$store.i18n.errorText(e); }
+		},
+		openConfirm(invoice) {
+			this.confirming = invoice;
+			this.reason = '';
+			this.error = '';
+		},
+		async confirmPayment() {
+			if (!this.reason.trim()) { return; }
+			this.error = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api(
+					'POST',
+					'/v1/operator/billing/invoices/' + this.confirming.id + '/confirm',
+					{ reason: this.reason.trim() },
+				);
+				this.confirming = null;
+				await this.loadInvoices();
+			} catch (e) { this.error = this.$store.i18n.errorText(e); }
+		},
+		stateClass(state) {
+			return { paid: 'bg-green-lt', issued: 'bg-yellow-lt', overdue: 'bg-red-lt' }[state];
+		},
+		stateText(state) {
+			return this.$store.i18n.t('op.invoiceState' + state.charAt(0).toUpperCase() + state.slice(1));
+		},
+	}">
+		<div data-layout="op-sidebar" data-active="billing"></div>
+
+		<div class="page-wrapper">
+			<div data-layout="op-topbar"></div>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<h2 class="page-title" x-text="$store.i18n.t('op.billingTitle')"></h2>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<div class="alert alert-danger" x-show="loadError" x-text="loadError"></div>
+
+					<!-- Мастер-кошельки: из них выводятся адреса счетов -->
+					<div class="card mb-3">
+						<div class="card-header">
+							<h3 class="card-title" x-text="$store.i18n.t('op.masterWallets')"></h3>
+						</div>
+						<div class="card-body">
+							<p class="text-secondary" x-text="$store.i18n.t('op.masterWalletsHint')"></p>
+							<div class="alert alert-danger" x-show="walletError" x-text="walletError"></div>
+							<div class="table-responsive" x-show="wallets.length">
+								<table class="table table-vcenter">
+									<thead>
+										<tr>
+											<th x-text="$store.i18n.t('op.colNetwork')"></th>
+											<th x-text="$store.i18n.t('op.colXpub')"></th>
+											<th></th>
+										</tr>
+									</thead>
+									<tbody>
+										<template x-for="wallet in wallets" :key="wallet.network">
+											<tr>
+												<td x-text="wallet.network"></td>
+												<td class="font-monospace" x-text="short(wallet.xpub)"></td>
+												<td class="text-end">
+													<button class="btn btn-sm btn-ghost-danger"
+														@click="removeWallet(wallet.network)"
+														x-text="$store.i18n.t('op.remove')"></button>
+												</td>
+											</tr>
+										</template>
+									</tbody>
+								</table>
+							</div>
+							<form class="row g-2 align-items-end mt-2" @submit.prevent="addWallet()"
+								x-show="freeNetworks().length">
+								<div class="col-auto">
+									<label class="form-label" x-text="$store.i18n.t('op.colNetwork')"></label>
+									<select class="form-select" x-model="newWallet.network">
+										<option value="" x-text="$store.i18n.t('op.chooseNetwork')"></option>
+										<template x-for="network in freeNetworks()" :key="network">
+											<option :value="network" x-text="network"></option>
+										</template>
+									</select>
+								</div>
+								<div class="col">
+									<label class="form-label" x-text="$store.i18n.t('op.colXpub')"></label>
+									<input class="form-control font-monospace" x-model="newWallet.xpub"
+										:placeholder="$store.i18n.t('op.xpubPlaceholder')" autocomplete="off">
+								</div>
+								<div class="col-auto">
+									<button class="btn btn-primary" type="submit"
+										x-text="$store.i18n.t('op.add')"></button>
+								</div>
+							</form>
+						</div>
+					</div>
+
+					<!-- Счета всех пользователей -->
+					<div class="card">
+						<div class="card-header d-flex justify-content-between align-items-center">
+							<h3 class="card-title" x-text="$store.i18n.t('op.invoices')"></h3>
+							<select class="form-select w-auto" x-model="filter" @change="loadInvoices()">
+								<option value="" x-text="$store.i18n.t('op.invoiceStateAll')"></option>
+								<option value="issued" x-text="$store.i18n.t('op.invoiceStateIssued')"></option>
+								<option value="overdue" x-text="$store.i18n.t('op.invoiceStateOverdue')"></option>
+								<option value="paid" x-text="$store.i18n.t('op.invoiceStatePaid')"></option>
+							</select>
+						</div>
+						<div class="card-body">
+							<p class="text-secondary" x-show="!invoices.length"
+								x-text="$store.i18n.t('op.invoicesEmpty')"></p>
+							<div class="table-responsive" x-show="invoices.length">
+								<table class="table table-vcenter">
+									<thead>
+										<tr>
+											<th x-text="$store.i18n.t('op.colUser')"></th>
+											<th x-text="$store.i18n.t('op.colPeriod')"></th>
+											<th x-text="$store.i18n.t('op.colTurnover')"></th>
+											<th x-text="$store.i18n.t('op.colAmount')"></th>
+											<th x-text="$store.i18n.t('op.colCredited')"></th>
+											<th x-text="$store.i18n.t('op.colDue')"></th>
+											<th x-text="$store.i18n.t('op.colState')"></th>
+											<th></th>
+										</tr>
+									</thead>
+									<tbody>
+										<template x-for="invoice in invoices" :key="invoice.id">
+											<tr>
+												<td x-text="invoice.username"></td>
+												<td x-text="invoice.period"></td>
+												<td x-text="invoice.turnover"></td>
+												<td>
+													<span x-text="invoice.amount"></span>
+													<span class="text-secondary ms-1"
+														x-text="'(' + invoice.rate_percent + '%)'"></span>
+												</td>
+												<td x-text="invoice.credited"></td>
+												<td x-text="invoice.due_at"></td>
+												<td>
+													<span class="badge" :class="stateClass(invoice.state)"
+														x-text="stateText(invoice.state)"></span>
+													<div class="text-secondary small" x-show="invoice.manual_reason"
+														x-text="$store.i18n.t('op.manualMark') + ': ' + invoice.manual_reason"></div>
+												</td>
+												<td class="text-end">
+													<button class="btn btn-sm" x-show="invoice.state !== 'paid'"
+														@click="openConfirm(invoice)"
+														x-text="$store.i18n.t('op.confirmPayment')"></button>
+												</td>
+											</tr>
+										</template>
+									</tbody>
+								</table>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- Ручное подтверждение оплаты: причина обязательна -->
+		<!-- Видимость — классом, а не x-show: утилита d-block несёт !important и
+			перебила бы display:none, которым Alpine прячет элемент. -->
+		<div class="modal modal-blur" :class="{ 'd-block': confirming }" tabindex="-1"
+			style="background: rgba(0,0,0,.4)">
+			<div class="modal-dialog modal-dialog-centered" role="document">
+				<div class="modal-content">
+					<div class="modal-header">
+						<h5 class="modal-title" x-text="$store.i18n.t('op.confirmPaymentTitle')"></h5>
+						<button type="button" class="btn-close" @click="confirming = null"></button>
+					</div>
+					<div class="modal-body">
+						<p x-show="confirming"
+							x-text="$store.i18n.t('op.confirmPaymentBody')
+								.replace('{user}', confirming ? confirming.username : '')
+								.replace('{amount}', confirming ? confirming.amount : '')"></p>
+						<div class="mb-3">
+							<label class="form-label" x-text="$store.i18n.t('op.reasonLabel')"></label>
+							<input class="form-control" x-model="reason"
+								:placeholder="$store.i18n.t('op.reasonPlaceholder')">
+						</div>
+						<div class="alert alert-danger" x-show="error" x-text="error"></div>
+					</div>
+					<div class="modal-footer">
+						<button class="btn" @click="confirming = null"
+							x-text="$store.i18n.t('op.cancel')"></button>
+						<button class="btn btn-primary" :disabled="!reason.trim()" @click="confirmPayment()"
+							x-text="$store.i18n.t('op.confirm')"></button>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</body>
+</html>

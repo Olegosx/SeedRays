@@ -23,6 +23,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
+from seedrays.orchestrator import billing
 from seedrays.orchestrator.operations import OperationError
 from seedrays.orchestrator.seclog import ACTOR_OPERATOR, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import registry as registry_ops
@@ -57,6 +58,11 @@ USER_STATUS_BLOCKED = "blocked"
 NUMBER_NON_NEGATIVE = "non_negative"  # дробное >= 0
 NUMBER_POSITIVE_INT = "positive_int"  # целое >= 1
 
+# Поле со списком адресов контрактов (JSON). Проверяется по той же причине,
+# что и числовые: опечатка в списке означала бы «сохранено», а на деле —
+# молчаливо не считаемый оборот или непринятая оплата.
+KIND_CONTRACT_LIST = "contract_list"
+
 SETTING_FIELDS = (
 	{"key": "provider.trongrid.api_key", "secret": True},
 	{"key": "provider.trongrid.rate_per_sec", "secret": False, "number": NUMBER_NON_NEGATIVE},
@@ -69,12 +75,51 @@ SETTING_FIELDS = (
 	{"key": "mail.dev_autoconfirm", "secret": False},
 	{"key": "seclog.rotate_mb", "secret": False, "number": NUMBER_POSITIVE_INT},
 	{"key": "seclog.backups", "secret": False, "number": NUMBER_POSITIVE_INT},
+	{"key": billing.SETTING_ENABLED, "secret": False},
+	{"key": billing.SETTING_RATE, "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": billing.SETTING_THRESHOLD, "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": billing.SETTING_DUE_DAYS, "secret": False, "number": NUMBER_POSITIVE_INT},
+	{"key": billing.SETTING_TOLERANCE, "secret": False, "number": NUMBER_NON_NEGATIVE},
 )
+
+
+def setting_fields() -> tuple[dict, ...]:
+	"""Every field of the settings page: the fixed ones plus one pair per network.
+
+	Списки активов задаются по сети (`billing.assets.<сеть>` и
+	`billing.payment_assets.<сеть>`), поэтому набор полей зависит от того,
+	какие сети умеет шлюз, и строится из единой точки правды о них.
+	"""
+	fields = list(SETTING_FIELDS)
+	for network in sorted(chains.supported_networks()):
+		fields.append(
+			{
+				"key": f"{billing.SETTING_ASSETS_PREFIX}{network}",
+				"secret": False,
+				"kind": KIND_CONTRACT_LIST,
+			}
+		)
+		fields.append(
+			{
+				"key": f"{billing.SETTING_PAYMENT_ASSETS_PREFIX}{network}",
+				"secret": False,
+				"kind": KIND_CONTRACT_LIST,
+			}
+		)
+	return tuple(fields)
 _SECRET_KEYS = {field["key"] for field in SETTING_FIELDS if field["secret"]}
-_KNOWN_KEYS = {field["key"] for field in SETTING_FIELDS}
-_NUMBER_KINDS = {
-	field["key"]: field["number"] for field in SETTING_FIELDS if "number" in field
-}
+
+
+def _known_keys() -> set[str]:
+	return {field["key"] for field in setting_fields()}
+
+
+def _number_kinds() -> dict[str, str]:
+	return {f["key"]: f["number"] for f in setting_fields() if "number" in f}
+
+
+def _contract_list_keys() -> set[str]:
+	return {f["key"] for f in setting_fields() if f.get("kind") == KIND_CONTRACT_LIST}
 
 
 def _sha256(value: str) -> str:
@@ -434,7 +479,7 @@ async def restore_user(registry: AsyncEngine, data_dir: Path, *, archive_dir: Pa
 async def get_settings(registry: AsyncEngine) -> list[dict]:
 	"""The panel's settings: values for plain keys, only a flag for secrets."""
 	result = []
-	for field in SETTING_FIELDS:
+	for field in setting_fields():
 		value = await registry_ops.get_setting(registry, field["key"])
 		is_set = bool(value)
 		result.append(
@@ -448,13 +493,36 @@ async def get_settings(registry: AsyncEngine) -> list[dict]:
 	return result
 
 
+def _check_contract_list(key: str, value: str) -> None:
+	"""Validate a JSON list of contract addresses.
+
+	Raises:
+		OperationError: invalid_setting.
+	"""
+	try:
+		entries = json.loads(value)
+	except ValueError:
+		raise OperationError(
+			"invalid_setting",
+			f"setting {key!r} must be a JSON list of contract addresses, for example"
+			' ["TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"]',
+		) from None
+	if not isinstance(entries, list) or not all(
+		isinstance(entry, str) and entry.strip() for entry in entries
+	):
+		raise OperationError(
+			"invalid_setting",
+			f"setting {key!r} must be a JSON list of non-empty contract addresses",
+		)
+
+
 def _check_number(key: str, value: str) -> None:
 	"""Validate one numeric setting; blank passes as "cleared".
 
 	Raises:
 		OperationError: invalid_setting.
 	"""
-	kind = _NUMBER_KINDS[key]
+	kind = _number_kinds()[key]
 	if kind == NUMBER_POSITIVE_INT:
 		try:
 			number = int(value)
@@ -492,11 +560,16 @@ async def update_settings(registry: AsyncEngine, values: dict[str, str]) -> None
 	Raises:
 		OperationError: unknown_setting / invalid_setting.
 	"""
+	known = _known_keys()
+	numbers = _number_kinds()
+	contract_lists = _contract_list_keys()
 	for key, value in values.items():
-		if key not in _KNOWN_KEYS:
+		if key not in known:
 			raise OperationError("unknown_setting", f"unknown setting {key!r}")
-		if key in _NUMBER_KINDS and value.strip():
+		if key in numbers and value.strip():
 			_check_number(key, value.strip())
+		if key in contract_lists and value.strip():
+			_check_contract_list(key, value.strip())
 	for key, value in values.items():
 		if key in _SECRET_KEYS and value == "":
 			continue
