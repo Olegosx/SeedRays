@@ -22,7 +22,8 @@ from seedrays.api.user_api import register_user_routes
 from seedrays.mail.base import MailSender
 from seedrays.orchestrator import operations as ops
 from seedrays.orchestrator.seclog import SecurityLog
-from seedrays.storage.engine import create_sqlite_engine, registry_db_path
+from seedrays.storage import billing as billing_store
+from seedrays.storage.engine import billing_db_path, create_sqlite_engine, registry_db_path
 
 
 class AddressesRequest(BaseModel):
@@ -92,6 +93,23 @@ def create_app(
 			if ctx is None:
 				raise ApiError(401, "unauthorized", "unknown API key")
 			try:
+				# Просроченный счёт закрывает группу приложений целиком
+				# (ADR-0027): проверка стоит в зависимости, разбирающей
+				# вызывающего, поэтому маршрута без неё в группе не бывает.
+				billing = create_sqlite_engine(billing_db_path(data_dir))
+				try:
+					suspended = await billing_store.access_state(billing, ctx.user_id) == (
+						billing_store.ACCESS_SUSPENDED
+					)
+				finally:
+					await billing.dispose()
+				if suspended:
+					raise ApiError(
+						403,
+						"billing_suspended",
+						"the gateway fee invoice of this account is overdue;"
+						" the owner must settle it in the cabinet",
+					)
 				yield CallerContext(registry=registry, ctx=ctx)
 			finally:
 				await ctx.engine.dispose()

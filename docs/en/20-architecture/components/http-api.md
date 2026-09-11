@@ -253,11 +253,11 @@ PUT    /v1/operator/billing/wallets                     body: {"network", "xpub"
 DELETE /v1/operator/billing/wallets/{network}
 ```
 
-- **Suspension for non-payment** is an access state of its own, independent of the account
-  status: an overdue invoice closes the Application API entirely (refused with the
-  `billing_suspended` code) and every cabinet route except billing itself, reading
-  `/v1/user/me` and signing out — otherwise there would be no way to pay. Access opens by
-  itself as soon as the invoice is credited.
+- **Suspension for non-payment is already in force** (unlike the routes above) — an access
+  state of its own, independent of the account status: an overdue invoice closes the
+  Application API entirely (refused 403 with the `billing_suspended` code) and every cabinet
+  route except billing, reading `/v1/user/me` and signing out — otherwise there would be no
+  way to pay. Access opens by itself as soon as the invoice is credited.
 - **Changing the payment network** is refused while an invoice is unpaid: the details of an
   issued invoice are immutable. Networks without the owner's master wallet are not offered.
 - **Manual payment confirmation** requires a reason, lands in the security journal and has

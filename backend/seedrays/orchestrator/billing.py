@@ -28,6 +28,7 @@ from seedrays import chains
 from seedrays.chains.base import ChainDataSourceError, Direction, TransferStatus
 from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_address
 from seedrays.orchestrator.operations import OperationError
+from seedrays.orchestrator.seclog import ACTOR_SYSTEM, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import billing as billing_store
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_views
@@ -464,6 +465,7 @@ async def run_pass(data_dir: Path, *, now: datetime | None = None) -> PassStats:
 	"""
 	moment = now if now is not None else now_utc()
 	stats = PassStats()
+	journal = SecurityLog(data_dir)
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	billing = create_sqlite_engine(billing_db_path(data_dir))
 	try:
@@ -474,11 +476,87 @@ async def run_pass(data_dir: Path, *, now: datetime | None = None) -> PassStats:
 			)
 		else:
 			logger.info("billing pass: the fee is switched off, issuing nothing")
-		stats.invoices_overdue = len(await billing_store.mark_overdue(billing, now=moment))
+		overdue = await billing_store.mark_overdue(billing, now=moment)
+		stats.invoices_overdue = len(overdue)
+		for invoice_id, user_id in overdue:
+			await _suspend(
+				registry, billing, journal,
+				user_id=user_id, invoice_id=invoice_id, moment=moment,
+			)
 	finally:
+		journal.close()
 		await billing.dispose()
 		await registry.dispose()
 	return stats
+
+
+async def _suspend(
+	registry: AsyncEngine,
+	billing: AsyncEngine,
+	journal: SecurityLog,
+	*,
+	user_id: int,
+	invoice_id: int,
+	moment: datetime,
+) -> None:
+	"""Close the gateway to a user whose invoice went past its deadline.
+
+	The state is billing's own and is independent of the operator's block
+	(ADR-0027): lifting one never lifts the other.
+	"""
+	if await billing_store.access_state(billing, user_id) == billing_store.ACCESS_SUSPENDED:
+		return
+	await billing_store.set_access_state(
+		billing, user_id=user_id, state=billing_store.ACCESS_SUSPENDED, suspended_at=moment
+	)
+	logger.warning(
+		"user %d suspended: invoice %d is past its due date", user_id, invoice_id
+	)
+	await _journal(registry, journal, "billing_suspend", user_id=user_id, invoice_id=invoice_id)
+
+
+async def _restore(
+	registry: AsyncEngine,
+	billing: AsyncEngine,
+	journal: SecurityLog,
+	*,
+	user_id: int,
+	invoice_id: int,
+) -> None:
+	"""Let a user back in once nothing of theirs is awaiting money."""
+	if await billing_store.access_state(billing, user_id) != billing_store.ACCESS_SUSPENDED:
+		return
+	if await billing_store.has_unpaid(billing, user_id):
+		# Один счёт закрыт, но другой ещё ждёт денег — доступ не открываем.
+		return
+	await billing_store.set_access_state(
+		billing, user_id=user_id, state=billing_store.ACCESS_OK, suspended_at=None
+	)
+	logger.info("user %d restored: nothing is awaiting payment any more", user_id)
+	await _journal(registry, journal, "billing_restore", user_id=user_id, invoice_id=invoice_id)
+
+
+async def _journal(
+	registry: AsyncEngine,
+	journal: SecurityLog,
+	event: str,
+	*,
+	user_id: int,
+	invoice_id: int,
+) -> None:
+	"""Record one access change in the security journal (ADR-0023).
+
+	Приостановка и возврат доступа — события системы: их объявляет сам шлюз,
+	без участия оператора и без действия пользователя.
+	"""
+	await journal.event(
+		registry,
+		event,
+		actor=ACTOR_SYSTEM,
+		outcome=OUTCOME_SUCCESS,
+		user_id=user_id,
+		detail={"invoice_id": invoice_id},
+	)
 
 
 async def _issue_invoices(
@@ -664,6 +742,7 @@ async def check_payments(
 	moment = now if now is not None else now_utc()
 	factory = source_factory if source_factory is not None else chains.create_source
 	stats = CheckStats()
+	journal = SecurityLog(data_dir)
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	billing = create_sqlite_engine(billing_db_path(data_dir))
 	try:
@@ -720,11 +799,13 @@ async def check_payments(
 				billing, user_id=invoices_here[0].user_id, network=network, checked_at=moment
 			)
 			settled = await _credit_address(
-				billing, address=address, invoices_here=invoices_here,
+				registry, billing, journal,
+				address=address, invoices_here=invoices_here,
 				tolerance=tolerance, moment=moment,
 			)
 			stats.invoices_settled += settled
 	finally:
+		journal.close()
 		await billing.dispose()
 		await registry.dispose()
 	return stats
@@ -782,7 +863,9 @@ async def _record_transfer(
 
 
 async def _credit_address(
+	registry: AsyncEngine,
 	billing: AsyncEngine,
+	journal: SecurityLog,
 	*,
 	address: str,
 	invoices_here: list,
@@ -837,6 +920,12 @@ async def _credit_address(
 				"invoice %d settled: %s USDT credited",
 				invoice.id,
 				format_usdt(credited_total),
+			)
+			# Доступ возвращается сразу по зачёту, без участия оператора
+			# (ADR-0027) — и только если других долгов у пользователя нет.
+			await _restore(
+				registry, billing, journal,
+				user_id=invoice.user_id, invoice_id=invoice.id,
 			)
 		else:
 			logger.warning(

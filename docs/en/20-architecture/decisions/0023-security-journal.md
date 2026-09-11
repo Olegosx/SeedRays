@@ -39,7 +39,9 @@ writes of the watcher.
 - **Coverage**: user sign-in, registration, password reset (request and confirmation),
   password change, captcha and rate-limit refusals; operator sign-in and password
   change; operator administrative actions — user block/unblock, user password reset,
-  settings updates.
+  settings updates. Plus the gateway's own events: suspending access for non-payment
+  and restoring it once paid ([ADR-0027](0027-gateway-fee-billing.md)); their actor is
+  `system`, because neither a person nor a request stands behind them.
 
 ## Considered Alternatives
 

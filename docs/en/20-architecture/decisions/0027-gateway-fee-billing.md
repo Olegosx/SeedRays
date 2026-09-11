@@ -139,8 +139,14 @@ and their crediting, and the billing state of users.
   both are in order: otherwise an operator unblocking an offender would forgive their debt as a
   side effect, and paying the debt would lift the administrative block.
 - Passing the due date puts the user into **"payment only" mode**: the Application API refuses
-  calls, and the cabinet opens on the invoice page. Closing the cabinet entirely is not an
-  option — the user would lose access to the invoice and its details.
+  calls entirely, while the cabinet keeps the invoices, the account read and the sign-out
+  working. Closing the cabinet entirely is not an option — the user would lose access to the
+  invoice and its details.
+- The check lives in the **base dependency** of both route groups: a new route gets it by
+  default, and bypassing it takes a deliberate switch to the payment-mode dependency. The
+  check cannot be forgotten, only explicitly declined.
+- Suspension and restoration are written to the security journal as **system** events: the
+  gateway declares them itself, with no operator and no user action behind them.
 - **Observation of the user's addresses does not stop**: their payers keep paying, and a gap
   would tear a hole in the history and in the next period's turnover.
 - Access is restored **automatically** once the full amount is credited.

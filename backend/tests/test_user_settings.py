@@ -14,7 +14,7 @@ from seeding import (
 	enable_dev_mail,
 	signed_in_client,
 )
-from seedrays.storage.migrations.runner import upgrade_registry
+from seedrays.storage.migrations.runner import upgrade_all
 
 
 def test_secondary_email_lifecycle(tmp_path: Path) -> None:
@@ -69,7 +69,7 @@ def test_change_password_drops_other_sessions(tmp_path: Path) -> None:
 	"""The old password stops working; the second session dies, the current stays."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		app = create_app(tmp_path, mailer=None, captcha_cost=TEST_CAPTCHA_COST)
 		first = httpx.AsyncClient(

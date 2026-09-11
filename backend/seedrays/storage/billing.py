@@ -246,19 +246,63 @@ async def list_invoices(
 		return (await conn.execute(query)).all()
 
 
-async def mark_overdue(engine: AsyncEngine, *, now: datetime) -> list[int]:
+async def mark_overdue(engine: AsyncEngine, *, now: datetime) -> list[tuple[int, int]]:
 	"""Move issued invoices past their deadline into the overdue state.
 
 	Returns:
-		Ids of the invoices just moved — the caller suspends their users and
-		writes the journal lines.
+		``(invoice id, user id)`` pairs just moved — the caller suspends those
+		users and writes the journal lines.
 	"""
 	condition = (invoices.c.state == STATE_ISSUED, invoices.c.due_at < now)
 	async with engine.begin() as conn:
-		rows = (await conn.execute(select(invoices.c.id).where(*condition))).all()
+		rows = (
+			await conn.execute(select(invoices.c.id, invoices.c.user_id).where(*condition))
+		).all()
 		if rows:
 			await conn.execute(update(invoices).where(*condition).values(state=STATE_OVERDUE))
-	return [row.id for row in rows]
+	return [(row.id, row.user_id) for row in rows]
+
+
+async def has_unpaid(engine: AsyncEngine, user_id: int) -> bool:
+	"""Whether the user still has an invoice awaiting money."""
+	async with engine.connect() as conn:
+		row = (
+			await conn.execute(
+				select(invoices.c.id).where(
+					invoices.c.user_id == user_id,
+					invoices.c.state.in_((STATE_ISSUED, STATE_OVERDUE)),
+				)
+			)
+		).first()
+	return row is not None
+
+
+async def access_state(engine: AsyncEngine, user_id: int) -> str:
+	"""The user's billing access state; ``ok`` until something suspends them.
+
+	Read on every Application API call and every cabinet request, so it stays
+	a single point read by the primary key.
+	"""
+	async with engine.connect() as conn:
+		row = (
+			await conn.execute(
+				select(user_billing.c.state).where(user_billing.c.user_id == user_id)
+			)
+		).first()
+	return ACCESS_OK if row is None else row.state
+
+
+async def set_access_state(
+	engine: AsyncEngine, *, user_id: int, state: str, suspended_at: datetime | None
+) -> None:
+	"""Suspend the user for non-payment, or let them back in."""
+	async with engine.begin() as conn:
+		await upsert(
+			conn,
+			user_billing,
+			{"user_id": user_id},
+			{"state": state, "suspended_at": suspended_at},
+		)
 
 
 async def get_user_billing(engine: AsyncEngine, user_id: int):

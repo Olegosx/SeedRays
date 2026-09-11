@@ -14,7 +14,7 @@ from seeding import (
 	confirm_link,
 	signed_in_client,
 )
-from seedrays.storage.migrations.runner import upgrade_registry
+from seedrays.storage.migrations.runner import upgrade_all
 
 
 def _reset_token(mailer: FakeMailer) -> str:
@@ -131,7 +131,7 @@ def test_reset_requires_configured_mail(tmp_path: Path) -> None:
 	"""Without outgoing mail the reset refuses even in the development mode."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		transport = httpx.ASGITransport(
 			app=create_app(tmp_path, mailer=None, captcha_cost=TEST_CAPTCHA_COST)
 		)

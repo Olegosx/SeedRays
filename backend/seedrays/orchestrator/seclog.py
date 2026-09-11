@@ -38,6 +38,9 @@ LOG_FILENAME = "security.log"
 
 ACTOR_USER = "user"
 ACTOR_OPERATOR = "operator"
+# Событие, которое объявил сам шлюз: приостановка доступа за неуплату и
+# возврат доступа после оплаты происходят без участия человека.
+ACTOR_SYSTEM = "system"
 
 OUTCOME_SUCCESS = "success"
 

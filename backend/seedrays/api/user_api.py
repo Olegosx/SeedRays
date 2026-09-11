@@ -31,6 +31,7 @@ from seedrays.orchestrator import wallets as wallet_ops
 from seedrays.orchestrator.captcha import CaptchaGuard
 from seedrays.orchestrator.ratelimit import RateLimiter
 from seedrays.orchestrator.seclog import ACTOR_USER, OUTCOME_SUCCESS, SecurityLog
+from seedrays.storage import billing as billing_store
 from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import (
 	billing_db_path,
@@ -245,10 +246,25 @@ def register_user_routes(
 
 	RegistryDep = Depends(registry_engine)
 
-	async def session_user(
+	async def billing_engine() -> AsyncIterator[AsyncEngine]:
+		"""Open the billing database for one request."""
+		engine = create_sqlite_engine(billing_db_path(data_dir))
+		try:
+			yield engine
+		finally:
+			await engine.dispose()
+
+	BillingDep = Depends(billing_engine)
+
+	async def payment_session(
 		request: Request, registry: AsyncEngine = RegistryDep
 	) -> UserContext:
-		"""Authenticate the session cookie."""
+		"""Authenticate the session cookie, without the billing access check.
+
+		Маршруты, которые обязаны работать и у приостановленного за неуплату
+		пользователя: сам счёт, чтение учётной записи и выход. Иначе платить
+		было бы нечем и не за что (ADR-0027).
+		"""
 		token = request.cookies.get(SESSION_COOKIE)
 		if not token:
 			raise ApiError(401, "unauthorized", "sign in first")
@@ -257,7 +273,35 @@ def register_user_routes(
 			raise ApiError(401, "unauthorized", "the session is expired or unknown")
 		return UserContext(registry=registry, user=user, session_token=token)
 
+	PaymentSessionDep = Depends(payment_session)
+
+	async def session_user(
+		ctx: UserContext = PaymentSessionDep, billing: AsyncEngine = BillingDep
+	) -> UserContext:
+		"""Authenticate the session and refuse a user suspended for non-payment.
+
+		Проверка живёт в базовой зависимости сознательно: новый маршрут
+		кабинета получает её по умолчанию, а чтобы её обойти, нужно осознанно
+		взять зависимость оплаты. Забыть — нельзя, можно только отказаться.
+		"""
+		if await billing_store.access_state(billing, ctx.user.user_id) == (
+			billing_store.ACCESS_SUSPENDED
+		):
+			raise ApiError(
+				403,
+				"billing_suspended",
+				"the gateway fee invoice is overdue; settle it to restore access",
+			)
+		return ctx
+
 	SessionDep = Depends(session_user)
+
+	def _require_csrf(request: Request, ctx: UserContext) -> UserContext:
+		"""Сравнение токена — за постоянное время, чтобы не давать оракула."""
+		header_token = request.headers.get("X-CSRF-Token")
+		if not header_token or not hmac.compare_digest(header_token, ctx.user.csrf_token):
+			raise ApiError(403, "csrf", "the X-CSRF-Token header is missing or wrong")
+		return ctx
 
 	async def mutating_session(
 		request: Request, ctx: UserContext = SessionDep
@@ -266,15 +310,19 @@ def register_user_routes(
 
 		Каждый изменяющий маршрут объявляет эту зависимость и тем самым
 		защищён по построению (структурная граница ADR-0004): забыть
-		проверку, добавив маршрут, невозможно. Сравнение токена — за
-		постоянное время, чтобы не давать оракула по времени отклика.
+		проверку, добавив маршрут, невозможно.
 		"""
-		header_token = request.headers.get("X-CSRF-Token")
-		if not header_token or not hmac.compare_digest(header_token, ctx.user.csrf_token):
-			raise ApiError(403, "csrf", "the X-CSRF-Token header is missing or wrong")
-		return ctx
+		return _require_csrf(request, ctx)
 
 	MutatingSessionDep = Depends(mutating_session)
+
+	async def payment_mutating(
+		request: Request, ctx: UserContext = PaymentSessionDep
+	) -> UserContext:
+		"""CSRF check for the routes a suspended user must still be able to call."""
+		return _require_csrf(request, ctx)
+
+	PaymentMutatingDep = Depends(payment_mutating)
 
 	def _set_session_cookie(response: Response, signed: auth.SignedIn) -> None:
 		max_age = int((signed.expires_at - now_utc()).total_seconds())
@@ -446,7 +494,7 @@ def register_user_routes(
 
 	@app.post("/v1/user/logout")
 	async def logout(
-		response: Response, ctx: UserContext = MutatingSessionDep
+		response: Response, ctx: UserContext = PaymentMutatingDep
 	) -> dict:
 		"""Drop the session and clear the cookie."""
 		await auth.sign_out(ctx.registry, ctx.session_token)
@@ -465,16 +513,6 @@ def register_user_routes(
 			await engine.dispose()
 
 	UserEngineDep = Depends(user_engine)
-
-	async def billing_engine() -> AsyncIterator[AsyncEngine]:
-		"""Open the billing database for one request."""
-		engine = create_sqlite_engine(billing_db_path(data_dir))
-		try:
-			yield engine
-		finally:
-			await engine.dispose()
-
-	BillingDep = Depends(billing_engine)
 
 	def _wallet_json(wallet: wallet_ops.WalletInfo) -> dict:
 		return {
@@ -742,7 +780,7 @@ def register_user_routes(
 		}
 
 	@app.get("/v1/user/me")
-	async def me(ctx: UserContext = SessionDep) -> dict:
+	async def me(ctx: UserContext = PaymentSessionDep) -> dict:
 		"""The signed-in user, their emails and the CSRF token for this session."""
 		emails = await registry_ops.list_user_emails(ctx.registry, ctx.user.user_id)
 		return {

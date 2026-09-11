@@ -14,7 +14,7 @@ from seeding import (
 	confirm_link,
 	enable_dev_mail,
 )
-from seedrays.storage.migrations.runner import upgrade_registry
+from seedrays.storage.migrations.runner import upgrade_all
 
 GOOD_USER = {"username": "alice", "email": "Alice@Example.com", "password": "correct-horse"}
 
@@ -52,7 +52,7 @@ def test_register_confirm_login_me_logout(tmp_path: Path) -> None:
 	"""The full happy path with a configured mailer."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		mailer = FakeMailer()
 		async with _client(tmp_path, mailer) as client:
@@ -96,7 +96,7 @@ def test_register_without_mailer_autoconfirms(tmp_path: Path) -> None:
 	"""Development mode: no mail sender — the email is confirmed immediately."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			created = await _register(client, GOOD_USER)
@@ -112,7 +112,7 @@ def test_register_validation_and_duplicates(tmp_path: Path) -> None:
 	"""Bad usernames/emails/passwords and duplicates get machine codes."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			cases = [
@@ -140,7 +140,7 @@ def test_login_failures(tmp_path: Path) -> None:
 	"""Wrong password and unknown identifier answer identically."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			await _register(client, GOOD_USER)
@@ -156,7 +156,7 @@ def test_bad_confirmation_token_redirects_with_zero(tmp_path: Path) -> None:
 	"""An unknown token lands on the sign-in page with confirmed=0."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			response = await client.get("/v1/user/confirm-email?token=bogus")
@@ -170,7 +170,7 @@ def test_register_refused_without_mail_and_without_dev_mode(tmp_path: Path) -> N
 	"""No mail sender and no explicit dev mode — registration answers 503."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)  # флаг dev-почты сознательно НЕ включаем
+		upgrade_all(tmp_path)  # флаг dev-почты сознательно НЕ включаем
 		async with _client(tmp_path, None) as client:
 			response = await _register(client, GOOD_USER)
 			assert response.status_code == 503
@@ -183,7 +183,7 @@ def test_login_rate_limited(tmp_path: Path) -> None:
 	"""Password brute force hits the sliding-window limit with 429."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			await _register(client, GOOD_USER)
@@ -210,7 +210,7 @@ def test_session_cookie_is_secure_and_httponly(tmp_path: Path) -> None:
 	"""The session cookie never travels over plain HTTP and is JS-invisible."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			await _register(client, GOOD_USER)
@@ -227,7 +227,7 @@ def test_validation_error_does_not_echo_input(tmp_path: Path) -> None:
 	"""The 400 body names the field and the reason, never the submitted value."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		async with _client(tmp_path, None) as client:
 			secret = "very-secret-password-" + "x" * 1200  # длиннее лимита поля
 			response = await client.post(
@@ -253,7 +253,7 @@ def test_failed_registration_mail_is_compensated(tmp_path: Path) -> None:
 	"""A mail outage does not leave a dead half-registered account behind."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		async with _client(tmp_path, BrokenMailer()) as client:
 			failed = await _register(client, GOOD_USER)
 			assert failed.status_code == 502
@@ -272,7 +272,7 @@ def test_networks_and_families_come_from_backend(tmp_path: Path) -> None:
 	"""The cabinet's pickers read networks/families from the API, not from markup."""
 
 	async def scenario() -> None:
-		upgrade_registry(tmp_path)
+		upgrade_all(tmp_path)
 		await enable_dev_mail(tmp_path)
 		async with _client(tmp_path, None) as client:
 			refused = await client.get("/v1/user/networks")

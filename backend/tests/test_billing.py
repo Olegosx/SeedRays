@@ -806,3 +806,168 @@ def test_check_asks_for_confirmed_transfers_from_the_cursor(tmp_path: Path) -> N
 	assert calls[0][1] is None, "первый опрос идёт без нижней границы"
 	# Второй опрос продолжает от прошлой отметки с перекрытием.
 	assert calls[1][1] == datetime(2026, 10, 7) - billing.CHECK_OVERLAP
+
+
+async def _client_for_alice(tmp_path: Path):
+	"""A signed-in cabinet client of the user who owes an invoice."""
+	import httpx
+
+	from seedrays.api.app_api import create_app
+	from tests.seeding import TEST_CAPTCHA_COST, captcha_solution, enable_dev_mail
+
+	await enable_dev_mail(tmp_path)
+	transport = httpx.ASGITransport(
+		app=create_app(tmp_path, captcha_cost=TEST_CAPTCHA_COST)
+	)
+	client = httpx.AsyncClient(transport=transport, base_url="https://gw")
+	registry = create_sqlite_engine(registry_db_path(tmp_path))
+	# Пользователь уже создан посевом биллинга; даём ему пароль и почту для входа.
+	from seedrays.orchestrator import auth
+
+	user = await registry_ops.get_user_by_login(registry, "alice")
+	await registry_ops.set_user_password(registry, user.id, auth._hasher.hash("correct-horse"))
+	await registry_ops.add_user_email(
+		registry, user_id=user.id, address="a@example.com", is_primary=True,
+		confirm_token_hash=None, confirm_expires_at=None,
+		confirmed_at=datetime(2026, 9, 1),
+	)
+	await registry.dispose()
+	login = await client.post(
+		"/v1/user/login",
+		json={
+			"identifier": "alice",
+			"password": "correct-horse",
+			"captcha": await captcha_solution(client),
+		},
+	)
+	assert login.status_code == 200, login.text
+	return client, login.json()["csrf"]
+
+
+def test_overdue_invoice_closes_the_cabinet_except_payment(tmp_path: Path) -> None:
+	"""A suspended user keeps the account and sign-out routes, loses the rest."""
+
+	async def scenario() -> tuple[int, int, int, int]:
+		billing_engine, _address = await _gateway_with_invoice(tmp_path)
+		try:
+			client, csrf = await _client_for_alice(tmp_path)
+			before = await client.get("/v1/user/wallets")
+			# Срок оплаты — 12 октября; проход 20-го застаёт счёт просроченным.
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
+			wallets = await client.get("/v1/user/wallets")
+			me = await client.get("/v1/user/me")
+			logout = await client.post("/v1/user/logout", headers={"X-CSRF-Token": csrf})
+			await client.aclose()
+			return before.status_code, wallets.status_code, me.status_code, logout.status_code
+		finally:
+			await billing_engine.dispose()
+
+	before, wallets, me, logout = asyncio.run(scenario())
+	assert before == 200, "до просрочки кабинет открыт"
+	assert wallets == 403, "после просрочки обычные разделы закрыты"
+	assert me == 200, "чтение учётной записи остаётся доступным"
+	assert logout == 200, "выйти можно всегда"
+
+
+def test_overdue_invoice_closes_the_application_api(tmp_path: Path) -> None:
+	"""The application key of a suspended owner stops working, with a clear code."""
+
+	async def scenario() -> tuple[int, str, int]:
+		import httpx
+		from sqlalchemy import insert
+
+		from seedrays.api.app_api import create_app
+		from seedrays.orchestrator.operations import hash_api_key
+		from seedrays.storage import schema_registry, schema_user
+
+		billing_engine, _address = await _gateway_with_invoice(tmp_path)
+		try:
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			user = await registry_ops.get_user_by_login(registry, "alice")
+			key_hash = hash_api_key("app-key-0001")
+			async with registry.begin() as conn:
+				await conn.execute(
+					insert(schema_registry.api_keys).values(key_hash=key_hash, user_id=user.id)
+				)
+			await registry.dispose()
+			engine = create_sqlite_engine(user_db_path(tmp_path, user.directory))
+			async with engine.begin() as conn:
+				await conn.execute(
+					insert(schema_user.applications).values(name="shop", key_hash=key_hash)
+				)
+			await engine.dispose()
+
+			transport = httpx.ASGITransport(app=create_app(tmp_path))
+			client = httpx.AsyncClient(transport=transport, base_url="https://gw")
+			headers = {"X-API-Key": "app-key-0001"}
+			before = await client.get("/v1/app/users", headers=headers)
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
+			after = await client.get("/v1/app/users", headers=headers)
+			await client.aclose()
+			return before.status_code, after.json()["error"]["code"], after.status_code
+		finally:
+			await billing_engine.dispose()
+
+	before, code, status = asyncio.run(scenario())
+	assert before == 200
+	assert status == 403
+	assert code == "billing_suspended"
+
+
+def test_payment_restores_access_without_the_operator(tmp_path: Path) -> None:
+	"""Settling the invoice reopens the gateway in the same pass."""
+
+	async def scenario() -> tuple[str, str, int]:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			user = await registry_ops.get_user_by_login(registry, "alice")
+			await registry.dispose()
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
+			suspended = await billing_store.access_state(billing_engine, user.id)
+			source = FakePaymentSource({address: [_incoming(address, 15 * 10**6, txid="pay")]})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 21), source_factory=lambda n, k, i: source
+			)
+			restored = await billing_store.access_state(billing_engine, user.id)
+
+			client, _csrf = await _client_for_alice(tmp_path)
+			wallets = await client.get("/v1/user/wallets")
+			await client.aclose()
+			return suspended, restored, wallets.status_code
+		finally:
+			await billing_engine.dispose()
+
+	suspended, restored, wallets = asyncio.run(scenario())
+	assert suspended == "suspended"
+	assert restored == "ok"
+	assert wallets == 200, "после оплаты кабинет снова открыт"
+
+
+def test_access_stays_closed_while_another_invoice_is_unpaid(tmp_path: Path) -> None:
+	"""Settling one debt does not reopen the gateway while another one stands."""
+
+	async def scenario() -> str:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			user = await registry_ops.get_user_by_login(registry, "alice")
+			await registry.dispose()
+			# Второй счёт — за октябрь; оба остаются неоплаченными и просрочены.
+			await _record_october_turnover(tmp_path)
+			await billing.run_pass(tmp_path, now=datetime(2026, 11, 2))
+			await billing.run_pass(tmp_path, now=datetime(2026, 11, 20))
+			# Платёж ровно на один счёт.
+			source = FakePaymentSource({address: [_incoming(address, 15 * 10**6, txid="one")]})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 11, 21), source_factory=lambda n, k, i: source
+			)
+			return await billing_store.access_state(billing_engine, user.id)
+		finally:
+			await billing_engine.dispose()
+
+	assert asyncio.run(scenario()) == "suspended"

@@ -12,7 +12,7 @@ from seedrays.keygen.generate import account_xpub
 from seedrays.orchestrator.operations import OperationError
 from seedrays.orchestrator.operator import create_operator, restore_user
 from seedrays.storage.engine import archive_root, create_sqlite_engine, registry_db_path
-from seedrays.storage.migrations.runner import upgrade_registry
+from seedrays.storage.migrations.runner import upgrade_all
 from seeding import (
 	TEST_CAPTCHA_COST,
 	captcha_solution,
@@ -51,7 +51,7 @@ async def _user_login(
 
 async def _operator_client(data_dir: Path) -> tuple[httpx.AsyncClient, str]:
 	"""A client signed in as a fresh operator; returns (client, csrf)."""
-	upgrade_registry(data_dir)
+	upgrade_all(data_dir)
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	await create_operator(registry, login="boss", password="operator-pass")
 	await registry.dispose()
