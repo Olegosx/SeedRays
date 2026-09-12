@@ -62,9 +62,13 @@ emails, the xpub and API-key indexes, sessions).
   whole data directory.
 - Archives are kept indefinitely; pruning old ones is a manual owner decision
   (deliberately no automation).
-- SQLite reuses freed ids (the table has no AUTOINCREMENT), so the archive
-  subdirectory name gets a numeric suffix on a clash, and restoring also checks
-  that the id is free.
+- User ids are never handed out twice: the registry table carries AUTOINCREMENT, whose
+  high-water mark deleting rows does not lower. It has to be that way — the same number
+  identifies the person in the billing database and names the directory of their own
+  database, so reusing it handed the next person to register a stranger's suspension,
+  payment address and debt. The archive subdirectory name still gets a numeric suffix on
+  a clash and restoring still checks that the id is free: both guards cost nothing and
+  keep an archive made before this rule restorable.
 - The security journal keeps the deleted user's name and the archive name — the
   trace of the administrative action outlives the account itself.
 

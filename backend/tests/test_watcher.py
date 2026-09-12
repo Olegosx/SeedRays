@@ -431,6 +431,8 @@ def test_invalid_settings_degrade_to_defaults(tmp_path: Path) -> None:
 		await registry_ops.set_setting(registry, "watcher.overlap_minutes", "junk")
 		await registry_ops.set_setting(registry, "provider.trongrid.rate_per_sec", "fast")
 		await registry_ops.set_setting(registry, "watcher.scan_start", "not-a-date")
+		# Разбирается как число, но интервала из него не построить.
+		await registry_ops.set_setting(registry, "provider.trongrid.rate_per_sec", "nan")
 		await registry.dispose()
 
 		stats = await run_pass(

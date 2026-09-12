@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -89,10 +90,16 @@ async def read_float_setting(registry: AsyncEngine, key: str, default: float) ->
 	if not raw:
 		return default
 	try:
-		return float(raw)
+		value = float(raw)
 	except ValueError:
 		logger.error("invalid %s setting %r ignored, using %s", key, raw, default)
 		return default
+	# «nan» и «inf» разбираются как float, но интервал или перекрытие из них
+	# не построить: для этой политики они такие же битые, как буквы.
+	if not math.isfinite(value):
+		logger.error("invalid %s setting %r ignored, using %s", key, raw, default)
+		return default
+	return value
 
 
 async def read_datetime_setting(

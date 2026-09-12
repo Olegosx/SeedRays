@@ -414,13 +414,17 @@ def test_terms_are_off_by_default_and_degrade_on_junk(tmp_path: Path) -> None:
 			terms = await billing.read_terms(registry)
 			await registry_ops.set_setting(registry, billing.SETTING_RATE, "0")
 			zero_rate = await billing.read_terms(registry)
-			return default_off, terms, zero_rate
+			# Разбирается как Decimal, но арифметику прохода ломает.
+			await registry_ops.set_setting(registry, billing.SETTING_RATE, "nan")
+			not_a_number = await billing.read_terms(registry)
+			return default_off, terms, zero_rate, not_a_number
 		finally:
 			await registry.dispose()
 
-	default_off, terms, zero_rate = asyncio.run(scenario())
+	default_off, terms, zero_rate, not_a_number = asyncio.run(scenario())
 	assert default_off is None, "вознаграждение должно быть выключено по умолчанию"
 	assert zero_rate is None, "нулевая ставка — то же самое, что выключено"
+	assert not_a_number is None, "«nan» деградирует к умолчанию, то есть к нулю"
 	assert terms.rate_hundredths == 150
 	assert terms.rate_percent == "1.5"
 	assert terms.threshold == 100 * billing.MICRO_USDT
@@ -1326,3 +1330,43 @@ def test_the_full_amount_is_credited_without_leaving_dust(tmp_path: Path) -> Non
 	invoice = asyncio.run(scenario())
 	assert invoice.state == "paid"
 	assert invoice.credited == invoice.amount, "зачтена вся сумма счёта, без остатка"
+
+
+def test_a_new_user_inherits_nothing_from_a_deleted_one(tmp_path: Path) -> None:
+	"""The next user to register gets no trace of a deleted user's billing state.
+
+	Счета сознательно живут вне базы пользователя и переживают учётную
+	запись (ADR-0027). Переживать её не должен номер, который на них
+	указывает: иначе новый человек оказывается без доступа и, оплатив
+	показанный ему счёт, закрывает чужой долг.
+	"""
+
+	async def scenario() -> tuple[str, object]:
+		from seedrays.storage import billing as billing_store
+
+		upgrade_all(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		billing_engine = create_sqlite_engine(billing_db_path(tmp_path))
+		try:
+			await registry_ops.create_user(registry, tmp_path, "alice", "hash")
+			bob = await registry_ops.create_user(registry, tmp_path, "bob", "hash")
+			await billing_store.set_access_state(
+				billing_engine,
+				user_id=bob.id,
+				state=billing_store.ACCESS_SUSPENDED,
+				suspended_at=datetime(2026, 10, 20),
+			)
+			await registry_ops.delete_user_bundle(registry, bob.id)
+			carol = await registry_ops.create_user(registry, tmp_path, "carol", "hash")
+			state = await billing_store.access_state(billing_engine, carol.id)
+			address = await billing_store.get_invoice_address(
+				billing_engine, user_id=carol.id, network=PAY_NETWORK
+			)
+			return state, address
+		finally:
+			await billing_engine.dispose()
+			await registry.dispose()
+
+	state, address = asyncio.run(scenario())
+	assert state == "ok", "новый пользователь получил чужую приостановку доступа"
+	assert address is None, "новый пользователь получил чужой платёжный адрес"

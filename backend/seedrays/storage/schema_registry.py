@@ -20,6 +20,15 @@ from sqlalchemy import (
 
 metadata = MetaData()
 
+# Идентификатор пользователя опознаёт человека во всех трёх базах: он же
+# лежит в биллинге (состояние доступа, адрес счёта, счёт) и он же даёт имя
+# каталогу с базой пользователя. Поэтому он обязан быть невозвратным:
+# SQLite по умолчанию выдаёт освободившийся номер последнего удалённого
+# заново, и следующий зарегистрировавшийся получал вместе с ним чужую
+# приостановку доступа, чужой платёжный адрес и чужой счёт.
+# ``sqlite_autoincrement`` держит выданные номера в sqlite_sequence, который
+# при удалении строк не уменьшается; в PostgreSQL последовательности ведут
+# себя так же и без этого указания.
 users = Table(
 	"users",
 	metadata,
@@ -29,6 +38,7 @@ users = Table(
 	Column("status", String(16), nullable=False, server_default="active"),
 	Column("directory", String(255), nullable=False),
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+	sqlite_autoincrement=True,
 )
 
 operators = Table(

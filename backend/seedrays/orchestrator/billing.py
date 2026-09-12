@@ -237,6 +237,12 @@ def _decimal_setting(raw: str | None, default: Decimal, key: str) -> Decimal:
 	except InvalidOperation:
 		logger.error("invalid %s setting %r ignored, using %s", key, raw, default)
 		return default
+	# Decimal("nan") и Decimal("inf") разбираются без ошибки, а дальше
+	# роняют арифметику прохода: для политики «битое значение деградирует
+	# к умолчанию» они такие же битые, как буквы.
+	if not value.is_finite():
+		logger.error("invalid %s setting %r ignored, using %s", key, raw, default)
+		return default
 	if value < 0:
 		logger.error("setting %s must not be negative (%s); using %s", key, value, default)
 		return default

@@ -367,6 +367,11 @@ def test_numeric_settings_are_validated(tmp_path: Path) -> None:
 				# считался бы по одной ставке, а печатал другую.
 				("billing.rate_percent", "0.125"),
 				("billing.rate_percent", "-1"),
+				# Разбираются как числа, а сравнение с нулём их пропускает:
+				# nan ложен в любом сравнении, inf просто больше нуля.
+				("watcher.interval_seconds", "nan"),
+				("watcher.overlap_minutes", "inf"),
+				("billing.rate_percent", "nan"),
 			):
 				refused = await client.put(
 					"/v1/operator/settings",

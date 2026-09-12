@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import secrets
 from decimal import Decimal, InvalidOperation
@@ -417,8 +418,8 @@ async def delete_user(
 	bundle = await registry_ops.read_user_bundle(registry, user_id)
 	if bundle is None:
 		raise OperationError("unknown_user", f"user {user_id} does not exist")
-	# Имя каталога уникально даже при совпадении секунды и переиспользовании
-	# id пользователя (SQLite выдаёт освободившиеся id заново).
+	# Имя каталога уникально даже при совпадении секунды: суффикс остаётся
+	# страховкой для архивов, снятых до того, как id стали невозвратными.
 	base_name = f"{user.directory}-{now_utc():%Y%m%d-%H%M%S}"
 	archive_name = base_name
 	suffix = 2
@@ -565,7 +566,10 @@ def _check_number(key: str, value: str) -> None:
 		raise OperationError(
 			"invalid_setting", f"setting {key!r} must be a non-negative number"
 		) from None
-	if number < 0:
+	# «nan» и «inf» — разбираемые float, и сравнение с нулём их пропускает:
+	# nan ложен в любом сравнении, inf просто больше нуля. Читателю такое
+	# значение ломает арифметику, поэтому проверяется отдельно.
+	if not math.isfinite(number) or number < 0:
 		raise OperationError(
 			"invalid_setting", f"setting {key!r} must be a non-negative number"
 		)

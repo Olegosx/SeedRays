@@ -277,3 +277,29 @@ def test_record_transaction_rejects_invalid_domain_values(tmp_path: Path) -> Non
 			await engine.dispose()
 
 	asyncio.run(scenario())
+
+
+def test_a_user_id_is_never_handed_out_twice(tmp_path: Path) -> None:
+	"""Deleting the last user must not free their id for the next one.
+
+	Тот же номер опознаёт человека в базе биллинга и даёт имя каталогу с его
+	собственной базой. Пока номер выдавался заново, следующий
+	зарегистрировавшийся получал вместе с ним чужую приостановку доступа,
+	чужой платёжный адрес и чужой счёт (ADR-0024, ADR-0027).
+	"""
+
+	async def scenario() -> tuple[int, int, str]:
+		upgrade_registry(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		try:
+			await registry_ops.create_user(registry, tmp_path, "alice", "hash")
+			bob = await registry_ops.create_user(registry, tmp_path, "bob", "hash")
+			await registry_ops.delete_user_bundle(registry, bob.id)
+			carol = await registry_ops.create_user(registry, tmp_path, "carol", "hash")
+			return bob.id, carol.id, carol.directory
+		finally:
+			await registry.dispose()
+
+	bob_id, carol_id, carol_dir = asyncio.run(scenario())
+	assert carol_id != bob_id, "номер удалённого пользователя достался новому"
+	assert carol_dir == f"u{carol_id}", "каталог назван по собственному номеру"
