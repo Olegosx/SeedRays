@@ -166,13 +166,26 @@ and their crediting, and the billing state of users.
 - **Observation of the user's addresses does not stop**: their payers keep paying, and a gap
   would tear a hole in the history and in the next period's turnover.
 - Access is restored **automatically** once the full amount is credited.
+- **The access state is reconciled with the invoices, never driven by an event.** A pass
+  brings every user's state in line with what the invoices say right now: whoever holds an
+  overdue invoice is suspended, whoever has nothing awaiting money is let back in. Acting
+  on the rows one call happened to change would make any failure permanent — the invoice
+  is marked already, so the next pass would no longer see that user, and an overdue
+  invoice would sit beside an open gateway for good. The operator's manual confirmation
+  stays immediate: it is a synchronous action whose result the operator must see in the
+  answer, and the reconciliation confirms it afterwards.
 
 ### 7. The billing task
 
 A third background task under the same supervisor as the API server and the watcher
 ([ADR-0003](0003-single-process-supervised.md)). Once an hour it does two things in order:
 first it checks for payments (otherwise an invoice paid yesterday would have time to turn
-overdue), then it issues the invoices of the finished period and marks the overdue ones.
+overdue), then it issues the invoices of the finished period, marks the overdue ones and
+reconciles access. The payment check itself falls into two parts: polling the provider and
+storing what it reports, then crediting the payments the database already holds. The second
+part never depends on the outcome of the first — it touches no network — so an unreachable
+provider cannot leave money that arrived in advance uncredited and turn a paid invoice
+overdue.
 Issuing is not tied to a calendar day: a pass always bills the last period that has ended, so
 a gateway that was down on the first of the month issues at its next start. Repeats duplicate
 nothing — idempotency rests on the invoice key, not on the schedule.

@@ -277,6 +277,45 @@ async def has_unpaid(engine: AsyncEngine, user_id: int) -> bool:
 	return row is not None
 
 
+async def users_with_overdue(engine: AsyncEngine) -> list[tuple[int, int]]:
+	"""``(user id, invoice id)`` for every user holding an overdue invoice.
+
+	The work list of the access reconciliation: the access state is brought
+	in line with the state of the invoices, not with the rows one lucky call
+	happened to change. Otherwise a failure on the suspending step would
+	leave an overdue invoice beside an open gateway for good — the next pass
+	would no longer see that user, because the invoice is already marked.
+
+	Returns:
+		One pair per user, carrying their earliest overdue invoice (the one
+		named in the journal line).
+	"""
+	query = (
+		select(invoices.c.user_id, func.min(invoices.c.id).label("invoice_id"))
+		.where(invoices.c.state == STATE_OVERDUE)
+		.group_by(invoices.c.user_id)
+	)
+	async with engine.connect() as conn:
+		rows = (await conn.execute(query)).all()
+	return [(row.user_id, row.invoice_id) for row in rows]
+
+
+async def users_in_access_state(engine: AsyncEngine, state: str) -> list[int]:
+	"""Ids of the users the billing access state currently holds in ``state``.
+
+	The other half of the reconciliation: a user kept out while nothing of
+	theirs awaits money any more has to be let back in, whatever went wrong
+	on the pass that was supposed to do it.
+	"""
+	async with engine.connect() as conn:
+		rows = (
+			await conn.execute(
+				select(user_billing.c.user_id).where(user_billing.c.state == state)
+			)
+		).all()
+	return [row.user_id for row in rows]
+
+
 async def access_state(engine: AsyncEngine, user_id: int) -> str:
 	"""The user's billing access state; ``ok`` until something suspends them.
 

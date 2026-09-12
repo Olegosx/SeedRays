@@ -481,16 +481,61 @@ async def run_pass(data_dir: Path, *, now: datetime | None = None) -> PassStats:
 			logger.info("the gateway fee is switched off: no invoices are issued")
 		overdue = await billing_store.mark_overdue(billing, now=moment)
 		stats.invoices_overdue = len(overdue)
-		for invoice_id, user_id in overdue:
-			await _suspend(
-				registry, billing, journal,
-				user_id=user_id, invoice_id=invoice_id, moment=moment,
-			)
+		await _reconcile_access(registry, billing, journal, moment=moment)
 	finally:
 		journal.close()
 		await billing.dispose()
 		await registry.dispose()
 	return stats
+
+
+async def _reconcile_access(
+	registry: AsyncEngine,
+	billing: AsyncEngine,
+	journal: SecurityLog,
+	*,
+	moment: datetime,
+) -> None:
+	"""Bring every user's access state in line with the state of their invoices.
+
+	Сверка, а не реакция на событие. Прежде доступ закрывался только тем,
+	чьи счета перевёл в просрочку именно этот вызов, — и сбой на шаге
+	приостановки оставлял просроченный счёт при открытом доступе навсегда:
+	следующий проход этих пользователей уже не видел, потому что счёт был
+	помечен. Теперь состояние выводится из того, что сейчас в базе, поэтому
+	любой сбой лечится следующим проходом.
+
+	Обе операции смены состояния идемпотентны — молчат, когда менять нечего,
+	— так что повторные проходы не засоряют ни журнал безопасности, ни лог.
+	Сбой на одном пользователе не уносит остальных (ADR-0007): его состояние
+	приведёт следующая сверка.
+
+	Args:
+		registry: The registry engine (the journal writes user logins).
+		billing: The billing database engine.
+		journal: The security journal.
+		moment: The moment the pass runs at.
+	"""
+	debtors = await billing_store.users_with_overdue(billing)
+	owing = {user_id for user_id, _ in debtors}
+	for user_id, invoice_id in debtors:
+		try:
+			await _suspend(
+				registry, billing, journal,
+				user_id=user_id, invoice_id=invoice_id, moment=moment,
+			)
+		except SQLAlchemyError:
+			logger.exception("user %d: suspending for non-payment failed", user_id)
+	for user_id in await billing_store.users_in_access_state(
+		billing, billing_store.ACCESS_SUSPENDED
+	):
+		if user_id in owing:
+			continue
+		try:
+			# Внутри проверяется, что ничего больше не ждёт денег.
+			await _restore(registry, billing, journal, user_id=user_id)
+		except SQLAlchemyError:
+			logger.exception("user %d: restoring access failed", user_id)
 
 
 async def _suspend(
@@ -524,7 +569,7 @@ async def _restore(
 	journal: SecurityLog,
 	*,
 	user_id: int,
-	invoice_id: int,
+	invoice_id: int | None = None,
 ) -> None:
 	"""Let a user back in once nothing of theirs is awaiting money."""
 	if await billing_store.access_state(billing, user_id) != billing_store.ACCESS_SUSPENDED:
@@ -545,7 +590,7 @@ async def _journal(
 	event: str,
 	*,
 	user_id: int,
-	invoice_id: int,
+	invoice_id: int | None,
 ) -> None:
 	"""Record one access change in the security journal (ADR-0023).
 
@@ -767,6 +812,8 @@ async def check_payments(
 		for invoice in unpaid:
 			by_address.setdefault((invoice.network, invoice.address), []).append(invoice)
 
+		# Первая фаза: опросить провайдера и записать наблюдения. Сбой по
+		# адресу законно откладывает его до следующего прохода.
 		for (network, address), invoices_here in sorted(by_address.items()):
 			accepted = await _payment_assets(registry, network)
 			try:
@@ -797,12 +844,18 @@ async def check_payments(
 			await billing_store.set_address_checked(
 				billing, user_id=invoices_here[0].user_id, network=network, checked_at=moment
 			)
-			settled = await _credit_address(
+
+		# Вторая фаза: разнести по счетам платежи, которые уже лежат в
+		# базе. Операция чисто внутрибазовая, и от исхода опроса она не
+		# зависит — иначе деньги, пришедшие авансом в прошлом периоде,
+		# не закрыли бы счёт, пока провайдер недоступен, и пользователь
+		# получил бы просрочку при деньгах, давно лежащих у владельца.
+		for (network, address), invoices_here in sorted(by_address.items()):
+			stats.invoices_settled += await _credit_address(
 				registry, billing, journal,
 				address=address, invoices_here=invoices_here,
 				tolerance=tolerance, moment=moment,
 			)
-			stats.invoices_settled += settled
 	finally:
 		journal.close()
 		await billing.dispose()
@@ -975,12 +1028,6 @@ async def _credit_address(
 				"invoice %d settled: %s USDT credited",
 				invoice.id,
 				format_usdt(credited_total),
-			)
-			# Доступ возвращается сразу по зачёту, без участия оператора
-			# (ADR-0027) — и только если других долгов у пользователя нет.
-			await _restore(
-				registry, billing, journal,
-				user_id=invoice.user_id, invoice_id=invoice.id,
 			)
 		else:
 			logger.warning(

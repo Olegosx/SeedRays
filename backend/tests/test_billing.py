@@ -649,14 +649,20 @@ PAY_USDT = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t"
 class FakePaymentSource:
 	"""A chain source that answers the billing check with canned transfers."""
 
-	def __init__(self, transfers_by_address: dict[str, list]) -> None:
+	def __init__(self, transfers_by_address: dict[str, list], *, failing: bool = False) -> None:
 		self.network = PAY_NETWORK
 		self._transfers = transfers_by_address
+		# Недоступный провайдер: опрос отказывает, база при этом цела.
+		self._failing = failing
 		self.calls: list[tuple[str, object, object]] = []
 		self.closed = False
 
 	async def transfers(self, address, since=None, only_confirmed=None):
 		self.calls.append((address, since, only_confirmed))
+		if self._failing:
+			from seedrays.chains.base import ChainDataSourceError
+
+			raise ChainDataSourceError("fake: the provider is unreachable")
 		return list(self._transfers.get(address, []))
 
 	async def aclose(self) -> None:
@@ -991,7 +997,12 @@ def test_overdue_invoice_closes_the_application_api(tmp_path: Path) -> None:
 
 
 def test_payment_restores_access_without_the_operator(tmp_path: Path) -> None:
-	"""Settling the invoice reopens the gateway in the same pass."""
+	"""Settling the invoice reopens the gateway in the same pass.
+
+	Проход — это проверка платежей и следом сверка состояний, ровно как их
+	вызывает часовой цикл: доступ приводится в соответствие состоянию
+	счетов одной точкой, а не побочным эффектом зачёта.
+	"""
 
 	async def scenario() -> tuple[str, str, int]:
 		from seedrays.storage import billing as billing_store
@@ -1007,6 +1018,7 @@ def test_payment_restores_access_without_the_operator(tmp_path: Path) -> None:
 			await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 21), source_factory=lambda n, k, i: source
 			)
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 21))
 			restored = await billing_store.access_state(billing_engine, user.id)
 
 			client, _csrf = await _client_for_alice(tmp_path)
@@ -1141,3 +1153,108 @@ def test_payment_is_valued_by_the_catalog_not_by_the_answer(tmp_path: Path) -> N
 
 	invoice = asyncio.run(scenario())
 	assert invoice.credited == str(15 * 10**6), "оценка по каталогу, а не по ответу"
+
+
+def test_credit_survives_an_unreachable_provider(tmp_path: Path) -> None:
+	"""Money already in the database is credited even when the poll fails.
+
+	Иначе переплата прошлого периода не закрыла бы новый счёт, пока
+	провайдер недоступен, и пользователь получил бы просрочку при деньгах,
+	давно лежащих у владельца шлюза.
+	"""
+
+	async def scenario() -> object:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			# Деньги пришли раньше и уже записаны — зачесть их можно, не
+			# спрашивая провайдера ни о чём.
+			await billing_store.record_payment(
+				billing_engine,
+				network=PAY_NETWORK,
+				address=address,
+				txid="paid-earlier",
+				asset_id=1,
+				amount=15 * 10**6,
+				value=15 * 10**6,
+				tx_time=datetime(2026, 10, 6),
+				finalized_at=datetime(2026, 10, 6),
+			)
+			unreachable = FakePaymentSource({}, failing=True)
+			await billing.check_payments(
+				tmp_path,
+				now=datetime(2026, 10, 7),
+				source_factory=lambda n, k, i: unreachable,
+			)
+			return (await billing_store.list_invoices(billing_engine))[0]
+		finally:
+			await billing_engine.dispose()
+
+	invoice = asyncio.run(scenario())
+	assert invoice.state == "paid", "зачёт не должен зависеть от доступности провайдера"
+
+
+def test_access_is_reconciled_with_the_invoices_not_with_one_lucky_step(
+	tmp_path: Path,
+) -> None:
+	"""An overdue invoice closes the gateway on any later pass, not only on the one
+	that marked it.
+
+	Прежде доступ закрывался только тем, чьи счета перевёл в просрочку
+	именно этот вызов: сбой на шаге приостановки оставлял просроченный счёт
+	при открытом доступе навсегда.
+	"""
+
+	async def scenario() -> str:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, _address = await _gateway_with_invoice(tmp_path)
+		try:
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			user = await registry_ops.get_user_by_login(registry, "alice")
+			await registry.dispose()
+			# Счёт уже просрочен, а доступ открыт — состояние после сбоя.
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
+			await billing_store.set_access_state(
+				billing_engine,
+				user_id=user.id,
+				state=billing_store.ACCESS_OK,
+				suspended_at=None,
+			)
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 21))
+			return await billing_store.access_state(billing_engine, user.id)
+		finally:
+			await billing_engine.dispose()
+
+	assert asyncio.run(scenario()) == "suspended"
+
+
+def test_a_stale_suspension_is_lifted_by_the_reconciliation(tmp_path: Path) -> None:
+	"""A user kept out while nothing awaits money is let back in by the next pass."""
+
+	async def scenario() -> str:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			user = await registry_ops.get_user_by_login(registry, "alice")
+			await registry.dispose()
+			source = FakePaymentSource({address: [_incoming(address, 15 * 10**6, txid="pay")]})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			# Счёт оплачен, но доступ остался закрытым — состояние после сбоя.
+			await billing_store.set_access_state(
+				billing_engine,
+				user_id=user.id,
+				state=billing_store.ACCESS_SUSPENDED,
+				suspended_at=datetime(2026, 10, 6),
+			)
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 8))
+			return await billing_store.access_state(billing_engine, user.id)
+		finally:
+			await billing_engine.dispose()
+
+	assert asyncio.run(scenario()) == "ok"
