@@ -20,7 +20,7 @@ from seedrays.families import Family
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_apps, user_store, user_views, user_wallets
 from seedrays.storage.engine import create_sqlite_engine, user_db_path
-from seedrays.storage.user_store import HISTORY_STATUS_FILTERS, classify_transaction
+from seedrays.storage.user_store import API_STATUS_ALL, HISTORY_STATUS_FILTERS, classify_transaction
 
 DEFAULT_PAGE_LIMIT = 10
 
@@ -384,7 +384,7 @@ async def get_history(
 		if info is None or not _asset_matches(info, asset):
 			continue
 		api_status = classify_transaction(row.status, row.balance_applied_at)
-		if status != "all" and api_status != status:
+		if status != API_STATUS_ALL and api_status != status:
 			continue
 		result.append(
 			{

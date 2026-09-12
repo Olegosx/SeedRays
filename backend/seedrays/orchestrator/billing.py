@@ -17,7 +17,7 @@ import json
 import logging
 from calendar import monthrange
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 from seedrays import chains
 from seedrays.chains.base import ChainDataSourceError, Direction, TransferStatus
 from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_address
+from seedrays.orchestrator.money import format_amount
 from seedrays.orchestrator.operations import OperationError
 from seedrays.orchestrator.seclog import ACTOR_SYSTEM, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import billing as billing_store
@@ -36,6 +37,7 @@ from seedrays.storage.registry import KIND_NATIVE, KIND_TOKEN
 from seedrays.storage.engine import (
 	billing_db_path,
 	create_sqlite_engine,
+	naive_utc,
 	now_utc,
 	registry_db_path,
 	user_db_path,
@@ -121,10 +123,7 @@ def to_micro_usdt(amount: int, decimals: int) -> int:
 
 def format_usdt(micro: int) -> str:
 	"""An exact decimal string of a micro-USDT amount, trailing zeros trimmed."""
-	sign = "-" if micro < 0 else ""
-	whole, fraction = divmod(abs(micro), MICRO_USDT)
-	tail = str(fraction).rjust(USDT_DECIMALS, "0").rstrip("0")
-	return f"{sign}{whole}.{tail}" if tail else f"{sign}{whole}"
+	return format_amount(micro, USDT_DECIMALS)
 
 
 async def _turnover_contracts(registry: AsyncEngine, network: str) -> set[str]:
@@ -436,6 +435,10 @@ async def payment_network(billing: AsyncEngine, user_id: int) -> str:
 class PassStats:
 	"""Outcome of one billing pass."""
 
+	# Пользователи, у которых оборот периода дал ненулевую комиссию, — то есть
+	# те, кому счёт причитается. Раскладывается на три части: фактически
+	# выставленные счета, случаи «выставлять некуда» и уже выставленные ранее
+	# периоды (повторный проход их пропускает).
 	users_billed: int = 0
 	invoices_issued: int = 0
 	invoices_overdue: int = 0
@@ -475,7 +478,7 @@ async def run_pass(data_dir: Path, *, now: datetime | None = None) -> PassStats:
 				registry, billing, data_dir, moment=moment, terms=terms, stats=stats
 			)
 		else:
-			logger.info("billing pass: the fee is switched off, issuing nothing")
+			logger.info("the gateway fee is switched off: no invoices are issued")
 		overdue = await billing_store.mark_overdue(billing, now=moment)
 		stats.invoices_overdue = len(overdue)
 		for invoice_id, user_id in overdue:
@@ -839,7 +842,7 @@ async def _record_transfer(
 		asset_id=asset.id,
 		amount=transfer.amount,
 		value=value,
-		tx_time=_naive(transfer.timestamp),
+		tx_time=naive_utc(transfer.timestamp),
 		finalized_at=moment,
 	)
 	if not recorded:
@@ -935,13 +938,6 @@ async def _credit_address(
 				format_usdt(invoice.amount),
 			)
 	return settled
-
-
-def _naive(moment: datetime | None) -> datetime | None:
-	"""Provider times are aware UTC; the storage layer keeps naive UTC."""
-	if moment is None:
-		return None
-	return moment.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 @dataclass(frozen=True)

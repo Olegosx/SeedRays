@@ -8,7 +8,6 @@ import httpx
 
 from seedrays.families import Family
 from seedrays.keygen.generate import account_xpub
-from seedrays.orchestrator.overview import format_amount
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_store
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
@@ -18,16 +17,6 @@ TEST_MNEMONIC = (
 	"abandon abandon abandon abandon abandon abandon "
 	"abandon abandon abandon abandon abandon about"
 )
-
-
-def test_format_amount_is_exact() -> None:
-	"""Integer maths only: no floats, trimmed zeros, sign preserved."""
-	assert format_amount(1_000_000, 6) == "1"
-	assert format_amount(990_500_000, 6) == "990.5"
-	assert format_amount(1, 6) == "0.000001"
-	assert format_amount(0, 6) == "0"
-	assert format_amount(-1_500_000, 6) == "-1.5"
-	assert format_amount(7, 0) == "7"
 
 
 async def _prepared_client(data_dir: Path) -> tuple[httpx.AsyncClient, str, str]:

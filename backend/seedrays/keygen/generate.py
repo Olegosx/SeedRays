@@ -63,8 +63,10 @@ def account_xpub(mnemonic: str, family: Family, passphrase: str = "") -> str:
 	try:
 		seed = Bip39SeedGenerator(mnemonic).Generate(passphrase)
 	# У исключений bip_utils нет общей базы — граница библиотеки конвертирует
-	# всё в ValueError; саму фразу в сообщение не включаем (это секрет).
-	except Exception as exc:
-		raise ValueError("the mnemonic is not a valid BIP39 phrase") from exc
+	# всё в ValueError. Причину НЕ сохраняем (`from None`): на пути определения
+	# языка библиотека кладёт в сообщение саму фразу, и через __cause__ она
+	# попала бы в трассировку, то есть в журнал (модель угроз запрещает).
+	except Exception:
+		raise ValueError("the mnemonic is not a valid BIP39 phrase") from None
 	account = Bip44.FromSeed(seed, BIP44_COINS[family]).Purpose().Coin().Account(0)
 	return account.PublicKey().ToExtended()

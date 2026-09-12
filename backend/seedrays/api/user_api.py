@@ -742,7 +742,7 @@ def register_user_routes(
 		network: str | None = None,
 		asset: str | None = None,
 		status: str = "all",
-		limit: Annotated[int, Query(ge=0)] = overview_ops.HISTORY_LIMIT_DEFAULT,
+		limit: Annotated[int, Query(ge=0)] = overview_ops.DEFAULT_HISTORY_LIMIT,
 		cursor: str | None = None,
 	) -> dict:
 		"""Incoming operations, filterable; ``cursor`` continues the previous page."""

@@ -182,7 +182,7 @@ export const en = {
 	"op.menuSettings": "Settings",
 	"op.usersPageTitle": "Users — SeedRays",
 	"op.usersTitle": "Gateway users",
-	"op.colUser": "Name",
+	"op.colName": "Name",
 	"op.colEmails": "Emails",
 	"op.colStatus": "Status",
 	"op.colWallets": "Wallets",

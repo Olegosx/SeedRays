@@ -184,7 +184,7 @@ export const ru = {
 	"op.menuSettings": "Настройки",
 	"op.usersPageTitle": "Пользователи — SeedRays",
 	"op.usersTitle": "Пользователи шлюза",
-	"op.colUser": "Имя",
+	"op.colName": "Имя",
 	"op.colEmails": "Почты",
 	"op.colStatus": "Статус",
 	"op.colWallets": "Кошельки",

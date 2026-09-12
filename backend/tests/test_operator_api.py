@@ -325,6 +325,17 @@ def test_operator_settings_and_watcher(tmp_path: Path) -> None:
 				"provider.trongrid.api_key"
 			]["set"] is True
 
+			# Пробел — то же «не менять»: значение нормализуется до проверки,
+			# иначе поле из одних пробелов стирало бы сохранённый ключ.
+			spaced = await client.put(
+				"/v1/operator/settings",
+				json={"values": {"provider.trongrid.api_key": "   "}},
+				headers=headers,
+			)
+			assert {s["key"]: s for s in spaced.json()["settings"]}[
+				"provider.trongrid.api_key"
+			]["set"] is True
+
 			bad = await client.put(
 				"/v1/operator/settings",
 				json={"values": {"nonsense.key": "1"}},
@@ -405,12 +416,6 @@ def test_numeric_settings_are_validated(tmp_path: Path) -> None:
 	asyncio.run(scenario())
 
 
-async def _operator_client_with_billing(tmp_path: Path):
-	"""A signed-in operator and a gateway whose billing database is ready."""
-	client, csrf = await _operator_client(tmp_path)
-	return client, csrf
-
-
 def test_operator_manages_master_wallets(tmp_path: Path) -> None:
 	"""The owner enters a master wallet per network and can take it back."""
 
@@ -418,7 +423,7 @@ def test_operator_manages_master_wallets(tmp_path: Path) -> None:
 		from seedrays.families import Family
 		from seedrays.keygen.generate import account_xpub
 
-		client, csrf = await _operator_client_with_billing(tmp_path)
+		client, csrf = await _operator_client(tmp_path)
 		headers = {"X-CSRF-Token": csrf}
 		xpub = account_xpub(
 			"legal winner thank year wave sausage worth useful legal winner thank yellow",
@@ -464,7 +469,7 @@ def test_operator_sees_invoices_and_confirms_payment(tmp_path: Path) -> None:
 		billing_engine, _address = await tb._gateway_with_invoice(tmp_path)
 		try:
 			await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
-			client, csrf = await _operator_client_with_billing(tmp_path)
+			client, csrf = await _operator_client(tmp_path)
 			headers = {"X-CSRF-Token": csrf}
 			listed = (await client.get("/v1/operator/billing/invoices?state=overdue")).json()
 			invoice_id = listed["invoices"][0]["id"]
@@ -506,7 +511,7 @@ def test_billing_settings_are_validated(tmp_path: Path) -> None:
 	"""The fee fields join the settings page and refuse junk before storing."""
 
 	async def scenario() -> tuple[set, int, int]:
-		client, csrf = await _operator_client_with_billing(tmp_path)
+		client, csrf = await _operator_client(tmp_path)
 		headers = {"X-CSRF-Token": csrf}
 		keys = {s["key"] for s in (await client.get("/v1/operator/settings")).json()["settings"]}
 		bad_list = await client.put(

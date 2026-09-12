@@ -1,7 +1,8 @@
 """Database engine management: file layout, async engines, SQLite pragmas.
 
 Also the storage layer's time convention: every datetime stored in the
-databases is naive UTC, produced by :func:`now_utc`.
+databases is naive UTC — :func:`now_utc` for «сейчас», :func:`naive_utc`
+для приведения времени, пришедшего от внешнего источника.
 """
 
 from __future__ import annotations
@@ -17,6 +18,21 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 def now_utc() -> datetime:
 	"""Naive UTC "now" — the single time convention of the storage layer."""
 	return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def naive_utc(moment: datetime | None) -> datetime | None:
+	"""Convert an aware datetime (a provider's) to the layer's naive UTC.
+
+	Args:
+		moment: Aware or naive datetime; None passes through.
+
+	Returns:
+		The same moment as naive UTC, or None.
+	"""
+	if moment is None:
+		return None
+	return moment.astimezone(timezone.utc).replace(tzinfo=None)
+
 
 REGISTRY_DB_FILENAME = "registry.db"
 USER_DB_FILENAME = "user.db"
@@ -42,6 +58,11 @@ def billing_db_path(data_dir: Path) -> Path:
 def users_root(data_dir: Path) -> Path:
 	"""Root directory holding one subdirectory per user."""
 	return data_dir / USERS_DIR_NAME
+
+
+def user_dir_name(user_id: int) -> str:
+	"""Directory name of a user by registry id — the layout's naming rule."""
+	return f"u{user_id}"
 
 
 def user_db_path(data_dir: Path, directory: str) -> Path:

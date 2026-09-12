@@ -17,7 +17,7 @@ from sqlalchemy import delete, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from seedrays.storage.engine import unique_violation, upsert, user_db_path
+from seedrays.storage.engine import unique_violation, upsert, user_db_path, user_dir_name
 from seedrays.storage.migrations.runner import upgrade_user_db
 from seedrays.storage.schema_registry import (
 	api_keys,
@@ -73,7 +73,7 @@ async def create_user(
 				raise  # иная ошибка целостности — не «логин занят»
 			raise ValueError(f"login already taken: {login!r}") from exc
 		user_id = result.inserted_primary_key[0]
-		directory = f"u{user_id}"
+		directory = user_dir_name(user_id)
 		await conn.execute(update(users).where(users.c.id == user_id).values(directory=directory))
 
 	db_path = user_db_path(data_dir, directory)

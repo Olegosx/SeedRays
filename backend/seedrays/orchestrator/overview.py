@@ -12,24 +12,15 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from seedrays.orchestrator.money import format_amount
 from seedrays.orchestrator.operations import OperationError
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_views
-from seedrays.storage.user_store import HISTORY_STATUS_FILTERS, classify_transaction
+from seedrays.storage.user_store import API_STATUS_ALL, HISTORY_STATUS_FILTERS, classify_transaction
 
-HISTORY_LIMIT_DEFAULT = 50
+DEFAULT_HISTORY_LIMIT = 50
 # Размер блока «последние операции» на дашборде.
-OVERVIEW_RECENT_LIMIT = 5
-
-
-def format_amount(minimal_units: int, decimals: int) -> str:
-	"""An exact decimal string from minimal units; trailing zeros trimmed."""
-	if decimals <= 0:
-		return str(minimal_units)
-	sign = "-" if minimal_units < 0 else ""
-	whole, fraction = divmod(abs(minimal_units), 10**decimals)
-	tail = str(fraction).rjust(decimals, "0").rstrip("0")
-	return f"{sign}{whole}.{tail}" if tail else f"{sign}{whole}"
+DEFAULT_RECENT_LIMIT = 5
 
 
 async def _asset_infos(registry: AsyncEngine, asset_ids: set[int]) -> dict[int, dict]:
@@ -89,8 +80,8 @@ async def history(
 	wallet_id: int | None = None,
 	network: str | None = None,
 	asset: str | None = None,
-	status: str = "all",
-	limit: int = HISTORY_LIMIT_DEFAULT,
+	status: str = API_STATUS_ALL,
+	limit: int = DEFAULT_HISTORY_LIMIT,
 	cursor: tuple[int, int] | None = None,
 ) -> HistoryPage:
 	"""Incoming operations across every wallet, newest first, page by page.
@@ -137,7 +128,7 @@ async def history(
 			continue
 		if asset is not None and entry.asset != asset:
 			continue
-		if status != "all" and entry.status != status:
+		if status != API_STATUS_ALL and entry.status != status:
 			continue
 		result.append(entry)
 		if limit and len(result) >= limit:
@@ -190,7 +181,7 @@ async def overview(engine: AsyncEngine, registry: AsyncEngine) -> Overview:
 		)
 	receipts.sort(key=lambda r: (r["network"], r["asset"]))
 
-	recent = await history(engine, registry, limit=OVERVIEW_RECENT_LIMIT)
+	recent = await history(engine, registry, limit=DEFAULT_RECENT_LIMIT)
 	return Overview(
 		wallets=wallet_count,
 		applications=app_count,

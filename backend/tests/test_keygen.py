@@ -4,6 +4,8 @@ Vector source: trezor/python-mnemonic vectors.json (the reference BIP39
 implementation); seeds there are computed with passphrase "TREZOR".
 """
 
+import traceback
+
 import pytest
 from bip_utils import Bip39MnemonicGenerator, Bip39SeedGenerator
 
@@ -62,3 +64,20 @@ def test_account_xpub_deterministic_and_family_specific() -> None:
 	assert tron == account_xpub(mnemonic, Family.TRON)
 	assert tron != account_xpub(mnemonic, Family.EVM)
 	assert tron != account_xpub(mnemonic, Family.TRON, passphrase="x")
+
+
+def test_invalid_mnemonic_never_leaks_the_phrase() -> None:
+	"""Neither the message nor the exception chain may carry the phrase.
+
+	Библиотека BIP39 на пути определения языка кладёт фразу целиком в текст
+	своей ошибки; сохранись она в ``__cause__``, сид попал бы в трассировку,
+	то есть в журнал — модель угроз это запрещает.
+	"""
+	phrase = "qqqq wwww eeee rrrr tttt yyyy uuuu iiii oooo pppp aaaa ssss"
+	with pytest.raises(ValueError) as caught:
+		account_xpub(phrase, Family.TRON)
+
+	assert phrase not in str(caught.value)
+	cause = caught.value.__cause__
+	assert cause is None, "причина не сохраняется: она несёт саму фразу"
+	assert phrase not in "".join(traceback.format_exception(caught.value))

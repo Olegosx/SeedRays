@@ -28,18 +28,20 @@ from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_store
 from seedrays.storage.registry import KIND_NATIVE, KIND_TOKEN
 from seedrays.storage.user_store import DIRECTION_IN, DIRECTION_OUT
-from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
+from seedrays.storage.engine import (
+	create_sqlite_engine,
+	naive_utc,
+	registry_db_path,
+	user_db_path,
+)
 
 logger = logging.getLogger(__name__)
 
 # Ключи настроек (реестр, ADR-0016). Доступ к провайдеру — общий ресурс шлюза,
 # поэтому его ключи живут в слое цепочек, а не здесь.
-SETTING_API_KEY = chains.SETTING_API_KEY
-SETTING_RATE = chains.SETTING_RATE
 SETTING_OVERLAP = "watcher.overlap_minutes"
 SETTING_SCAN_START = "watcher.scan_start"
 
-DEFAULT_RATE_PER_SEC = chains.DEFAULT_RATE_PER_SEC
 DEFAULT_OVERLAP_MINUTES = 10
 # Предохранитель на догон нативного сканирования за один проход (~1 час цепочки TRON).
 MAX_BLOCKS_PER_PASS = 1200
@@ -54,13 +56,6 @@ SourceFactory = Callable[[str, str | None, float], ChainDataSource]
 def _default_source_factory(network: str, api_key: str | None, interval: float) -> ChainDataSource:
 	"""Create the real data source for a network."""
 	return chains.create_source(network, api_key=api_key, request_interval=interval)
-
-
-def _naive_utc(moment: datetime | None) -> datetime | None:
-	"""Convert an aware datetime to naive UTC for database storage."""
-	if moment is None:
-		return None
-	return moment.astimezone(timezone.utc).replace(tzinfo=None)
 
 
 def _aware_utc(moment: datetime) -> datetime:
@@ -137,8 +132,8 @@ async def run_pass(
 	try:
 		# Ключ провайдера — только из настроек реестра (ADR-0016);
 		# вносится оператором через панель.
-		api_key = await registry_ops.get_setting(registry, SETTING_API_KEY)
-		rate = await read_float_setting(registry, SETTING_RATE, DEFAULT_RATE_PER_SEC)
+		api_key = await registry_ops.get_setting(registry, chains.SETTING_API_KEY)
+		rate = await read_float_setting(registry, chains.SETTING_RATE, chains.DEFAULT_RATE_PER_SEC)
 		interval = 1.0 / rate if rate > 0 else 0.0
 		overlap = timedelta(
 			minutes=await read_float_setting(registry, SETTING_OVERLAP, DEFAULT_OVERLAP_MINUTES)
@@ -268,7 +263,7 @@ async def _scan_network(
 			confirmed,
 			addresses,
 			registry,
-			finalized_at=_naive_utc(pass_started),
+			finalized_at=naive_utc(pass_started),
 			failed_engines=failed_engines,
 		)
 
@@ -299,7 +294,7 @@ async def _scan_network(
 					)
 					deleted += 1
 				applied += await user_store.apply_finalized(
-					engine, asset_ids=asset_ids, applied_at=_naive_utc(pass_started)
+					engine, asset_ids=asset_ids, applied_at=naive_utc(pass_started)
 				)
 			except SQLAlchemyError:
 				# Сбой базы одного владельца не срывает проход по остальным
@@ -314,7 +309,7 @@ async def _scan_network(
 			registry,
 			network,
 			last_block=scanned_final,
-			last_scan_at=_naive_utc(pass_started if token_caught_up else token_until),
+			last_scan_at=naive_utc(pass_started if token_caught_up else token_until),
 		)
 
 		# Фаза 2: предпросмотр зоны выше границы финальности — чтобы платёж
@@ -413,7 +408,7 @@ async def _record_transfers(
 					direction=direction,
 					amount=transfer.amount,
 					block_number=transfer.block_number,
-					tx_time=_naive_utc(transfer.timestamp),
+					tx_time=naive_utc(transfer.timestamp),
 					status=transfer.status.value,
 					event_index=transfer.event_index,
 					finalized_at=finalized_at,

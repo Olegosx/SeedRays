@@ -313,12 +313,6 @@ async def get_user_billing(engine: AsyncEngine, user_id: int):
 		).first()
 
 
-async def set_payment_network(engine: AsyncEngine, *, user_id: int, network: str) -> None:
-	"""Store the user's payment network choice."""
-	async with engine.begin() as conn:
-		await upsert(conn, user_billing, {"user_id": user_id}, {"network": network})
-
-
 @dataclass(frozen=True)
 class UnpaidInvoice:
 	"""An invoice awaiting payment, with the address it is paid to."""

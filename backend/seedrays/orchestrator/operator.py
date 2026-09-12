@@ -107,7 +107,10 @@ def setting_fields() -> tuple[dict, ...]:
 			}
 		)
 	return tuple(fields)
-_SECRET_KEYS = {field["key"] for field in SETTING_FIELDS if field["secret"]}
+
+
+def _secret_keys() -> set[str]:
+	return {field["key"] for field in setting_fields() if field["secret"]}
 
 
 def _known_keys() -> set[str]:
@@ -563,17 +566,22 @@ async def update_settings(registry: AsyncEngine, values: dict[str, str]) -> None
 	known = _known_keys()
 	numbers = _number_kinds()
 	contract_lists = _contract_list_keys()
-	for key, value in values.items():
+	secrets_keys = _secret_keys()
+	# Значение нормализуется один раз: проверка «пустое секретное поле —
+	# оставить как есть» и запись обязаны смотреть на одно и то же, иначе
+	# поле из одних пробелов стирает сохранённый ключ.
+	cleaned = {key: value.strip() for key, value in values.items()}
+	for key, value in cleaned.items():
 		if key not in known:
 			raise OperationError("unknown_setting", f"unknown setting {key!r}")
-		if key in numbers and value.strip():
-			_check_number(key, value.strip())
-		if key in contract_lists and value.strip():
-			_check_contract_list(key, value.strip())
-	for key, value in values.items():
-		if key in _SECRET_KEYS and value == "":
+		if key in numbers and value:
+			_check_number(key, value)
+		if key in contract_lists and value:
+			_check_contract_list(key, value)
+	for key, value in cleaned.items():
+		if key in secrets_keys and value == "":
 			continue
-		await registry_ops.set_setting(registry, key, value.strip())
+		await registry_ops.set_setting(registry, key, value)
 
 
 async def watcher_status(registry: AsyncEngine) -> list[dict]:
