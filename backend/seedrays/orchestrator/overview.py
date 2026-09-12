@@ -8,6 +8,7 @@ layer (ADR-0006); status semantics come from its single point of truth.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -18,6 +19,8 @@ from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_views
 from seedrays.storage.user_store import API_STATUS_ALL, HISTORY_STATUS_FILTERS, classify_transaction
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_HISTORY_LIMIT = 50
 # Размер блока «последние операции» на дашборде.
 DEFAULT_RECENT_LIMIT = 5
@@ -26,6 +29,16 @@ DEFAULT_RECENT_LIMIT = 5
 async def _asset_infos(registry: AsyncEngine, asset_ids: set[int]) -> dict[int, dict]:
 	"""asset id → the fields the cabinet screens need."""
 	records = await registry_ops.get_assets_by_ids(registry, asset_ids)
+	# Описание актива берётся из общего реестра, а строки — из базы
+	# владельца: разъехаться они могут при восстановлении данных из
+	# разновременных копий. Без этой записи строка просто исчезла бы
+	# из ответа, молча уменьшив показанную сумму поступлений.
+	missing = asset_ids - records.keys()
+	if missing:
+		logger.warning(
+			"assets %s are absent from the registry catalog; their rows are left out",
+			sorted(missing),
+		)
 	return {
 		asset_id: {
 			"network": record.network,

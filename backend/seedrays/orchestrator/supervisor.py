@@ -90,6 +90,15 @@ async def _supervised(
 		except asyncio.CancelledError:
 			logger.info("%s stopped", name)
 			raise
+		except SystemExit as exc:
+			# uvicorn при неудачной привязке сокета не бросает исключение, а
+			# вызывает sys.exit — это SystemExit, и мимо `except Exception`
+			# он уходил в цикл событий, забирая с собой весь процесс: watcher
+			# и биллинг умирали из-за занятого порта, а надзор молчал.
+			# Порт обычно освобождается сам за секунды, поэтому это отказ
+			# компонента, а не шлюза: наблюдение за деньгами важнее
+			# доступности кабинета (ADR-0003).
+			logger.error("%s exited with code %s, restarting", name, exc.code)
 		except Exception:
 			logger.exception("%s crashed, restarting", name)
 		# Пауза перед перезапуском, прерываемая остановкой шлюза.

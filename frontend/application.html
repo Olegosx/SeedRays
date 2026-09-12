@@ -195,10 +195,18 @@
 		},
 		copyFailed: false,
 		copyKey() {
-			// Буфер может быть недоступен: молчать нельзя — ключ одноразовый.
-			navigator.clipboard.writeText(this.newKey)
-				.then(() => { this.copied = true; this.copyFailed = false; })
-				.catch(() => { this.copyFailed = true; });
+			// Буфер обмена существует только в защищённом контексте (HTTPS или
+			// localhost): по обычному HTTP обращение к нему падает сразу, а не
+			// отклонённым обещанием, и прежний .catch этого не видел — кнопка
+			// молчала. Ключ показан один раз, поэтому исход обязан быть виден;
+			// выделить его мышью из поля можно в любом случае.
+			try {
+				navigator.clipboard.writeText(this.newKey)
+					.then(() => { this.copied = true; this.copyFailed = false; })
+					.catch(() => { this.copyFailed = true; });
+			} catch (_e) {
+				this.copyFailed = true;
+			}
 		},
 		init() {
 			this.appId = new URLSearchParams(location.search).get('id');

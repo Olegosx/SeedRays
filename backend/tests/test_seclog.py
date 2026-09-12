@@ -157,3 +157,45 @@ def test_operator_actions_are_journaled(tmp_path: Path) -> None:
 			await client.aclose()
 
 	asyncio.run(scenario())
+
+
+def test_a_broken_password_hash_is_not_recorded_as_a_wrong_password(tmp_path: Path) -> None:
+	"""An unusable stored hash gets its own outcome, not the user's blame.
+
+	Под исходом «неверный пароль» повреждение хеша выглядит как
+	забывчивость пользователя: оператор, разбирая жалобу «не могу войти»,
+	настоящей причины не увидит нигде (ADR-0023).
+	"""
+
+	async def scenario() -> None:
+		from sqlalchemy import update
+
+		from seedrays.storage import schema_registry
+		from seedrays.storage.engine import create_sqlite_engine, registry_db_path
+
+		client, _csrf = await signed_in_client(tmp_path)
+		try:
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			async with registry.begin() as conn:
+				await conn.execute(
+					update(schema_registry.users).values(password_hash="not-a-hash")
+				)
+			await registry.dispose()
+
+			refused = await client.post(
+				"/v1/user/login",
+				json={
+					"identifier": "alice",
+					"password": "whatever-pass",
+					"captcha": await captcha_solution(client),
+				},
+			)
+			assert refused.json()["error"]["code"] == "invalid_credentials", (
+				"наружу по-прежнему нейтральный отказ"
+			)
+			logins = [e for e in _events(tmp_path) if e["event"] == "login"]
+			assert logins[-1]["outcome"] == "broken_password_hash"
+		finally:
+			await client.aclose()
+
+	asyncio.run(scenario())

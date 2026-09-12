@@ -65,6 +65,14 @@ MIN_TOKEN_MINUTES_PER_PASS = 1
 SourceFactory = Callable[[str, str | None, float], ChainDataSource]
 
 
+@dataclass(frozen=True)
+class Owner:
+	"""An address's owner: their database and the login the log names them by."""
+
+	engine: AsyncEngine
+	login: str
+
+
 def _default_source_factory(network: str, api_key: str | None, interval: float) -> ChainDataSource:
 	"""Create the real data source for a network."""
 	return chains.create_source(network, api_key=api_key, request_interval=interval)
@@ -160,7 +168,7 @@ async def run_pass(
 
 		# Локальный фильтр сопоставления: сеть → адрес → база владельца (ADR-0018).
 		# Сбой базы одного пользователя не срывает проход по остальным (ADR-0007).
-		match_index: dict[str, dict[str, AsyncEngine]] = {}
+		match_index: dict[str, dict[str, Owner]] = {}
 		for user in await registry_ops.list_users(registry):
 			db_path = user_db_path(data_dir, user.directory)
 			if not db_path.exists():
@@ -175,8 +183,9 @@ async def run_pass(
 					"user %s: database unreadable, skipping this pass", user.login
 				)
 				continue
+			owner = Owner(engine=engine, login=user.login)
 			for binding in user_bindings:
-				match_index.setdefault(binding.network, {})[binding.address] = engine
+				match_index.setdefault(binding.network, {})[binding.address] = owner
 
 		for network, addresses in sorted(match_index.items()):
 			if network not in chains.supported_networks():
@@ -215,7 +224,7 @@ async def _scan_network(
 	*,
 	registry: AsyncEngine,
 	network: str,
-	addresses: dict[str, AsyncEngine],
+	addresses: dict[str, Owner],
 	source: ChainDataSource,
 	since_default: datetime,
 	overlap: timedelta,
@@ -289,7 +298,10 @@ async def _scan_network(
 		}
 		deleted = 0
 		applied = 0
-		for engine in set(addresses.values()) - failed_engines:
+		owners = {owner.engine: owner.login for owner in addresses.values()}
+		for engine, login in owners.items():
+			if engine in failed_engines:
+				continue
 			try:
 				for txid in await user_store.delete_unfinalized(
 					engine, asset_ids=cleanup_ids, up_to_block=scanned_final
@@ -301,9 +313,22 @@ async def _scan_network(
 						txid,
 					)
 					deleted += 1
-				applied += await user_store.apply_finalized(
+				for row in await user_store.apply_finalized(
 					engine, asset_ids=asset_ids, applied_at=naive_utc(pass_started)
-				)
+				):
+					# След учтённого поступления: без него на вопрос «шлюз видел
+					# этот платёж и что с ним стало» пришлось бы отвечать, открывая
+					# базу владельца на сервере.
+					logger.info(
+						"network %s: %s of %s applied to the balance of %s (tx %s, %s)",
+						network,
+						row.direction,
+						row.amount,
+						login,
+						row.txid,
+						row.address,
+					)
+					applied += 1
 			except SQLAlchemyError:
 				# Сбой базы одного владельца не срывает проход по остальным
 				# (ADR-0007); его строки доработает следующий проход.
@@ -374,11 +399,19 @@ async def _scan_network(
 		except ChainDataSourceError as exc:
 			logger.error("network %s: preview scan failed, skipped: %s", network, exc)
 
+		# Фактически просмотренные границы, а не только счётчики: без них
+		# нельзя отличить «провайдер не отдал событие» от «блок не попал
+		# в просканированный диапазон», а лечится это по-разному.
+		blocks = f"{final_start}..{native_covered}" if final_start <= final_end else "none"
 		logger.info(
-			"network %s: head=%d boundary=%d matched=%d recorded=%d applied=%d deleted=%d",
+			"network %s: head=%d boundary=%d blocks=%s tokens=%s..%s "
+			"matched=%d recorded=%d applied=%d deleted=%d",
 			network,
 			head,
 			boundary.block_number,
+			blocks,
+			(token_cursor - overlap).isoformat(timespec="seconds"),
+			token_until.isoformat(timespec="seconds"),
 			matched,
 			recorded,
 			applied,
@@ -464,7 +497,7 @@ async def _confirmed_token_transfers(
 
 async def _record_transfers(
 	transfers: list[RangeTransfer],
-	addresses: dict[str, AsyncEngine],
+	addresses: dict[str, Owner],
 	registry: AsyncEngine,
 	*,
 	finalized_at: datetime | None,
@@ -488,9 +521,10 @@ async def _record_transfers(
 			(transfer.to_address, DIRECTION_IN, transfer.from_address),
 			(transfer.from_address, DIRECTION_OUT, transfer.to_address),
 		):
-			engine = addresses.get(address)
-			if engine is None or engine in failed_engines:
+			owner = addresses.get(address)
+			if owner is None or owner.engine in failed_engines:
 				continue
+			engine = owner.engine
 			matched += 1
 			asset = await registry_ops.get_or_create_asset(
 				registry,
@@ -523,6 +557,21 @@ async def _record_transfers(
 					transfer.txid,
 				)
 				continue
+			if inserted:
+				# По строке на каждое новое наблюдение: разбор жалобы «платёж
+				# не зачтён» начинается с вопроса, видел ли шлюз перевод вообще.
+				logger.info(
+					"%s %s %s of %s %s for %s (tx %s, block %d, %s)",
+					transfer.network,
+					"provisional" if finalized_at is None else "finalized",
+					direction,
+					transfer.amount,
+					transfer.asset.symbol,
+					owner.login,
+					transfer.txid,
+					transfer.block_number,
+					address,
+				)
 			recorded += int(inserted)
 	return matched, recorded
 

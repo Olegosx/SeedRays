@@ -51,6 +51,21 @@ def classify_transaction(status: str, balance_applied_at: datetime | None) -> st
 
 
 @dataclass(frozen=True)
+class AppliedRow:
+	"""One transaction row just applied to the balance cache.
+
+	Возвращается наружу, чтобы проход мог оставить след в журнале: без
+	строки об учтённом поступлении вопрос «шлюз видел этот платёж и что с
+	ним стало» не разобрать, не открывая базу владельца.
+	"""
+
+	txid: str
+	address: str
+	direction: str
+	amount: int
+
+
+@dataclass(frozen=True)
 class BindingAddress:
 	"""One tracked address of a user: an entry of the watcher's match filter."""
 
@@ -265,7 +280,7 @@ async def apply_finalized(
 	*,
 	asset_ids: set[int],
 	applied_at: datetime,
-) -> int:
+) -> list[AppliedRow]:
 	"""Apply finalized successful rows to the balance cache; idempotent.
 
 	A row is applied when it was confirmed by the authoritative scan of the
@@ -279,11 +294,11 @@ async def apply_finalized(
 		applied_at: Marker timestamp, naive UTC.
 
 	Returns:
-		The number of rows applied.
+		The rows applied, for the caller's log.
 	"""
 	if not asset_ids:
-		return 0
-	applied = 0
+		return []
+	applied: list[AppliedRow] = []
 	async with engine.begin() as conn:
 		rows = (
 			await conn.execute(
@@ -349,7 +364,14 @@ async def apply_finalized(
 				.where(transactions.c.id == row.id)
 				.values(balance_applied_at=applied_at)
 			)
-			applied += 1
+			applied.append(
+				AppliedRow(
+					txid=row.txid,
+					address=row.address,
+					direction=row.direction,
+					amount=amount,
+				)
+			)
 	return applied
 
 

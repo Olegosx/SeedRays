@@ -35,6 +35,40 @@ def test_supervised_restarts_after_crash_and_clean_exit(monkeypatch) -> None:
 	asyncio.run(scenario())
 
 
+def test_supervised_survives_a_component_calling_sys_exit(monkeypatch) -> None:
+	"""A component that exits the process is a component failure, not the gateway's.
+
+	uvicorn при занятом порте не бросает исключение, а вызывает sys.exit.
+	Такой выход проходил мимо `except Exception`, всплывал из задачи и гасил
+	весь процесс: watcher и биллинг умирали из-за занятого порта, причём
+	надзор об этом ничего не писал (ADR-0003 требует обратного).
+	"""
+
+	async def scenario() -> None:
+		monkeypatch.setattr(supervisor, "RESTART_DELAY_SECONDS", 0.01)
+		attempts = {"n": 0}
+		forever = asyncio.Event()
+
+		async def factory() -> None:
+			attempts["n"] += 1
+			if attempts["n"] == 1:
+				raise SystemExit(3)  # так ведёт себя uvicorn при занятом порте
+			await forever.wait()
+
+		stopping = asyncio.Event()
+		task = asyncio.create_task(supervisor._supervised("api", factory, stopping))
+		while attempts["n"] < 2:
+			await asyncio.sleep(0.01)
+		assert not task.done(), "надзор не должен унести процесс вместе с компонентом"
+		task.cancel()
+		try:
+			await task
+		except asyncio.CancelledError:
+			pass
+
+	asyncio.run(scenario())
+
+
 def test_supervised_does_not_restart_when_stopping(monkeypatch) -> None:
 	"""A clean exit during the gateway stop is final — no restart, no warning loop."""
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,6 +21,8 @@ from seedrays.families import Family
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_apps, user_store, user_views, user_wallets
 from seedrays.storage.engine import create_sqlite_engine, user_db_path
+
+logger = logging.getLogger(__name__)
 from seedrays.storage.user_store import API_STATUS_ALL, HISTORY_STATUS_FILTERS, classify_transaction
 
 DEFAULT_PAGE_LIMIT = 10
@@ -286,6 +289,16 @@ async def _user_addresses(
 async def _asset_infos(registry: AsyncEngine, asset_ids: set[int]) -> dict[int, dict]:
 	"""asset id → description dict of the Application API responses."""
 	records = await registry_ops.get_assets_by_ids(registry, asset_ids)
+	# Описание актива берётся из общего реестра, а строки — из базы
+	# владельца: разъехаться они могут при восстановлении данных из
+	# разновременных копий. Без этой записи строка просто исчезла бы
+	# из ответа, молча уменьшив показанную сумму поступлений.
+	missing = asset_ids - records.keys()
+	if missing:
+		logger.warning(
+			"assets %s are absent from the registry catalog; their rows are left out",
+			sorted(missing),
+		)
 	return {
 		asset_id: {
 			"network": record.network,

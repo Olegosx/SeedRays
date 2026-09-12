@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -608,3 +609,35 @@ def test_token_window_narrows_when_the_provider_refuses_its_size(tmp_path: Path)
 		assert spans[0] > spans[1] > spans[2]
 
 	asyncio.run(scenario())
+
+
+def test_a_pass_leaves_a_trace_of_what_it_stored(tmp_path: Path, caplog) -> None:
+	"""Every stored and applied row gets a line, and the summary names the bounds.
+
+	Без этого на жалобу «платёж не зачтён» нельзя ответить, не заходя на
+	сервер и не открывая базу владельца, и нельзя отличить «провайдер не
+	отдал событие» от «блок не попал в просканированный диапазон».
+	"""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		deposit = _usdt("t-traced", OUR_ADDRESS, 1_500_000, block=95)
+		await run_pass(
+			tmp_path,
+			source_factory=lambda n, k, i: FakeSource(
+				boundary=100, head=100, tokens=[deposit]
+			),
+		)
+
+	with caplog.at_level(logging.INFO, logger="seedrays.watcher.single_pass"):
+		asyncio.run(scenario())
+	messages = [record.getMessage() for record in caplog.records]
+	assert any(
+		"t-traced" in m and "alice" in m for m in messages
+	), "нет строки о записанном поступлении с владельцем и номером транзакции"
+	assert any(
+		"applied to the balance of alice" in m and "t-traced" in m for m in messages
+	), "нет строки об учтённом в балансе поступлении"
+	assert any("blocks=" in m and "tokens=" in m for m in messages), (
+		"сводка прохода не называет фактически просмотренные границы"
+	)

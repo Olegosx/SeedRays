@@ -1,6 +1,7 @@
 """Cabinet history and dashboard summary routes."""
 
 import asyncio
+import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -151,3 +152,42 @@ def test_history_and_overview(tmp_path: Path) -> None:
 			await client.aclose()
 
 	asyncio.run(scenario())
+
+
+def test_a_row_whose_asset_is_missing_from_the_catalog_is_reported(
+	tmp_path: Path, caplog
+) -> None:
+	"""Leaving a financial row out of the answer must not happen silently.
+
+	Описания активов лежат в общем реестре, а строки — в базе владельца:
+	разъехаться они могут при восстановлении из разновременных копий. Без
+	записи в журнал показанная сумма поступлений просто уменьшилась бы.
+	"""
+
+	async def scenario() -> dict:
+		client, _csrf, address = await _prepared_client(tmp_path)
+		try:
+			engine = create_sqlite_engine(user_db_path(tmp_path, "u1"))
+			await user_store.record_transaction(
+				engine,
+				address=address,
+				txid="tx-orphan",
+				asset_id=987,  # такого актива в каталоге реестра нет
+				direction="in",
+				amount=2_000_000,
+				block_number=99,
+				tx_time=datetime(2026, 9, 3, 12, 0),
+				status="success",
+				finalized_at=datetime(2026, 9, 3, 12, 1),
+			)
+			await engine.dispose()
+			return (await client.get("/v1/user/history")).json()
+		finally:
+			await client.aclose()
+
+	with caplog.at_level(logging.WARNING, logger="seedrays.orchestrator.overview"):
+		data = asyncio.run(scenario())
+	assert [r["txid"] for r in data["history"]] == [], "строка без описания актива не показывается"
+	assert any(
+		"987" in record.getMessage() for record in caplog.records
+	), "пропуск строки не отмечен в журнале"

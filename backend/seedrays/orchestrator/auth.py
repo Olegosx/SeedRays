@@ -265,7 +265,17 @@ async def sign_in(
 		raise OperationError("invalid_credentials", "wrong username/email or password")
 	try:
 		_hasher.verify(user.password_hash, password)
-	except (VerifyMismatchError, InvalidHashError) as exc:
+	except InvalidHashError as exc:
+		# Сохранённый хеш не разбирается — введённый пароль тут ни при чём.
+		# Под исходом «неверный пароль» это выглядело бы как забывчивость
+		# пользователя, и настоящая причина не была бы видна нигде
+		# (ADR-0023: причина записывается там, где она ещё известна).
+		logger.error("user %d: the stored password hash is unusable", user.id)
+		await _journal("broken_password_hash", user.id)
+		raise OperationError(
+			"invalid_credentials", "wrong username/email or password"
+		) from exc
+	except VerifyMismatchError as exc:
 		await _journal("wrong_password", user.id)
 		raise OperationError(
 			"invalid_credentials", "wrong username/email or password"
