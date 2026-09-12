@@ -385,6 +385,15 @@ async def set_address_checked(
 		)
 
 
+# Исходы записи наблюдённого платежа. Третий существует потому, что
+# оборванный ответ провайдера мог отдать не все переводы транзакции:
+# сумма уточняется вверх, вниз — никогда, иначе короткий ответ обесценил
+# бы уже зачтённые деньги.
+PAYMENT_NEW = "new"
+PAYMENT_EXTENDED = "extended"
+PAYMENT_KNOWN = "known"
+
+
 async def record_payment(
 	engine: AsyncEngine,
 	*,
@@ -397,7 +406,7 @@ async def record_payment(
 	tx_time: datetime | None,
 	finalized_at: datetime,
 	event_index: int = 0,
-) -> bool:
+) -> str:
 	"""Record one observed transfer on an invoice address; idempotent.
 
 	Only finalized transfers reach this function — the billing check asks the
@@ -418,7 +427,9 @@ async def record_payment(
 		event_index: Ordinal of the transfer inside the transaction.
 
 	Returns:
-		True if a new row was recorded, False if this transfer was already known.
+		``PAYMENT_NEW`` when a row was recorded, ``PAYMENT_EXTENDED`` when a
+		known row's amount was raised to a larger one just observed, and
+		``PAYMENT_KNOWN`` when nothing changed.
 	"""
 	try:
 		async with engine.begin() as conn:
@@ -438,8 +449,26 @@ async def record_payment(
 	except IntegrityError as exc:
 		if unique_violation(exc) is None:
 			raise  # не ключ идемпотентности — настоящая ошибка целостности
-		return False
-	return True
+		async with engine.begin() as conn:
+			known = (
+				await conn.execute(
+					select(invoice_payments).where(
+						invoice_payments.c.txid == txid,
+						invoice_payments.c.address == address,
+						invoice_payments.c.asset_id == asset_id,
+						invoice_payments.c.event_index == event_index,
+					)
+				)
+			).first()
+			if known is None or int(known.amount) >= amount:
+				return PAYMENT_KNOWN
+			await conn.execute(
+				update(invoice_payments)
+				.where(invoice_payments.c.id == known.id)
+				.values(amount=str(amount), value=str(value))
+			)
+		return PAYMENT_EXTENDED
+	return PAYMENT_NEW
 
 
 async def creditable_payments(engine: AsyncEngine, *, address: str) -> list:

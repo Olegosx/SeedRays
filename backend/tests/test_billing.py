@@ -109,6 +109,38 @@ async def _seed(tmp_path: Path) -> tuple[AsyncEngine, AsyncEngine, dict[str, int
 	return registry, engine, {"usdt": usdt.id, "spam": spam.id}
 
 
+async def _bind(engine: AsyncEngine, *addresses: str) -> None:
+	"""Make the given addresses bound addresses of this owner.
+
+	Нужен там, где проверяется оборот: перекладывание между своими
+	адресами узнаётся по тому, что контрагент строки сам привязан к
+	этому владельцу.
+	"""
+	async with engine.begin() as conn:
+		await conn.execute(insert(schema_user.wallets).values(family="tron", xpub="xpub"))
+		await conn.execute(
+			insert(schema_user.applications).values(name="shop", key_hash="k1")
+		)
+		# По пользователю приложения на адрес: в одной сети у одного
+		# владельца приложения адрес ровно один (ограничение схемы).
+		for index, address in enumerate(addresses, start=1):
+			await conn.execute(
+				insert(schema_user.app_users).values(
+					application_id=1, external_id=f"u{index}"
+				)
+			)
+			await conn.execute(
+				insert(schema_user.bindings).values(
+					wallet_id=1,
+					network=NETWORK,
+					address=address,
+					application_id=1,
+					app_user_id=index,
+					derivation_index=index - 1,
+				)
+			)
+
+
 async def _record(
 	engine: AsyncEngine,
 	*,
@@ -119,6 +151,7 @@ async def _record(
 	finalized: bool = True,
 	txid: str = "tx1",
 	address: str = "TAddr1",
+	counterparty: str | None = None,
 	tx_time: datetime | None = INSIDE,
 	first_seen_at: datetime = INSIDE,
 ) -> None:
@@ -135,6 +168,7 @@ async def _record(
 				txid=txid,
 				asset_id=asset_id,
 				direction=direction,
+				counterparty=counterparty,
 				amount=str(amount),
 				block_number=100,
 				tx_time=tx_time,
@@ -192,22 +226,29 @@ def test_turnover_ignores_assets_outside_the_operator_list(tmp_path: Path) -> No
 
 
 def test_turnover_excludes_moves_between_own_addresses(tmp_path: Path) -> None:
-	"""A transfer with an outgoing leg of the same user is not income."""
+	"""Money arriving from one's own bound address is a move, not income."""
 
 	async def scenario() -> int:
 		registry, engine, assets = await _seed(tmp_path)
 		try:
+			await _bind(engine, "TAddrFrom", "TAddrTo")
 			await _record(
 				engine, asset_id=assets["usdt"], amount=2_000_000, txid="move",
-				direction="out", address="TAddrFrom",
+				direction="out", address="TAddrFrom", counterparty="TAddrTo",
 			)
 			await _record(
 				engine, asset_id=assets["usdt"], amount=2_000_000, txid="move",
-				address="TAddrTo",
+				address="TAddrTo", counterparty="TAddrFrom",
+			)
+			# Платёж постороннего ровно той же суммы: прежнее правило,
+			# смотревшее на совпадение суммы, выбрасывало из оборота и его.
+			await _record(
+				engine, asset_id=assets["usdt"], amount=2_000_000, txid="batch",
+				address="TAddrTo", counterparty="TPayer",
 			)
 			await _record(
 				engine, asset_id=assets["usdt"], amount=3_000_000, txid="payment",
-				address="TAddrTo",
+				address="TAddrTo", counterparty="TPayer",
 			)
 			return await billing.user_turnover(
 				engine, registry, since=PERIOD_START, until=PERIOD_END
@@ -216,7 +257,42 @@ def test_turnover_excludes_moves_between_own_addresses(tmp_path: Path) -> None:
 			await engine.dispose()
 			await registry.dispose()
 
-	assert asyncio.run(scenario()) == 3_000_000
+	assert asyncio.run(scenario()) == 5_000_000
+
+
+def test_a_paired_own_leg_no_longer_erases_the_income_beside_it(tmp_path: Path) -> None:
+	"""One transaction carrying both a payment and an own move keeps the payment.
+
+	Так выглядела бы попытка не платить комиссию: контракт кладёт в одну
+	транзакцию перевод плательщика и равный ему перевод между своими
+	адресами. Пока внутренний перевод узнавался по совпадению суммы,
+	выпадали оба — и оборот обнулялся целиком.
+	"""
+
+	async def scenario() -> int:
+		registry, engine, assets = await _seed(tmp_path)
+		try:
+			await _bind(engine, "TOurA", "TOurB")
+			await _record(
+				engine, asset_id=assets["usdt"], amount=2_000_000, txid="trick",
+				address="TOurA", counterparty="TPayer",
+			)
+			await _record(
+				engine, asset_id=assets["usdt"], amount=2_000_000, txid="trick",
+				address="TOurB", counterparty="TOurA",
+			)
+			await _record(
+				engine, asset_id=assets["usdt"], amount=2_000_000, txid="trick",
+				direction="out", address="TOurA", counterparty="TOurB",
+			)
+			return await billing.user_turnover(
+				engine, registry, since=PERIOD_START, until=PERIOD_END
+			)
+		finally:
+			await engine.dispose()
+			await registry.dispose()
+
+	assert asyncio.run(scenario()) == 2_000_000
 
 
 def test_turnover_is_bounded_by_the_period(tmp_path: Path) -> None:
@@ -971,3 +1047,97 @@ def test_access_stays_closed_while_another_invoice_is_unpaid(tmp_path: Path) -> 
 			await billing_engine.dispose()
 
 	assert asyncio.run(scenario()) == "suspended"
+
+
+def test_two_transfers_of_one_transaction_settle_the_invoice(tmp_path: Path) -> None:
+	"""A payment split across one transaction counts in full, not once.
+
+	Порядкового номера события адресный эндпоинт провайдера не сообщает,
+	поэтому второй перевод той же транзакции на тот же адрес отбрасывался
+	бы как дубль первого: счёт оставался бы недоплаченным, а доступ —
+	закрытым при полностью уплаченных деньгах.
+	"""
+
+	async def scenario() -> tuple[billing.CheckStats, object]:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			source = FakePaymentSource(
+				{
+					address: [
+						_incoming(address, 10 * 10**6, txid="split"),
+						_incoming(address, 5 * 10**6, txid="split"),
+					]
+				}
+			)
+			stats = await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			invoice = (await billing_store.list_invoices(billing_engine))[0]
+			return stats, invoice
+		finally:
+			await billing_engine.dispose()
+
+	stats, invoice = asyncio.run(scenario())
+	assert stats.payments_recorded == 1, "переводы одной транзакции — один платёж"
+	assert invoice.state == "paid"
+	assert invoice.credited == str(15 * 10**6)
+
+
+def test_a_short_answer_is_topped_up_on_the_next_check(tmp_path: Path) -> None:
+	"""An answer that held part of a transaction is completed later, never lost."""
+
+	async def scenario() -> object:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			# Первый опрос увидел только один перевод транзакции.
+			short = FakePaymentSource({address: [_incoming(address, 10 * 10**6, txid="split")]})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: short
+			)
+			# Второй опрос отдал транзакцию целиком.
+			full = FakePaymentSource(
+				{
+					address: [
+						_incoming(address, 10 * 10**6, txid="split"),
+						_incoming(address, 5 * 10**6, txid="split"),
+					]
+				}
+			)
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 8), source_factory=lambda n, k, i: full
+			)
+			return (await billing_store.list_invoices(billing_engine))[0]
+		finally:
+			await billing_engine.dispose()
+
+	invoice = asyncio.run(scenario())
+	assert invoice.state == "paid", "сумма платежа дописана, счёт закрыт"
+	assert invoice.credited == str(15 * 10**6)
+
+
+def test_payment_is_valued_by_the_catalog_not_by_the_answer(tmp_path: Path) -> None:
+	"""Decimals come from the asset catalog; a provider cannot revalue money."""
+
+	async def scenario() -> object:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			# Каталог знает USDT с шестью знаками; ответ заявляет ноль —
+			# по нему 15 единиц стали бы 15 миллионами USDT.
+			source = FakePaymentSource(
+				{address: [_incoming(address, 15 * 10**6, txid="pay1", decimals=0)]}
+			)
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			return (await billing_store.list_invoices(billing_engine))[0]
+		finally:
+			await billing_engine.dispose()
+
+	invoice = asyncio.run(scenario())
+	assert invoice.credited == str(15 * 10**6), "оценка по каталогу, а не по ответу"

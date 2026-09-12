@@ -16,7 +16,7 @@ import hashlib
 import json
 import logging
 from calendar import monthrange
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -790,11 +790,7 @@ async def check_payments(
 				await source.aclose()
 			stats.addresses_checked += 1
 
-			for transfer in transfers:
-				if transfer.direction != Direction.IN:
-					continue
-				if transfer.status != TransferStatus.SUCCESS:
-					continue
+			for transfer in _merged_by_transaction(transfers):
 				await _record_transfer(
 					registry, billing, transfer, accepted=accepted, moment=moment, stats=stats
 				)
@@ -812,6 +808,40 @@ async def check_payments(
 		await billing.dispose()
 		await registry.dispose()
 	return stats
+
+
+def _merged_by_transaction(transfers: list) -> list:
+	"""Successful incoming transfers, merged per transaction, address and asset.
+
+	Одна оплата может прийти несколькими переводами внутри одной
+	транзакции. Различить их в ключе идемпотентности нечем: адресный
+	эндпоинт провайдера порядкового номера события не сообщает — в
+	отличие от событийного, которым пользуется watcher. Поэтому переводы
+	одного актива одной транзакции на один адрес складываются в одну
+	запись: ключ остаётся устойчивым к повторному опросу, а сумма верна.
+	Иначе второй перевод отбрасывался бы как дубль первого, и полностью
+	оплаченный счёт оставался бы недоплаченным, а доступ — закрытым.
+
+	Args:
+		transfers: Transfers as the provider returned them.
+
+	Returns:
+		One transfer per (transaction, address, asset), carrying the sum.
+	"""
+	merged: dict[tuple[str, str, str], object] = {}
+	for transfer in transfers:
+		if transfer.direction != Direction.IN:
+			continue
+		if transfer.status != TransferStatus.SUCCESS:
+			continue
+		key = (transfer.txid, transfer.address, transfer.asset.contract_address)
+		known = merged.get(key)
+		merged[key] = (
+			transfer
+			if known is None
+			else replace(known, amount=known.amount + transfer.amount)
+		)
+	return list(merged.values())
 
 
 async def _record_transfer(
@@ -832,8 +862,19 @@ async def _record_transfer(
 		symbol=transfer.asset.symbol,
 		decimals=transfer.asset.decimals,
 	)
+	if asset.decimals != transfer.asset.decimals:
+		# Разрядность берётся из каталога, а не из ответа: ею умножается
+		# сумма, и подменённое значение переоценило бы и этот платёж, и
+		# любой прошлый. Расхождение — повод посмотреть, а не повод
+		# пересчитать деньги по слову провайдера.
+		logger.warning(
+			"asset %s reports %d decimals, the catalog holds %d; valuing by the catalog",
+			transfer.asset.contract_address or transfer.asset.symbol,
+			transfer.asset.decimals,
+			asset.decimals,
+		)
 	is_payment = transfer.asset.contract_address in accepted
-	value = to_micro_usdt(transfer.amount, transfer.asset.decimals) if is_payment else 0
+	value = to_micro_usdt(transfer.amount, asset.decimals) if is_payment else 0
 	recorded = await billing_store.record_payment(
 		billing,
 		network=transfer.network,
@@ -845,7 +886,18 @@ async def _record_transfer(
 		tx_time=naive_utc(transfer.timestamp),
 		finalized_at=moment,
 	)
-	if not recorded:
+	if recorded == billing_store.PAYMENT_KNOWN:
+		return
+	if recorded == billing_store.PAYMENT_EXTENDED:
+		# Прошлый ответ провайдера был неполным: в транзакции оказалось
+		# больше переводов на этот адрес, чем он показал тогда.
+		logger.warning(
+			"payment on invoice address %s (tx %s) topped up to %s USDT: "
+			"the earlier answer held less of the same transaction",
+			transfer.address,
+			transfer.txid,
+			format_usdt(value),
+		)
 		return
 	stats.payments_recorded += 1
 	if is_payment:

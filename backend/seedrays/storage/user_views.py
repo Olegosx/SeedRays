@@ -15,7 +15,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.storage.schema_user import applications, balances, bindings, transactions, wallets
-from seedrays.storage.user_store import DIRECTION_IN, DIRECTION_OUT, STATUS_SUCCESS
+from seedrays.storage.user_store import DIRECTION_IN, STATUS_SUCCESS
 
 
 async def overview_counters(engine: AsyncEngine) -> tuple[int, int, int]:
@@ -107,9 +107,8 @@ async def turnover_incoming(
 	out of every period and quietly shrink the turnover.
 
 	Moving funds between the user's own addresses is not income and is left
-	out: such a row has an outgoing leg of the same transaction, asset and
-	amount inside the same database, and that is enough to recognize it —
-	the transaction row need not carry a counterparty.
+	out: a row counts as such a move when its counterparty — the other side
+	of the transfer — is itself a bound address of this owner.
 
 	Args:
 		engine: The owner's user-database engine.
@@ -122,15 +121,15 @@ async def turnover_incoming(
 	"""
 	if not asset_ids:
 		return []
-	outgoing = transactions.alias("outgoing_leg")
+	# Признаком служит принадлежность контрагента владельцу, а не
+	# совпадение суммы: по совпадению из оборота выпадала обычная
+	# пакетная рассылка, а транзакция с двумя равными переводами
+	# позволяла обнулить оборот целиком. Строки без контрагента
+	# (записанные до его появления) считаются доходом: другой
+	# стороны у них узнать уже негде.
 	own_transfer = (
-		select(outgoing.c.id)
-		.where(
-			outgoing.c.txid == transactions.c.txid,
-			outgoing.c.asset_id == transactions.c.asset_id,
-			outgoing.c.amount == transactions.c.amount,
-			outgoing.c.direction == DIRECTION_OUT,
-		)
+		select(bindings.c.address)
+		.where(bindings.c.address == transactions.c.counterparty)
 		.exists()
 	)
 	dated = func.coalesce(transactions.c.tx_time, transactions.c.first_seen_at)

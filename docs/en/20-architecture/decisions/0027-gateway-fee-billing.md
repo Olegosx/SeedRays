@@ -43,8 +43,14 @@ attributed by the receiving address.
   ([ADR-0010](0010-networks-assets-financial-data.md)) and a token symbol is an arbitrary
   string; without a list anyone could mint a token with the symbol "USDT", bury a user's
   addresses in it and produce an invoice out of thin air.
-- **Transfers between addresses inside the gateway do not count**: both legs of such a transfer
-  are known to the gateway, and this is money being moved, not income.
+- **Transfers between the user's own addresses do not count**: this is money being moved,
+  not income. The rule rests on the counterparty stored with every observed transfer — a
+  row is an own move when the other side is a bound address of the same owner. Matching
+  an incoming row to an outgoing one by amount would not do: an ordinary batch payout
+  trips it, and anyone able to place two equal transfers into one transaction could
+  switch their whole turnover off. Money arriving from another user of the gateway is
+  income like any other: that the payer happens to be a client too is a coincidence, not
+  a reason to waive the fee.
 - **The period is a calendar month in UTC**, the same one gateway-wide.
 
 ### 2. The invoice
@@ -103,6 +109,16 @@ attributed by the receiving address.
 - The check cursor lives on the invoice address: the next poll resumes from it with an
   overlap, and repeats are absorbed by the payment's idempotency key.
 - A payment is credited **on finalization**, like everything else in the gateway.
+- **Several transfers of one asset inside one transaction count as one payment**, summed.
+  The per-address endpoint reports no ordinal for a transfer inside its transaction (the
+  contract-event endpoint the watcher uses does), so there is nothing to tell them apart
+  with in the idempotency key; summing keeps the key stable against a repeated poll and
+  the amount right. An answer that held only part of a transaction is topped up by a
+  later poll — upwards only, so a short answer can never devalue money already credited.
+- **The amount is valued by the asset catalog's decimals, never by the answer's**: the
+  decimals multiply the sum, so taking them from the provider would let it revalue this
+  payment and every past one. A disagreement is logged; decimals outside a sane range
+  make the answer unusable at the chain-source boundary.
 - **The full amount** (within a configurable underpayment tolerance) settles the invoice and
   restores access automatically, without the operator.
 - **An underpayment** leaves the invoice unpaid and access closed; the cabinet shows the

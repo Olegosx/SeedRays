@@ -16,6 +16,7 @@ import pytest
 from bip_utils import Base58Decoder
 
 from seedrays.chains.base import (
+	ChainDataSourceError,
 	Direction,
 	RangeTooLargeError,
 	RateLimitedError,
@@ -479,3 +480,20 @@ def test_negative_amount_rejected() -> None:
 		asyncio.run(
 			_make_source(handler).token_transfers(USDT_CONTRACT, "USDT", 6, None, confirmed=True)
 		)
+
+
+def test_a_token_with_impossible_decimals_is_refused() -> None:
+	"""Decimals outside the sane range make the answer unusable, not the money huge.
+
+	Разрядностью умножается сумма: принятое на веру значение из ответа
+	превратило бы один доллар в миллион. Поэтому ответ отвергается на
+	границе с провайдером, а оценка платежа идёт по каталогу.
+	"""
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		item = _trc20_item(to=ADDRESS, from_=OTHER, value="1000000")
+		item["token_info"]["decimals"] = 255
+		return httpx.Response(200, json={"data": [item]})
+
+	with pytest.raises(ChainDataSourceError):
+		asyncio.run(_make_source(handler).transfers(ADDRESS))

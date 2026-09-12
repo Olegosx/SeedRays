@@ -46,6 +46,11 @@ _BLOCK_CHUNK = 100
 # а объём событий за это время задаёт сеть, — поэтому наружу идёт отдельная
 # ошибка, по которой вызывающий сужает окно и повторяет.
 _MAX_PAGES = 500
+# Разумный предел разрядности токена. Ходовые значения — 0..18 (у TRC-20,
+# как и у ERC-20, это uint8), запас взят с избытком. Значение вне предела
+# — негодный ответ: разрядностью умножается сумма, и подставленное число
+# превратило бы один доллар в миллион или наоборот.
+_MAX_TOKEN_DECIMALS = 30
 
 
 def _hex_to_base58(hex_address: str) -> str:
@@ -213,6 +218,15 @@ class TronGridSource(ChainDataSource):
 				# бы «нативная монета» — такие записи пропускаем.
 				continue
 			try:
+				places = int(decimals)
+			except (TypeError, ValueError) as exc:
+				raise ChainDataSourceError(f"unusable token decimals: {exc!r}") from exc
+			if not 0 <= places <= _MAX_TOKEN_DECIMALS:
+				raise ChainDataSourceError(
+					f"token {contract} reports {places} decimals, outside 0.."
+					f"{_MAX_TOKEN_DECIMALS}; the answer is unusable"
+				)
+			try:
 				events.append(
 					TransferEvent(
 						network=self.network,
@@ -223,7 +237,7 @@ class TronGridSource(ChainDataSource):
 							network=self.network,
 							contract_address=contract,
 							symbol=str(token.get("symbol", "")),
-							decimals=int(decimals),
+							decimals=places,
 						),
 						amount=_amount(item["value"]),
 						block_number=None,

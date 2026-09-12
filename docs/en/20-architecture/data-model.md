@@ -72,7 +72,10 @@ deposit.
 One table for transactions that made it into the chain
 (see [ADR-0017](decisions/0017-universal-tx-model.md),
 [ADR-0021](decisions/0021-two-phase-scanning.md)): address, transaction id, asset,
-direction, event index, amount, **block number (required — on-chain means in a block)**,
+direction, event index, **counterparty (the other side of the transfer — what makes a
+move between one's own addresses recognizable by fact rather than by a matching amount,
+see [ADR-0027](decisions/0027-gateway-fee-billing.md))**, amount, **block number
+(required — on-chain means in a block)**,
 time, **execution status (success / failed)**, first-seen time, the **finalization
 marker** (set when the authoritative scan of the finalized zone confirms the row) and a
 service marker **"applied to balance"** — set exactly once, in the same database

@@ -173,6 +173,7 @@ async def record_transaction(
 	tx_time: datetime | None,
 	status: str,
 	event_index: int = 0,
+	counterparty: str | None = None,
 	finalized_at: datetime | None = None,
 ) -> bool:
 	"""Record one observed on-chain transaction; idempotent (ADR-0017, ADR-0021).
@@ -195,6 +196,9 @@ async def record_transaction(
 		tx_time: Block time, naive UTC.
 		status: Execution outcome: ``success`` or ``failed``.
 		event_index: Ordinal of the transfer inside the transaction.
+		counterparty: The other side of the transfer — the sender of an
+			incoming row, the recipient of an outgoing one. None when the
+			source does not report it.
 		finalized_at: Naive-UTC finalization marker; None — provisional.
 
 	Returns:
@@ -219,6 +223,7 @@ async def record_transaction(
 					asset_id=asset_id,
 					direction=direction,
 					event_index=event_index,
+					counterparty=counterparty,
 					amount=str(amount),
 					block_number=block_number,
 					tx_time=tx_time,
@@ -247,6 +252,7 @@ async def record_transaction(
 						block_number=block_number,
 						tx_time=tx_time,
 						status=status,
+						counterparty=counterparty,
 						finalized_at=finalized_at,
 					)
 				)

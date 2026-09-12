@@ -475,9 +475,11 @@ async def _record_transfers(
 	"""
 	matched = recorded = 0
 	for transfer in transfers:
-		for address, direction in (
-			(transfer.to_address, DIRECTION_IN),
-			(transfer.from_address, DIRECTION_OUT),
+		# Контрагент строки — вторая сторона перевода: по нему потом
+		# видно, что деньги просто переложены между своими адресами.
+		for address, direction, counterparty in (
+			(transfer.to_address, DIRECTION_IN, transfer.from_address),
+			(transfer.from_address, DIRECTION_OUT, transfer.to_address),
 		):
 			engine = addresses.get(address)
 			if engine is None or engine in failed_engines:
@@ -503,6 +505,7 @@ async def _record_transfers(
 					tx_time=naive_utc(transfer.timestamp),
 					status=transfer.status.value,
 					event_index=transfer.event_index,
+					counterparty=counterparty,
 					finalized_at=finalized_at,
 				)
 			except SQLAlchemyError:
