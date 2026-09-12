@@ -119,8 +119,9 @@ attributed by the receiving address.
   decimals multiply the sum, so taking them from the provider would let it revalue this
   payment and every past one. A disagreement is logged; decimals outside a sane range
   make the answer unusable at the chain-source boundary.
-- **The full amount** (within a configurable underpayment tolerance) settles the invoice and
-  restores access automatically, without the operator.
+- **The full amount** settles the invoice and restores access automatically, without the
+  operator. Nothing less does: a tolerance for underpayment would be a second rule about
+  the same thing, contradicting the one below it.
 - **An underpayment** leaves the invoice unpaid and access closed; the cabinet shows the
   remainder to be paid to the same address, and the owner is notified.
 - **An overpayment** is credited against the next invoice; the owner is notified.
@@ -195,7 +196,10 @@ nothing — idempotency rests on the invoice key, not on the schedule.
 The parameters are registry settings ([ADR-0016](0016-config-layers.md)) on the panel's
 settings page: the fee switch (**off** by default — an installation must not start issuing
 invoices on its own), the rate, the threshold, the payment term, the per-network list of
-turnover assets, the underpayment tolerance and the notification parameters. Master wallets are
+turnover assets and the notification parameters. **The rate is given in hundredths of a
+percent at most** — that is the scale the fee arithmetic keeps, all of it integer; a finer
+value is refused on save, because otherwise the invoice would be computed with one rate and
+print another. Master wallets are
 entered there too but stored in the billing database — by the same logic that keeps a user's
 xpub in the user's database.
 

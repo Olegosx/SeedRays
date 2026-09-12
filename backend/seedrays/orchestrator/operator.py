@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import secrets
+from decimal import Decimal, InvalidOperation
 import shutil
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -57,6 +58,10 @@ USER_STATUS_BLOCKED = "blocked"
 # «сохранено», а разойдётся это только строкой в журнале сервера.
 NUMBER_NON_NEGATIVE = "non_negative"  # дробное >= 0
 NUMBER_POSITIVE_INT = "positive_int"  # целое >= 1
+# Процент не точнее, чем умеет денежная арифметика биллинга: ставка живёт в
+# сотых долях процента, и значение точнее пришлось бы усекать — то есть счёт
+# считался бы по одной ставке, а печатал другую.
+NUMBER_PERCENT = "percent"
 
 # Поле со списком адресов контрактов (JSON). Проверяется по той же причине,
 # что и числовые: опечатка в списке означала бы «сохранено», а на деле —
@@ -76,10 +81,9 @@ SETTING_FIELDS = (
 	{"key": "seclog.rotate_mb", "secret": False, "number": NUMBER_POSITIVE_INT},
 	{"key": "seclog.backups", "secret": False, "number": NUMBER_POSITIVE_INT},
 	{"key": billing.SETTING_ENABLED, "secret": False},
-	{"key": billing.SETTING_RATE, "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": billing.SETTING_RATE, "secret": False, "number": NUMBER_PERCENT},
 	{"key": billing.SETTING_THRESHOLD, "secret": False, "number": NUMBER_NON_NEGATIVE},
 	{"key": billing.SETTING_DUE_DAYS, "secret": False, "number": NUMBER_POSITIVE_INT},
-	{"key": billing.SETTING_TOLERANCE, "secret": False, "number": NUMBER_NON_NEGATIVE},
 )
 
 
@@ -526,6 +530,23 @@ def _check_number(key: str, value: str) -> None:
 		OperationError: invalid_setting.
 	"""
 	kind = _number_kinds()[key]
+	if kind == NUMBER_PERCENT:
+		try:
+			number = Decimal(value)
+		except InvalidOperation:
+			raise OperationError(
+				"invalid_setting", f"setting {key!r} must be a non-negative number"
+			) from None
+		if not number.is_finite() or number < 0:
+			raise OperationError(
+				"invalid_setting", f"setting {key!r} must be a non-negative number"
+			)
+		if number.as_tuple().exponent < -billing.RATE_PLACES:
+			raise OperationError(
+				"invalid_setting",
+				f"setting {key!r} takes at most {billing.RATE_PLACES} decimal places",
+			)
+		return
 	if kind == NUMBER_POSITIVE_INT:
 		try:
 			number = int(value)

@@ -263,8 +263,7 @@ The operator group is already implemented — its routes are listed above.
 - **The master wallet** is entered per network; the key is validated by deriving address
   zero, a private one is refused with `private_key_rejected`, and one already taken anywhere
   in the gateway with the neutral `invalid_xpub`.
-- The fee settings (rate, threshold, term, turnover assets, underpayment tolerance,
-  notifications) get no routes of their own — they live in the operator's general set of
+- The fee settings (rate, threshold, term, turnover assets, notifications) get no routes of their own — they live in the operator's general set of
   settings, like everything else they manage while the gateway runs.
 - Amounts travel as strings, as everywhere; an invoice is denominated in USDT and paid with
   a stablecoin of the chosen network.

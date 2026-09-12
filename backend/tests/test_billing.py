@@ -1258,3 +1258,71 @@ def test_a_stale_suspension_is_lifted_by_the_reconciliation(tmp_path: Path) -> N
 			await billing_engine.dispose()
 
 	assert asyncio.run(scenario()) == "ok"
+
+
+def test_a_rate_finer_than_the_scale_is_applied_as_written_into_the_invoice(
+	tmp_path: Path,
+) -> None:
+	"""The invoice names the rate it was actually computed with.
+
+	Панель такое значение не принимает, но попасть в базу оно может правкой
+	руками. Прежде счёт печатал «0.125», а считал по 0.12 — документ
+	противоречил сам себе, и на обороте в миллион расхождение составляло
+	50 USDT.
+	"""
+
+	async def scenario() -> object:
+		upgrade_all(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		try:
+			await registry_ops.set_setting(registry, billing.SETTING_ENABLED, "1")
+			await registry_ops.set_setting(registry, billing.SETTING_RATE, "0.125")
+			return await billing.read_terms(registry)
+		finally:
+			await registry.dispose()
+
+	terms = asyncio.run(scenario())
+	assert terms.rate_hundredths == 12
+	assert terms.rate_percent == "0.12", "в счёте — применённая ставка, не заявленная"
+
+
+def test_a_rate_rounding_down_to_zero_stops_the_pass_loudly(tmp_path: Path) -> None:
+	"""A rate below the scale issues nothing — and says so, instead of staying silent.
+
+	Прежде множитель обнулялся, проход отрабатывал и не выставлял ни одного
+	счёта: в журнале оставалось «выставлено 0», неотличимое от «никто не
+	превысил порог».
+	"""
+
+	async def scenario() -> object:
+		upgrade_all(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		try:
+			await registry_ops.set_setting(registry, billing.SETTING_ENABLED, "1")
+			await registry_ops.set_setting(registry, billing.SETTING_RATE, "0.004")
+			return await billing.read_terms(registry)
+		finally:
+			await registry.dispose()
+
+	assert asyncio.run(scenario()) is None
+
+
+def test_the_full_amount_is_credited_without_leaving_dust(tmp_path: Path) -> None:
+	"""Paying the invoice credits all of it: nothing settles for less than its amount."""
+
+	async def scenario() -> object:
+		from seedrays.storage import billing as billing_store
+
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		try:
+			source = FakePaymentSource({address: [_incoming(address, 15 * 10**6, txid="pay")]})
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+			)
+			return (await billing_store.list_invoices(billing_engine))[0]
+		finally:
+			await billing_engine.dispose()
+
+	invoice = asyncio.run(scenario())
+	assert invoice.state == "paid"
+	assert invoice.credited == invoice.amount, "зачтена вся сумма счёта, без остатка"

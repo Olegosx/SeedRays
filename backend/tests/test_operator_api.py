@@ -363,6 +363,10 @@ def test_numeric_settings_are_validated(tmp_path: Path) -> None:
 				("watcher.overlap_minutes", "-5"),
 				("seclog.rotate_mb", "0"),
 				("seclog.backups", "2.5"),  # целое поле не принимает дробь
+				# Ставка живёт в сотых долях процента: точнее — значит счёт
+				# считался бы по одной ставке, а печатал другую.
+				("billing.rate_percent", "0.125"),
+				("billing.rate_percent", "-1"),
 			):
 				refused = await client.put(
 					"/v1/operator/settings",

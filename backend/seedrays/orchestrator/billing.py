@@ -69,11 +69,12 @@ SETTING_DUE_DAYS = "billing.due_days"
 # Активы, которыми принимается оплата счетов, по сетям: JSON-список адресов
 # контрактов. Всё остальное, пришедшее на адрес счёта, — чужой актив.
 SETTING_PAYMENT_ASSETS_PREFIX = "billing.payment_assets."
-# Допуск недоплаты в процентах от суммы счёта: перевод, недошедший на копейку
-# из-за округления на стороне плательщика, не должен требовать разбирательства.
-SETTING_TOLERANCE = "billing.underpayment_tolerance_percent"
-
 DEFAULT_DUE_DAYS = 7
+# Ставка хранится в сотых долях процента: «x.xx%» ложится в целое без потерь,
+# и вся денежная арифметика остаётся целочисленной. Точнее задать ставку
+# нельзя — панель отвергает такое значение при сохранении.
+RATE_HUNDREDTHS_IN_PERCENT = 100
+RATE_PLACES = 2
 # Проход биллинга раз в час: выставление привязано к календарю, а проверка
 # оплаты — редкая точечная операция (ADR-0027), мгновенность ей не нужна.
 PASS_INTERVAL_SECONDS = 60 * 60
@@ -247,6 +248,11 @@ def _is_on(raw: str | None) -> bool:
 	return (raw or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+def _percent_text(hundredths: int) -> str:
+	"""The rate as text, from its hundredths of a percent: 150 → "1.5"."""
+	return str((Decimal(hundredths) / RATE_HUNDREDTHS_IN_PERCENT).normalize())
+
+
 async def read_terms(registry: AsyncEngine) -> Terms | None:
 	"""The fee terms in force, or None when the fee is switched off.
 
@@ -271,11 +277,31 @@ async def read_terms(registry: AsyncEngine) -> Terms | None:
 		Decimal(DEFAULT_DUE_DAYS),
 		SETTING_DUE_DAYS,
 	)
+	hundredths = int(rate * RATE_HUNDREDTHS_IN_PERCENT)
+	if hundredths != rate * RATE_HUNDREDTHS_IN_PERCENT:
+		# Значение точнее двух знаков панель не принимает; попасть в базу
+		# оно может только правкой руками. Считаем по усечённой ставке и
+		# её же пишем в счёт: документ, противоречащий сам себе, хуже
+		# документа с чуть меньшей ставкой.
+		logger.warning(
+			"the fee rate %s is finer than %d decimal places; applying %s%% instead",
+			rate,
+			RATE_PLACES,
+			_percent_text(hundredths),
+		)
+	if hundredths == 0:
+		# Иначе проход отработал бы молча и не выставил ни одного счёта:
+		# в журнале «выставлено 0» не отличить от «никто не превысил порог».
+		logger.error(
+			"the fee rate %s rounds down to zero at %d decimal places: "
+			"no invoice can be issued until it is corrected",
+			rate,
+			RATE_PLACES,
+		)
+		return None
 	return Terms(
-		rate_percent=str(rate),
-		# Сотые доли процента: ставка «x.xx%» ложится в целое без потерь,
-		# и вся денежная арифметика остаётся целочисленной.
-		rate_hundredths=int(rate * 100),
+		rate_percent=_percent_text(hundredths),
+		rate_hundredths=hundredths,
 		threshold=int(threshold * MICRO_USDT),
 		due_days=int(due_days) or DEFAULT_DUE_DAYS,
 	)
@@ -290,7 +316,7 @@ def fee_amount(turnover: int, terms: Terms) -> int:
 	"""
 	if turnover <= terms.threshold:
 		return 0
-	return turnover * terms.rate_hundredths // (100 * 100)
+	return turnover * terms.rate_hundredths // (100 * RATE_HUNDREDTHS_IN_PERCENT)
 
 
 def previous_period(moment: datetime) -> tuple[datetime, datetime]:
@@ -740,20 +766,6 @@ async def _payment_assets(registry: AsyncEngine, network: str) -> set[str]:
 	return {e.strip() for e in entries if isinstance(e, str) and e.strip()}
 
 
-async def _tolerance(registry: AsyncEngine) -> Decimal:
-	"""The underpayment tolerance, in percent of the invoice amount."""
-	return _decimal_setting(
-		await registry_ops.get_setting(registry, SETTING_TOLERANCE), Decimal(0), SETTING_TOLERANCE
-	)
-
-
-def _required(amount: int, tolerance: Decimal) -> int:
-	"""How much must be credited for an invoice to count as settled."""
-	if tolerance <= 0:
-		return amount
-	return int(amount - (amount * tolerance) // 100)
-
-
 @dataclass
 class CheckStats:
 	"""Outcome of one payment check."""
@@ -804,7 +816,6 @@ async def check_payments(
 			chains.SETTING_RATE,
 		)
 		interval = float(1 / rate) if rate > 0 else 0.0
-		tolerance = await _tolerance(registry)
 
 		# По адресу может ждать несколько счетов: неоплаченный прошлый и
 		# свежий. Опрашивается адрес один раз, зачёт идёт по порядку периодов.
@@ -853,8 +864,7 @@ async def check_payments(
 		for (network, address), invoices_here in sorted(by_address.items()):
 			stats.invoices_settled += await _credit_address(
 				registry, billing, journal,
-				address=address, invoices_here=invoices_here,
-				tolerance=tolerance, moment=moment,
+				address=address, invoices_here=invoices_here, moment=moment,
 			)
 	finally:
 		journal.close()
@@ -977,7 +987,6 @@ async def _credit_address(
 	*,
 	address: str,
 	invoices_here: list,
-	tolerance: Decimal,
 	moment: datetime,
 ) -> int:
 	"""Credit an address's uncredited money to its invoices, oldest first.
@@ -996,7 +1005,7 @@ async def _credit_address(
 	]
 	settled = 0
 	for invoice in sorted(invoices_here, key=lambda i: i.id):
-		needed = _required(invoice.amount, tolerance) - invoice.credited
+		needed = invoice.amount - invoice.credited
 		if needed <= 0:
 			continue
 		allocations: list[tuple[int, int]] = []
@@ -1014,7 +1023,7 @@ async def _credit_address(
 			allocations.append((entry[0], entry[2]))
 		if not allocations:
 			continue
-		paid = credited_total >= _required(invoice.amount, tolerance)
+		paid = credited_total >= invoice.amount
 		await billing_store.apply_credits(
 			billing,
 			invoice_id=invoice.id,

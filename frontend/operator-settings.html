@@ -61,9 +61,8 @@
 			'watcher.overlap_minutes': 'nonNegative',
 			'seclog.rotate_mb': 'positiveInt',
 			'seclog.backups': 'positiveInt',
-			'billing.rate_percent': 'nonNegative',
+			'billing.rate_percent': 'percent',
 			'billing.threshold_usdt': 'nonNegative',
-			'billing.underpayment_tolerance_percent': 'nonNegative',
 			'billing.due_days': 'positiveInt',
 		},
 		validate() {
@@ -75,6 +74,12 @@
 				if (kind === 'positiveInt') {
 					if (!/^\d+$/.test(raw) || Number(raw) < 1) {
 						this.fieldErrors[key] = this.$store.i18n.t('op.numberPositiveInt');
+					}
+				} else if (kind === 'percent') {
+					// Тем же правилом, что сервер: ставка живёт в сотых долях
+					// процента, значение точнее пришлось бы усекать.
+					if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+						this.fieldErrors[key] = this.$store.i18n.t('op.numberPercent');
 					}
 				} else if (!/^\d+(\.\d+)?$/.test(raw)) {
 					this.fieldErrors[key] = this.$store.i18n.t('op.numberNonNegative');
@@ -286,14 +291,6 @@
 													x-model="values['billing.due_days']" placeholder="7">
 												<div class="invalid-feedback"
 													x-text="fieldErrors['billing.due_days']"></div>
-											</div>
-											<div class="col-md-6 mb-3">
-												<label class="form-label" x-text="$store.i18n.t('op.feeToleranceLabel')"></label>
-												<input type="text" class="form-control"
-													:class="fieldErrors['billing.underpayment_tolerance_percent'] ? 'is-invalid' : ''"
-													x-model="values['billing.underpayment_tolerance_percent']" placeholder="0">
-												<div class="invalid-feedback"
-													x-text="fieldErrors['billing.underpayment_tolerance_percent']"></div>
 											</div>
 										</div>
 										<template x-for="network in assetNetworks" :key="network">
