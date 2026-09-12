@@ -15,7 +15,12 @@ import httpx
 import pytest
 from bip_utils import Base58Decoder
 
-from seedrays.chains.base import Direction, RateLimitedError, TransferStatus
+from seedrays.chains.base import (
+	Direction,
+	RangeTooLargeError,
+	RateLimitedError,
+	TransferStatus,
+)
 from seedrays.chains.tron import create_source
 
 ADDRESS = "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH"
@@ -352,15 +357,63 @@ def test_native_transfers_range_chunks() -> None:
 				{"txID": "skip", "raw_data": {"contract": [{"type": "TriggerSmartContract"}]}},
 			],
 		}
-		return httpx.Response(200, json={"block": [block]})
+		# Честный провайдер отдаёт весь запрошенный чанк; перевод лежит
+		# в первом блоке, остальные блоки пустые.
+		blocks = [block] + [
+			{
+				"block_header": {"raw_data": {"number": n, "timestamp": 1700000000000}},
+				"transactions": [],
+			}
+			for n in range(body["startNum"] + 1, body["endNum"])
+		]
+		return httpx.Response(200, json={"block": blocks})
 
-	transfers = asyncio.run(_make_source(handler).native_transfers(1, 150))
+	scan = asyncio.run(_make_source(handler).native_transfers(1, 150))
 	assert requested == [(1, 101), (101, 151)]
-	assert [t.txid for t in transfers] == ["tx-1", "tx-101"]
-	assert transfers[0].to_address == ADDRESS
-	assert transfers[0].status == TransferStatus.SUCCESS
-	assert transfers[1].status == TransferStatus.FAILED
-	assert transfers[0].block_number == 1
+	assert [t.txid for t in scan.transfers] == ["tx-1", "tx-101"]
+	assert scan.covered_through == 150
+	assert scan.transfers[0].to_address == ADDRESS
+	assert scan.transfers[0].status == TransferStatus.SUCCESS
+	assert scan.transfers[1].status == TransferStatus.FAILED
+	assert scan.transfers[0].block_number == 1
+
+
+def test_native_scan_stops_at_the_first_block_the_provider_skipped() -> None:
+	"""A short answer is covered only up to the gap, never reported as complete."""
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		body = json.loads(request.content)
+		blocks = [
+			{
+				"block_header": {"raw_data": {"number": n, "timestamp": 1700000000000}},
+				"transactions": [],
+			}
+			for n in range(body["startNum"], body["endNum"])
+			if n != 5  # провайдер «потерял» пятый блок
+		]
+		return httpx.Response(200, json={"block": blocks})
+
+	scan = asyncio.run(_make_source(handler).native_transfers(1, 50))
+	# Блоки 6..50 в ответе есть, но за блоком 5 содержимое неизвестно,
+	# поэтому полным диапазон считается только до четвёртого.
+	assert scan.covered_through == 4
+
+
+def test_page_cap_asks_the_caller_to_narrow_the_window() -> None:
+	"""Hitting the page cap is a distinct error: the caller can narrow and retry."""
+
+	def handler(request: httpx.Request) -> httpx.Response:
+		return httpx.Response(
+			200,
+			json={"data": [], "meta": {"fingerprint": "next-page-forever"}},
+		)
+
+	with pytest.raises(RangeTooLargeError):
+		asyncio.run(
+			_make_source(handler).token_transfers(
+				USDT_CONTRACT, "USDT", 6, None, confirmed=True
+			)
+		)
 
 
 def test_pagination_page_cap(monkeypatch) -> None:

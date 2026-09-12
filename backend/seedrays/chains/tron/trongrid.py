@@ -12,6 +12,7 @@ Endpoints used (developers.tron.network reference):
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timezone
 from typing import Any
 
@@ -24,11 +25,15 @@ from seedrays.chains.base import (
 	ChainDataSourceError,
 	Direction,
 	FinalityBoundary,
+	NativeScan,
+	RangeTooLargeError,
 	RangeTransfer,
 	RateLimitedError,
 	TransferEvent,
 	TransferStatus,
 )
+
+logger = logging.getLogger(__name__)
 
 _API_KEY_HEADER = "TRON-PRO-API-KEY"
 _NATIVE_SYMBOL = "TRX"
@@ -37,7 +42,9 @@ _NATIVE_DECIMALS = 6
 _BLOCK_CHUNK = 100
 # Потолок страниц одного пагинированного вызова: защита от бесконечного
 # fingerprint-курсора сбойного/враждебного провайдера и от разрастания памяти.
-# Окно догона ограничивает watcher, так что легитимные вызовы сюда не упираются.
+# Упереться в него может и честный вызов — окно догона ограничено временем,
+# а объём событий за это время задаёт сеть, — поэтому наружу идёт отдельная
+# ошибка, по которой вызывающий сужает окно и повторяет.
 _MAX_PAGES = 500
 
 
@@ -178,8 +185,8 @@ class TronGridSource(ChainDataSource):
 			if not fingerprint:
 				return items
 			params = dict(params, fingerprint=fingerprint)
-		raise ChainDataSourceError(
-			f"pagination exceeded {_MAX_PAGES} pages on {path}; aborting the call"
+		raise RangeTooLargeError(
+			f"pagination exceeded {_MAX_PAGES} pages on {path}; the asked window is too wide"
 		)
 
 	async def _trc20_transfers(
@@ -353,9 +360,15 @@ class TronGridSource(ChainDataSource):
 				raise ChainDataSourceError(f"unexpected contract event item: {exc!r}") from exc
 		return transfers
 
-	async def native_transfers(self, start_block: int, end_block: int) -> list[RangeTransfer]:
-		"""Native TRX transfers of a block range, bounds inclusive (range scan)."""
+	async def native_transfers(self, start_block: int, end_block: int) -> NativeScan:
+		"""Native TRX transfers of a block range, bounds inclusive (range scan).
+
+		The answer is taken only up to the first block the provider did not
+		return: what happened in a missing block is unknown, and reporting
+		the range as fully scanned would hide those transfers for good.
+		"""
 		transfers: list[RangeTransfer] = []
+		covered_through = start_block - 1
 		start = start_block
 		while start <= end_block:
 			chunk_end = min(start + _BLOCK_CHUNK - 1, end_block)
@@ -365,13 +378,30 @@ class TronGridSource(ChainDataSource):
 				"/wallet/getblockbylimitnext",
 				json={"startNum": start, "endNum": chunk_end + 1},
 			)
+			by_block: dict[int, list[RangeTransfer]] = {}
 			for block in data.get("block") or []:
-				transfers.extend(self._parse_block_transfers(block))
+				number, block_transfers = self._parse_block_transfers(block)
+				by_block[number] = block_transfers
+			probe = start
+			while probe <= chunk_end and probe in by_block:
+				transfers.extend(by_block[probe])
+				probe += 1
+			covered_through = probe - 1
+			if probe <= chunk_end:
+				logger.warning(
+					"block %d is missing from the answer for %d..%d; "
+					"the range is covered through %d only",
+					probe,
+					start,
+					chunk_end,
+					covered_through,
+				)
+				break
 			start = chunk_end + 1
-		return transfers
+		return NativeScan(transfers=transfers, covered_through=covered_through)
 
-	def _parse_block_transfers(self, block: dict) -> list[RangeTransfer]:
-		"""Extract native TransferContract operations from one raw block."""
+	def _parse_block_transfers(self, block: dict) -> tuple[int, list[RangeTransfer]]:
+		"""Extract one raw block's number and its native TransferContract operations."""
 		try:
 			header = block["block_header"]["raw_data"]
 			block_number = int(header["number"])
@@ -412,7 +442,7 @@ class TronGridSource(ChainDataSource):
 					else TransferStatus.FAILED,
 				)
 			)
-		return transfers
+		return block_number, transfers
 
 
 def _ms_to_utc(timestamp_ms: int | None) -> datetime | None:

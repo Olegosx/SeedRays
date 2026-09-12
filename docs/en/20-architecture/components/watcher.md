@@ -42,11 +42,22 @@ ranges, not by addresses (see [ADR-0018](../decisions/0018-range-scanning.md)):
   scan by a time window — the cursors advance in bounded steps, so one pass's provider
   traffic and memory stay predictable and progress is committed every pass (while the
   token scan is catching up, the reorg cleanup of token rows is deferred — their
-  confirmation is still ahead).
+  confirmation is still ahead). A window the provider cannot answer in one call is
+  halved and asked again: the price of a window is counted in events, and how many of
+  them a window holds is decided by the network, not by the gateway — a time bound
+  alone would let a busy network stall the scan for good.
+- A cursor marks proven completeness, not a finished code path. It advances only as far
+  as the provider's answer actually covered — a short answer is never read as "no
+  transfers here" — and it does not advance at all while any owner's rows from that
+  pass went unstored: the range is scanned again instead. The alternative loses the
+  payment for good, because the native scan has no overlap to bring it back and the
+  provisional row of the same transfer would then be cleaned up as a reorganization
+  victim.
 - Failures are isolated within the pass and logged: a provider "slow down" answer pauses
   that network's scan until the next pass; a failing user database excludes that owner
   for the rest of the pass without stopping the others; a broken numeric/date setting
-  degrades to its default with an error log.
+  degrades to its default with an error log; an unusable entry of the watched-contracts
+  setting is dropped on its own, and the sound entries keep being scanned.
 - Results are written to each owner's database via the [Storage Layer](storage.md).
 
 ## Data Access

@@ -70,6 +70,15 @@ class RateLimitedError(ChainDataSourceError):
 	"""The provider asked to slow down (HTTP 429/403); retry later, not now."""
 
 
+class RangeTooLargeError(ChainDataSourceError):
+	"""The asked range holds more data than one call can return.
+
+	Kept apart from a plain source failure on purpose: the caller can act
+	on it — narrow the window and ask again — instead of abandoning the
+	network for this pass.
+	"""
+
+
 class ChainDataSource(ABC):
 	"""Read-only access to one network's data.
 
@@ -151,8 +160,13 @@ class ChainDataSource(ABC):
 		"""
 
 	@abstractmethod
-	async def native_transfers(self, start_block: int, end_block: int) -> "list[RangeTransfer]":
+	async def native_transfers(self, start_block: int, end_block: int) -> "NativeScan":
 		"""Return native-coin transfers of a block range, bounds inclusive.
+
+		The result also says how far the range was actually covered: a
+		provider may answer with fewer blocks than asked, and an incomplete
+		answer must never be taken for an empty one — the caller stops its
+		cursor at the covered bound so the gap is scanned again.
 
 		Raises:
 			ChainDataSourceError: On request failure or unusable response.
@@ -186,3 +200,19 @@ class RangeTransfer:
 	timestamp: datetime | None
 	status: TransferStatus
 	event_index: int = 0
+
+
+@dataclass(frozen=True)
+class NativeScan:
+	"""The result of scanning a block range for native-coin transfers.
+
+	``covered_through`` is the last block the answer is complete up to: the
+	provider may return fewer blocks than asked, and the transfers of the
+	blocks it skipped are simply unknown. The caller advances its cursor to
+	this bound rather than to the end of the range it requested, so a gap is
+	rescanned instead of being silently passed over (ADR-0018, ADR-0021).
+	It equals ``start_block - 1`` when nothing of the range was covered.
+	"""
+
+	transfers: list[RangeTransfer]
+	covered_through: int

@@ -6,19 +6,26 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, text
 
 from seedrays.chains.base import (
 	AssetInfo,
 	ChainDataSource,
 	FinalityBoundary,
+	NativeScan,
+	RangeTooLargeError,
 	RangeTransfer,
 	RateLimitedError,
 	TransferStatus,
 )
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import schema_user
-from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
+from seedrays.storage.engine import (
+	create_sqlite_engine,
+	naive_utc,
+	registry_db_path,
+	user_db_path,
+)
 from seedrays.storage.migrations.runner import upgrade_registry
 from seedrays.watcher.single_pass import (
 	read_datetime_setting,
@@ -73,6 +80,8 @@ class FakeSource(ChainDataSource):
 		tokens: list[RangeTransfer] = (),
 		natives: list[RangeTransfer] = (),
 		rate_limited: bool = False,
+		covered_through: int | None = None,
+		too_large_until: int = 0,
 	) -> None:
 		self.network = NETWORK
 		self._boundary = boundary
@@ -80,6 +89,11 @@ class FakeSource(ChainDataSource):
 		self._tokens = list(tokens)
 		self._natives = list(natives)
 		self._rate_limited = rate_limited
+		# Провайдер, отвечающий не на весь запрошенный диапазон блоков.
+		self._covered_through = covered_through
+		# Сколько первых токен-запросов отвергнуть как «окно слишком велико».
+		self._too_large_until = too_large_until
+		self.token_windows: list[tuple[datetime | None, datetime | None]] = []
 
 	async def aclose(self) -> None:
 		pass
@@ -96,6 +110,11 @@ class FakeSource(ChainDataSource):
 	async def token_transfers(self, contract, symbol, decimals, since, *, confirmed, until=None):
 		if self._rate_limited:
 			raise RateLimitedError("fake 429")
+		if confirmed:
+			self.token_windows.append((since, until))
+			if self._too_large_until > 0:
+				self._too_large_until -= 1
+				raise RangeTooLargeError("fake: too many events in the window")
 		# Как у провайдера: confirmed — события не выше границы финальности,
 		# unconfirmed — только зона выше неё.
 		return [
@@ -106,7 +125,13 @@ class FakeSource(ChainDataSource):
 		]
 
 	async def native_transfers(self, start_block, end_block):
-		return [t for t in self._natives if start_block <= t.block_number <= end_block]
+		covered = end_block if self._covered_through is None else self._covered_through
+		return NativeScan(
+			transfers=[
+				t for t in self._natives if start_block <= t.block_number <= covered
+			],
+			covered_through=covered,
+		)
 
 
 async def _prepare(data_dir: Path) -> None:
@@ -462,5 +487,122 @@ def test_one_broken_user_db_does_not_stop_the_pass(tmp_path: Path) -> None:
 		assert stats.rows_recorded == 1  # платёж первого пользователя записан
 		rows = await _user_rows(tmp_path, schema_user.transactions)
 		assert [r.txid for r in rows] == ["t-alive"]
+
+	asyncio.run(scenario())
+
+
+def test_cursor_stays_put_when_an_owner_database_fails(tmp_path: Path) -> None:
+	"""A pass that could not store an owner's rows must not advance the cursor.
+
+	Иначе диапазон не будет запрошен снова (перекрытия у нативного скана
+	нет), а предварительная строка того же перевода на следующем проходе
+	уедет в чистку как жертва перестройки цепи — платёж исчезнет.
+	"""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		# Привязки читаются, а записать операцию некуда: таблицы нет.
+		engine = create_sqlite_engine(user_db_path(tmp_path, "u1"))
+		async with engine.begin() as conn:
+			await conn.execute(text("DROP TABLE transactions"))
+		await engine.dispose()
+
+		deposit = _usdt("t-unstored", OUR_ADDRESS, 1_000_000, block=95)
+		await run_pass(
+			tmp_path,
+			source_factory=lambda n, k, i: FakeSource(
+				boundary=100, head=100, tokens=[deposit]
+			),
+		)
+
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		state = await registry_ops.get_watcher_state(registry, NETWORK)
+		await registry.dispose()
+		assert state is None, "курсор записан, хотя строки владельца не сохранены"
+
+	asyncio.run(scenario())
+
+
+def test_cursor_follows_the_range_the_answer_actually_covered(tmp_path: Path) -> None:
+	"""A short answer moves the cursor only to the block it covered."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		# Первый проход задаёт курсор на границе финальности.
+		await run_pass(
+			tmp_path, source_factory=lambda n, k, i: FakeSource(boundary=100, head=100)
+		)
+		# Второй: запрошены блоки 101..200, провайдер ответил только по 150.
+		await run_pass(
+			tmp_path,
+			source_factory=lambda n, k, i: FakeSource(
+				boundary=200, head=200, covered_through=150
+			),
+		)
+
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		state = await registry_ops.get_watcher_state(registry, NETWORK)
+		await registry.dispose()
+		assert state.last_block == 150
+
+	asyncio.run(scenario())
+
+
+def test_a_broken_contract_entry_is_dropped_and_the_others_are_scanned(tmp_path: Path) -> None:
+	"""One unusable record of the setting never costs the sound ones their scan."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		await registry_ops.set_setting(
+			registry,
+			f"watcher.contracts.{NETWORK}",
+			json.dumps(
+				[
+					{"contract": USDT, "symbol": "USDT", "decimals": 6},
+					{"contract": "TBrokenEntry", "symbol": "NODECIMALS"},
+					{"contract": "TAlsoBroken", "symbol": "BAD", "decimals": "six"},
+				]
+			),
+		)
+		await registry.dispose()
+
+		deposit = _usdt("t-sound", OUR_ADDRESS, 1_000_000, block=95)
+		stats = await run_pass(
+			tmp_path,
+			source_factory=lambda n, k, i: FakeSource(
+				boundary=100, head=100, tokens=[deposit]
+			),
+		)
+		assert stats.networks_scanned == 1
+		assert stats.rows_recorded == 1
+		rows = await _user_rows(tmp_path, schema_user.transactions)
+		assert [r.txid for r in rows] == ["t-sound"]
+
+	asyncio.run(scenario())
+
+
+def test_token_window_narrows_when_the_provider_refuses_its_size(tmp_path: Path) -> None:
+	"""A window too wide for one call is halved and asked again, not abandoned."""
+
+	async def scenario() -> None:
+		await _prepare(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		# Курсор отстал на три часа: окно догона задано целиком.
+		await registry_ops.set_watcher_state(
+			registry,
+			NETWORK,
+			last_block=90,
+			last_scan_at=naive_utc(datetime.now(timezone.utc) - timedelta(hours=3)),
+		)
+		await registry.dispose()
+
+		source = FakeSource(boundary=100, head=100, too_large_until=2)
+		stats = await run_pass(tmp_path, source_factory=lambda n, k, i: source)
+
+		assert stats.networks_scanned == 1
+		spans = [until - since for since, until in source.token_windows]
+		assert len(spans) == 3, "окно должно было сузиться дважды и пройти с третьего раза"
+		assert spans[0] > spans[1] > spans[2]
 
 	asyncio.run(scenario())

@@ -23,7 +23,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
-from seedrays.chains.base import ChainDataSource, ChainDataSourceError, RangeTransfer, RateLimitedError
+from seedrays.chains.base import (
+	ChainDataSource,
+	ChainDataSourceError,
+	RangeTooLargeError,
+	RangeTransfer,
+	RateLimitedError,
+)
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import user_store
 from seedrays.storage.registry import KIND_NATIVE, KIND_TOKEN
@@ -49,6 +55,11 @@ MAX_BLOCKS_PER_PASS = 1200
 # После простоя шлюза курсор двигается такими шагами — объём одного вызова
 # ограничен и предсказуем, а прогресс фиксируется каждым проходом.
 MAX_TOKEN_MINUTES_PER_PASS = 60
+# Нижняя граница сужения окна догона. Цена окна измеряется не временем, а
+# числом событий в сети, поэтому провайдер может отказать и на дозволенном
+# окне; тогда оно делится пополам, но не бесконечно — ниже этого предела
+# дробить бессмысленно, и отказ честно уходит наверх.
+MIN_TOKEN_MINUTES_PER_PASS = 1
 
 SourceFactory = Callable[[str, str | None, float], ChainDataSource]
 
@@ -224,29 +235,14 @@ async def _scan_network(
 		token_cursor = (
 			_aware_utc(state.last_scan_at) if state and state.last_scan_at else since_default
 		)
-		# Окно догона: после простоя курсор двигается шагами ограниченной
-		# длины — объём одного прохода предсказуем, прогресс фиксируется.
-		token_until = token_cursor + timedelta(minutes=MAX_TOKEN_MINUTES_PER_PASS)
-		token_caught_up = token_until >= pass_started
-		if not token_caught_up:
-			logger.warning(
-				"network %s: token scan %s behind, catching up %d minutes per pass",
-				network,
-				pass_started - token_cursor,
-				MAX_TOKEN_MINUTES_PER_PASS,
-			)
-		confirmed: list[RangeTransfer] = []
-		for contract in contracts:
-			confirmed.extend(
-				await source.token_transfers(
-					contract["contract"],
-					contract["symbol"],
-					int(contract["decimals"]),
-					token_cursor - overlap,
-					confirmed=True,
-					until=None if token_caught_up else token_until,
-				)
-			)
+		confirmed, token_until, token_caught_up = await _confirmed_token_transfers(
+			source,
+			contracts,
+			network=network,
+			token_cursor=token_cursor,
+			overlap=overlap,
+			pass_started=pass_started,
+		)
 		final_start = state.last_block + 1 if state else boundary.block_number + 1
 		final_end = min(boundary.block_number, final_start + MAX_BLOCKS_PER_PASS)
 		if boundary.block_number - final_start > MAX_BLOCKS_PER_PASS:
@@ -256,8 +252,15 @@ async def _scan_network(
 				boundary.block_number - final_start,
 				MAX_BLOCKS_PER_PASS,
 			)
+		# Докуда нативный скан доказанно полон. Ответ провайдера может
+		# оборваться раньше запрошенного конца, и принять его за «в этих
+		# блоках переводов не было» значит потерять их навсегда: перекрытия
+		# у нативного скана нет, назад курсор не возвращается.
+		native_covered = state.last_block if state else boundary.block_number
 		if final_start <= final_end:
-			confirmed.extend(await source.native_transfers(final_start, final_end))
+			native = await source.native_transfers(final_start, final_end)
+			confirmed.extend(native.transfers)
+			native_covered = native.covered_through
 		failed_engines: set[AsyncEngine] = set()
 		matched, recorded = await _record_transfers(
 			confirmed,
@@ -271,9 +274,7 @@ async def _scan_network(
 		# финализированной зоны, которые она не подтвердила, — жертвы
 		# перестройки цепи (политика ADR-0021). Пока токен-скан догоняет,
 		# токен-строки не трогаем: их подтверждение ещё впереди.
-		scanned_final = final_end if final_start <= final_end else (
-			state.last_block if state else boundary.block_number
-		)
+		scanned_final = native_covered
 		catalog = await registry_ops.list_assets(registry, network)
 		asset_ids = {a.id for a in catalog}
 		cleanup_ids = {
@@ -305,12 +306,26 @@ async def _scan_network(
 					network,
 				)
 
-		await registry_ops.set_watcher_state(
-			registry,
-			network,
-			last_block=scanned_final,
-			last_scan_at=naive_utc(pass_started if token_caught_up else token_until),
-		)
+		if failed_engines:
+			# Курсор — граница доказанной полноты. Пока строки хотя бы одного
+			# владельца не записаны, зона не обработана: сдвинуть курсор
+			# значит потерять их насовсем (перекрытия у нативного скана нет),
+			# а предварительную строку того же перевода следующий проход
+			# снесёт как жертву перестройки цепи. Дешевле пересканировать.
+			logger.error(
+				"network %s: %d owner database(s) failed this pass; the cursor stays at "
+				"%s and the range will be scanned again",
+				network,
+				len(failed_engines),
+				state.last_block if state else "unset",
+			)
+		else:
+			await registry_ops.set_watcher_state(
+				registry,
+				network,
+				last_block=scanned_final,
+				last_scan_at=naive_utc(pass_started if token_caught_up else token_until),
+			)
 
 		# Фаза 2: предпросмотр зоны выше границы финальности — чтобы платёж
 		# был виден как ожидающий сразу. Сбой предпросмотра не срывает проход:
@@ -322,17 +337,21 @@ async def _scan_network(
 					await source.token_transfers(
 						contract["contract"],
 						contract["symbol"],
-						int(contract["decimals"]),
+						contract["decimals"],
 						None,
 						confirmed=False,
 					)
 				)
 			if boundary.block_number < head:
+				# Полнота предпросмотра ничего не решает: он ничего не
+				# фиксирует и зона пересканируется следующим проходом.
 				preview.extend(
-					await source.native_transfers(
-						boundary.block_number + 1,
-						min(head, boundary.block_number + MAX_BLOCKS_PER_PASS),
-					)
+					(
+						await source.native_transfers(
+							boundary.block_number + 1,
+							min(head, boundary.block_number + MAX_BLOCKS_PER_PASS),
+						)
+					).transfers
 				)
 			preview_matched, preview_recorded = await _record_transfers(
 				preview,
@@ -361,6 +380,79 @@ async def _scan_network(
 		return recorded, matched, applied, deleted
 	finally:
 		await source.aclose()
+
+
+async def _confirmed_token_transfers(
+	source: ChainDataSource,
+	contracts: list[dict],
+	*,
+	network: str,
+	token_cursor: datetime,
+	overlap: timedelta,
+	pass_started: datetime,
+) -> tuple[list[RangeTransfer], datetime, bool]:
+	"""The authoritative token scan of one network, narrowing its window on demand.
+
+	Окно догона задано временем, а его настоящая цена — числом событий,
+	которое зависит от сети, а не от шлюза. Провайдер вправе отказать и на
+	дозволенном окне; тогда окно делится пополам и запрос повторяется.
+	Без этого курсор не двигался бы вовсе: каждый следующий проход просил
+	бы тот же диапазон и получал тот же отказ, а сеть стояла бы, пока
+	оператор не поправит состояние вручную.
+
+	Args:
+		source: The network's data source.
+		contracts: Checked entries of the watched-contracts setting.
+		network: Network name, for the log lines.
+		token_cursor: Lower time bound — where the previous pass stopped.
+		overlap: Rescan overlap applied below the cursor.
+		pass_started: The moment this pass began.
+
+	Returns:
+		(transfers, the window's upper bound, whether the scan caught up).
+
+	Raises:
+		RangeTooLargeError: When even the narrowest window is refused.
+		ChainDataSourceError: On request failure or unusable response.
+		RateLimitedError: When the provider asks to slow down.
+	"""
+	window = timedelta(minutes=MAX_TOKEN_MINUTES_PER_PASS)
+	floor = timedelta(minutes=MIN_TOKEN_MINUTES_PER_PASS)
+	while True:
+		token_until = token_cursor + window
+		caught_up = token_until >= pass_started
+		if not caught_up:
+			logger.warning(
+				"network %s: token scan %s behind, catching up %s per pass",
+				network,
+				pass_started - token_cursor,
+				window,
+			)
+		try:
+			transfers: list[RangeTransfer] = []
+			for contract in contracts:
+				transfers.extend(
+					await source.token_transfers(
+						contract["contract"],
+						contract["symbol"],
+						contract["decimals"],
+						token_cursor - overlap,
+						confirmed=True,
+						until=None if caught_up else token_until,
+					)
+				)
+			return transfers, token_until, caught_up
+		except RangeTooLargeError as exc:
+			if window <= floor:
+				raise
+			window = max(window / 2, floor)
+			logger.warning(
+				"network %s: the token window holds more than one call can return (%s); "
+				"narrowing it to %s and asking again",
+				network,
+				exc,
+				window,
+			)
 
 
 async def _record_transfers(
@@ -425,21 +517,83 @@ async def _record_transfers(
 	return matched, recorded
 
 
+def _contract_entry(entry: object) -> dict | None:
+	"""One checked entry of the watched-contracts setting, or None if unusable.
+
+	Проверяется здесь всё, чем сканирование пользуется дальше: ниже по
+	проходу значения берутся без оглядки, и одна негодная запись обрушила
+	бы проход по всем сетям, а не только свой контракт.
+	"""
+	if not isinstance(entry, dict):
+		return None
+	contract, symbol, decimals = entry.get("contract"), entry.get("symbol"), entry.get("decimals")
+	if not isinstance(contract, str) or not contract.strip():
+		return None
+	if not isinstance(symbol, str) or not symbol.strip():
+		return None
+	# Разрядность строкой оператор пишет часто, и это рабочее значение;
+	# булево значение int() принял бы молча, поэтому отсекается отдельно.
+	if isinstance(decimals, bool):
+		return None
+	try:
+		places = int(decimals)
+	except (TypeError, ValueError):
+		return None
+	if places < 0:
+		return None
+	return {"contract": contract.strip(), "symbol": symbol.strip(), "decimals": places}
+
+
 async def _watched_contracts(registry: AsyncEngine, network: str) -> list[dict]:
 	"""Token contracts to scan: the operator setting plus known catalog assets.
 
 	The setting ``watcher.contracts.<network>`` holds a JSON list of
 	``{"contract", "symbol", "decimals"}`` objects (events carry no token
 	metadata, so the metadata comes from here or from the catalog).
+
+	The setting is edited by hand — the panel deliberately does not offer
+	it — so nothing checks it on the way in. Every entry is therefore
+	checked here one by one: a broken entry is dropped with its own error
+	line and the sound ones keep being scanned, because watching money is
+	a continuous duty and a typo in one record must not switch it off for
+	the rest.
 	"""
 	contracts: dict[str, dict] = {}
 	raw = await registry_ops.get_setting(registry, f"watcher.contracts.{network}")
 	if raw:
+		entries: list = []
 		try:
-			for entry in json.loads(raw):
-				contracts[entry["contract"]] = entry
-		except (ValueError, TypeError, KeyError) as exc:
+			parsed = json.loads(raw)
+		except ValueError as exc:
 			logger.error("invalid watcher.contracts.%s setting ignored: %s", network, exc)
+			parsed = None
+		if parsed is not None and not isinstance(parsed, list):
+			logger.error(
+				"watcher.contracts.%s must be a JSON list, setting ignored", network
+			)
+		elif parsed is not None:
+			entries = parsed
+		dropped = 0
+		for entry in entries:
+			checked = _contract_entry(entry)
+			if checked is None:
+				dropped += 1
+				logger.error(
+					"watcher.contracts.%s: entry %r lacks a usable contract, symbol "
+					"or decimals, dropped",
+					network,
+					entry,
+				)
+				continue
+			contracts[checked["contract"]] = checked
+		if dropped:
+			logger.error(
+				"watcher.contracts.%s: %d of %d entries dropped; scanning %s from the setting",
+				network,
+				dropped,
+				len(entries),
+				sorted(contracts) or "nothing",
+			)
 	for asset in await registry_ops.list_assets(registry, network):
 		if asset.kind == KIND_TOKEN:
 			contracts.setdefault(

@@ -31,12 +31,17 @@ The "chain data source" interface exposes:
   events over a time range (in the confirmed-only or unconfirmed-only mode of
   [ADR-0021](../decisions/0021-two-phase-scanning.md), reporting the event index that
   distinguishes several transfers inside one transaction), native transfers of a block
-  range.
+  range. A block-range answer also states how far it is complete: a provider may return
+  fewer blocks than asked, and the source says so rather than letting the caller mistake
+  a short answer for an empty range.
 - `aclose()` — releases the source's resources (HTTP clients); the consumer must call it
   when done.
 
 Provider "slow down" responses (HTTP 429/403) surface as a dedicated rate-limit error,
-distinct from data errors; the waiting policy belongs to the [Watcher](watcher.md).
+distinct from data errors; the waiting policy belongs to the [Watcher](watcher.md). A
+range holding more data than one call can return is a separate error too: the size of a
+range is measured in events, which the network decides, so the caller is told to narrow
+the window and ask again instead of giving up on the network.
 
 ## Related
 
