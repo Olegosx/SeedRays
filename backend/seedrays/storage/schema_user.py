@@ -12,6 +12,7 @@ is kept at the application level.
 """
 
 from sqlalchemy import (
+	Index,
 	CheckConstraint,
 	Column,
 	DateTime,
@@ -154,6 +155,37 @@ transactions = Table(
 	),
 	CheckConstraint("direction IN ('in', 'out')", name="ck_transactions_direction"),
 	CheckConstraint("status IN ('success', 'failed')", name="ck_transactions_status"),
+)
+
+# Индексы горячих чтений. Их отсутствие означало полное сканирование
+# таблицы: страница истории из пяти строк на 50 000 операций занимала
+# 217 мс, и всё это время единственный процесс шлюза (ADR-0003) не делал
+# ничего другого — watcher не сканировал, биллинг не проверял платежи.
+# Порядок столбцов повторяет порядок чтений, а не «на всякий случай».
+Index(
+	# История кабинета и история API приложений: отбор по направлению и
+	# сортировка «новее сверху». Одного этого индекса хватает обоим путям —
+	# отбор по адресам ложится на него же (замер: 0,4 мс против 35).
+	"ix_transactions_incoming",
+	transactions.c.direction,
+	transactions.c.block_number.desc(),
+	transactions.c.id.desc(),
+)
+Index(
+	# Проход watcher: строки, ещё не учтённые в балансе.
+	"ix_transactions_unapplied",
+	transactions.c.balance_applied_at,
+	transactions.c.finalized_at,
+	transactions.c.asset_id,
+)
+Index(
+	# Проход watcher: чистка предварительных строк внутри просканированной
+	# зоны. Выполняется каждый проход по каждой базе, даже когда таких
+	# строк нет вовсе.
+	"ix_transactions_provisional",
+	transactions.c.finalized_at,
+	transactions.c.balance_applied_at,
+	transactions.c.block_number,
 )
 
 # Наблюдения очереди (мемпула): без номера блока; наполняется только там, где

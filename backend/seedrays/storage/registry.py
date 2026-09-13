@@ -771,6 +771,34 @@ async def list_assets(registry: AsyncEngine, network: str) -> list[AssetRecord]:
 	return [_asset_record(row) for row in rows]
 
 
+async def asset_ids_matching(
+	registry: AsyncEngine,
+	*,
+	network: str | None = None,
+	symbol: str | None = None,
+	contract_address: str | None = None,
+) -> set[int]:
+	"""Ids of the catalog assets matching a network and/or a symbol.
+
+	Нужна для того, чтобы отбор по сети и активу выполнялся запросом к базе
+	владельца, а не перебором в Python: экранное чтение обязано возвращать
+	страницу, а не всю историю (ADR-0006, дополнение о чтениях под экран).
+	Активы лежат в общем реестре, а строки — в базе пользователя, поэтому
+	фильтр сначала разрешается в набор идентификаторов.
+	"""
+	query = select(assets.c.id)
+	if network is not None:
+		query = query.where(assets.c.network == network)
+	if symbol is not None:
+		query = query.where(assets.c.symbol == symbol)
+	if contract_address is not None:
+		# Пустой адрес контракта — признак родной монеты сети (ADR-0010),
+		# он же значение фильтра «native» в API приложений.
+		query = query.where(assets.c.contract_address == contract_address)
+	async with registry.connect() as conn:
+		return {row.id for row in (await conn.execute(query)).all()}
+
+
 async def get_setting(registry: AsyncEngine, key: str) -> str | None:
 	"""Read one gateway setting; None if absent."""
 	async with registry.connect() as conn:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import and_, delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -48,6 +48,27 @@ def classify_transaction(status: str, balance_applied_at: datetime | None) -> st
 	if balance_applied_at is not None:
 		return API_STATUS_CONFIRMED
 	return API_STATUS_PENDING
+
+
+def history_status_clause(api_status: str):
+	"""SQL condition selecting one consumer-facing status.
+
+	Зеркало :func:`classify_transaction`: то же правило, выраженное для
+	базы, чтобы отбор по статусу шёл запросом, а не перебором уже
+	вычитанных строк. Держать их рядом обязательно — разъехавшись, они
+	покажут пользователю одно, а отфильтруют другое.
+	"""
+	if api_status == API_STATUS_FAILED:
+		return transactions.c.status == STATUS_FAILED
+	if api_status == API_STATUS_CONFIRMED:
+		return and_(
+			transactions.c.status != STATUS_FAILED,
+			transactions.c.balance_applied_at.is_not(None),
+		)
+	return and_(
+		transactions.c.status != STATUS_FAILED,
+		transactions.c.balance_applied_at.is_(None),
+	)
 
 
 @dataclass(frozen=True)

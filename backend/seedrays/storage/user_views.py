@@ -15,7 +15,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.storage.schema_user import applications, balances, bindings, transactions, wallets
-from seedrays.storage.user_store import DIRECTION_IN, STATUS_SUCCESS
+from seedrays.storage.user_store import DIRECTION_IN, STATUS_SUCCESS, history_status_clause
 
 
 async def overview_counters(engine: AsyncEngine) -> tuple[int, int, int]:
@@ -47,17 +47,29 @@ async def list_incoming(
 	*,
 	addresses: list[str] | None = None,
 	before: tuple[int, int] | None = None,
+	asset_ids: set[int] | None = None,
+	status: str | None = None,
+	limit: int | None = None,
 ) -> list:
-	"""Incoming transaction rows, newest first; optionally scoped to addresses.
+	"""One page of incoming transaction rows, newest first.
 
 	Кормит и историю кабинета (без охвата адресов), и историю API
 	приложений (по адресам одного пользователя приложения).
+
+	Отбор и размер страницы — часть запроса, а не постобработки: история
+	растёт годами, и чтение всей таблицы ради пяти строк на дашборде
+	занимало бы единственный процесс шлюза на сотни миллисекунд, пока
+	watcher не сканирует (ADR-0003, ADR-0006 о чтениях под экран).
 
 	Args:
 		engine: The owner's user-database engine.
 		addresses: When given, only rows on these addresses.
 		before: Pagination cursor ``(block_number, row id)`` — only rows
 			strictly older in the (block desc, id desc) ordering.
+		asset_ids: When given, only rows of these catalog assets — the
+			caller resolves a network/asset filter into ids first.
+		status: When given, only rows of this consumer-facing status.
+		limit: Page size; None — no bound (the caller asked for all).
 	"""
 	query = (
 		select(transactions)
@@ -66,6 +78,10 @@ async def list_incoming(
 	)
 	if addresses is not None:
 		query = query.where(transactions.c.address.in_(addresses))
+	if asset_ids is not None:
+		query = query.where(transactions.c.asset_id.in_(asset_ids))
+	if status is not None:
+		query = query.where(history_status_clause(status))
 	if before is not None:
 		block, row_id = before
 		query = query.where(
@@ -77,6 +93,8 @@ async def list_incoming(
 				),
 			)
 		)
+	if limit is not None:
+		query = query.limit(limit)
 	async with engine.connect() as conn:
 		return (await conn.execute(query)).all()
 

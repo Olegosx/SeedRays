@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays.storage import registry as registry_ops
 from seedrays.storage import schema_user
+from seedrays.storage import user_store
 from seedrays.storage.engine import create_sqlite_engine, registry_db_path, user_db_path
 from seedrays.storage.migrations.runner import upgrade_all, upgrade_registry, upgrade_user_db
 
@@ -303,3 +304,49 @@ def test_a_user_id_is_never_handed_out_twice(tmp_path: Path) -> None:
 	bob_id, carol_id, carol_dir = asyncio.run(scenario())
 	assert carol_id != bob_id, "номер удалённого пользователя достался новому"
 	assert carol_dir == f"u{carol_id}", "каталог назван по собственному номеру"
+
+
+def test_history_read_returns_a_page_not_the_whole_table(tmp_path: Path) -> None:
+	"""The page size and the status filter are part of the query, not postprocessing.
+
+	История растёт годами, а страница дашборда — пять строк: пока отбор шёл
+	перебором уже вычитанных строк, каждое открытие кабинета материализовало
+	всю таблицу и занимало единственный процесс шлюза (ADR-0003).
+	"""
+
+	async def scenario() -> tuple[int, int, list[str]]:
+		from seedrays.storage import user_views
+
+		db_path = user_db_path(tmp_path, "u1")
+		db_path.parent.mkdir(parents=True, exist_ok=True)
+		upgrade_user_db(db_path)
+		engine = create_sqlite_engine(db_path)
+		try:
+			for i in range(50):
+				await user_store.record_transaction(
+					engine,
+					address="TAddr",
+					txid=f"tx{i}",
+					asset_id=1,
+					direction="in",
+					amount=1_000,
+					block_number=i,
+					tx_time=None,
+					status="success",
+					# Половина учтена в балансе, половина ещё нет.
+					finalized_at=datetime(2026, 9, 1) if i % 2 == 0 else None,
+				)
+			await user_store.apply_finalized(
+				engine, asset_ids={1}, applied_at=datetime(2026, 9, 1)
+			)
+			page = await user_views.list_incoming(engine, limit=5)
+			confirmed = await user_views.list_incoming(engine, status="confirmed")
+			pending = await user_views.list_incoming(engine, status="pending", limit=3)
+			return len(page), len(confirmed), [r.txid for r in pending]
+		finally:
+			await engine.dispose()
+
+	page, confirmed, pending = asyncio.run(scenario())
+	assert page == 5, "запрос отдал больше страницы"
+	assert confirmed == 25, "отбор по статусу не выполнен запросом"
+	assert len(pending) == 3

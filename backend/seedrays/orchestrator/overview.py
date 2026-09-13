@@ -115,39 +115,57 @@ async def history(
 		raise OperationError("invalid_limit", "limit must be non-negative (0 means all)")
 
 	address_to_wallet, wallet_names = await user_views.wallet_display_map(engine)
-	rows = await user_views.list_incoming(engine, before=cursor)
-	infos = await _asset_infos(registry, {row.asset_id for row in rows})
+	# Фильтры разрешаются в то, чем умеет отбирать база владельца:
+	# кошелёк — в набор адресов, сеть и актив — в набор идентификаторов
+	# каталога. Иначе страница из пяти строк читала бы всю историю.
+	addresses = None
+	if wallet_id is not None:
+		addresses = [a for a, w in address_to_wallet.items() if w == wallet_id]
+		if not addresses:
+			return HistoryPage(rows=[], next_cursor=None)
+	asset_ids = None
+	if network is not None or asset is not None:
+		asset_ids = await registry_ops.asset_ids_matching(
+			registry, network=network, symbol=asset
+		)
+		if not asset_ids:
+			return HistoryPage(rows=[], next_cursor=None)
+	rows = await user_views.list_incoming(
+		engine,
+		addresses=addresses,
+		before=cursor,
+		asset_ids=asset_ids,
+		status=None if status == API_STATUS_ALL else status,
+		# На строку больше страницы: так видно, есть ли продолжение.
+		limit=(limit + 1) if limit else None,
+	)
+	page = rows[:limit] if limit else rows
+	has_more = bool(limit) and len(rows) > limit
+	infos = await _asset_infos(registry, {row.asset_id for row in page})
 
 	result: list[HistoryRow] = []
-	next_cursor: tuple[int, int] | None = None
-	for row in rows:
+	for row in page:
 		info = infos.get(row.asset_id)
 		if info is None:
 			continue
 		row_wallet_id = address_to_wallet.get(row.address)
-		entry = HistoryRow(
-			time=row.tx_time.isoformat(sep=" ", timespec="minutes") if row.tx_time else None,
-			wallet_id=row_wallet_id,
-			wallet=wallet_names.get(row_wallet_id, "—"),
-			network=info["network"],
-			asset=info["symbol"],
-			amount=format_amount(int(row.amount), info["decimals"]),
-			txid=row.txid,
-			status=classify_transaction(row.status, row.balance_applied_at),
+		result.append(
+			HistoryRow(
+				time=row.tx_time.isoformat(sep=" ", timespec="minutes")
+				if row.tx_time
+				else None,
+				wallet_id=row_wallet_id,
+				wallet=wallet_names.get(row_wallet_id, "—"),
+				network=info["network"],
+				asset=info["symbol"],
+				amount=format_amount(int(row.amount), info["decimals"]),
+				txid=row.txid,
+				status=classify_transaction(row.status, row.balance_applied_at),
+			)
 		)
-		if wallet_id is not None and entry.wallet_id != wallet_id:
-			continue
-		if network is not None and entry.network != network:
-			continue
-		if asset is not None and entry.asset != asset:
-			continue
-		if status != API_STATUS_ALL and entry.status != status:
-			continue
-		result.append(entry)
-		if limit and len(result) >= limit:
-			# Лимит выбран не до конца выборки — есть следующая страница.
-			next_cursor = (row.block_number, row.id)
-			break
+	# Курсор — позиция последней выданной строки; ставится только когда
+	# за страницей действительно есть продолжение.
+	next_cursor = (page[-1].block_number, page[-1].id) if has_more and page else None
 	return HistoryPage(rows=result, next_cursor=next_cursor)
 
 

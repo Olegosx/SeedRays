@@ -48,6 +48,14 @@ data — wallets, addresses, bindings and operations live only in the user datab
   (database per user vs schema per user) is an open question, to be decided in a dedicated
   ADR when PostgreSQL support is added.
 
+## Indexes
+
+The user database indexes what the hot reads actually ask for: incoming rows by direction
+and block order (the history of both the cabinet and the Application API), rows not yet
+applied to the balance, and provisional rows by block (the reorganization cleanup). The
+last two run on every pass for every owner in every network, even with nothing to do.
+Without them every one of these reads scanned the whole table.
+
 ## Migrations
 
 Schema migrations run on SQLAlchemy Core + Alembic

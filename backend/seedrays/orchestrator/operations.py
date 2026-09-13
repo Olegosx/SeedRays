@@ -311,13 +311,21 @@ async def _asset_infos(registry: AsyncEngine, asset_ids: set[int]) -> dict[int, 
 	}
 
 
+# Значение фильтра актива, обозначающее родную монету сети: у неё пустой
+# адрес контракта (ADR-0010), и адресом её не отберёшь.
+NATIVE_ASSET_FILTER = "native"
+
+
+def _filter_contract(asset_filter: str) -> str:
+	"""The contract address an asset filter stands for."""
+	return "" if asset_filter == NATIVE_ASSET_FILTER else asset_filter
+
+
 def _asset_matches(info: dict, asset_filter: str | None) -> bool:
 	"""Asset filter: a contract address, or the literal ``native``."""
 	if asset_filter is None:
 		return True
-	if asset_filter == "native":
-		return info["contract_address"] == ""
-	return info["contract_address"] == asset_filter
+	return info["contract_address"] == _filter_contract(asset_filter)
 
 
 async def get_balances(
@@ -388,17 +396,31 @@ async def get_history(
 	addresses = await _user_addresses(ctx, external_id, network)
 	if not addresses:
 		return []
-	rows = await user_views.list_incoming(ctx.engine, addresses=list(addresses))
+	# Фильтр актива разрешается в идентификаторы каталога, отбор по
+	# статусу и размер страницы уходят в запрос: иначе на каждый опрос
+	# истории вычитывалась бы вся она целиком (ADR-0006).
+	asset_ids = None
+	if asset is not None:
+		asset_ids = await registry_ops.asset_ids_matching(
+			registry, contract_address=_filter_contract(asset)
+		)
+		if not asset_ids:
+			return []
+	rows = await user_views.list_incoming(
+		ctx.engine,
+		addresses=list(addresses),
+		asset_ids=asset_ids,
+		status=None if status == API_STATUS_ALL else status,
+		limit=limit or None,
+	)
 
 	infos = await _asset_infos(registry, {row.asset_id for row in rows})
 	result = []
 	for row in rows:
 		info = infos.get(row.asset_id)
-		if info is None or not _asset_matches(info, asset):
+		if info is None:
 			continue
 		api_status = classify_transaction(row.status, row.balance_applied_at)
-		if status != API_STATUS_ALL and api_status != status:
-			continue
 		result.append(
 			{
 				"txid": row.txid,
@@ -411,8 +433,6 @@ async def get_history(
 				"status": api_status,
 			}
 		)
-		if limit and len(result) >= limit:
-			break
 	return result
 
 

@@ -54,6 +54,13 @@ callers:
   purpose-named read per screen or API read path (the dashboard summary, the history
   page). A need the layer cannot express is a reason to extend the layer or open a new
   ADR — never to bypass it.
+- Such a read returns **the page the screen asked for**: the page size and every filter
+  belong to the operation, not to postprocessing above it. Filtering already-fetched rows
+  reads the whole table for five rows of a dashboard — measured at 217 ms on 50 000
+  operations of one user, with the single process (ADR-0003) doing nothing else meanwhile.
+  A filter over another database is resolved into values this one can match first (a
+  wallet into addresses, a network or an asset into catalog ids), the way the fee turnover
+  already does it.
 
 ## Related
 
