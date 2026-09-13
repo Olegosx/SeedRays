@@ -5,8 +5,9 @@
 Deploying the gateway to a production server: installation, the first start, the
 systemd service, the publishing schemes and updates. The gateway is one Python
 process ([ADR-0003](../20-architecture/decisions/0003-single-process-supervised.md))
-that serves the HTTP API, the static frontend and runs the watcher; all its state
-lives in one data directory (SQLite in WAL mode, the security journal).
+that serves the HTTP API, the static frontend and runs the watcher and billing — the
+owner's fee ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md));
+all its state lives in one data directory (SQLite in WAL mode, the security journal).
 
 **The scope of trust first**: the online part is watch-only
 ([ADR-0002](../20-architecture/decisions/0002-watch-only-online-part.md)) — the server
@@ -77,8 +78,8 @@ sudoedit /etc/seedrays/seedrays.toml
 
 ```toml
 [gateway]
-# The data directory: the registry database, the per-user databases, the archive of
-# deleted users (archive/) and logs/security.log. Absolute on a server.
+# The data directory: the registry and billing databases, the per-user databases,
+# the archive of deleted users (archive/) and logs/security.log. Absolute on a server.
 data_dir = "/var/lib/seedrays"
 
 # API bind address; optional, defaults to 127.0.0.1:8080. Keep it on localhost —
@@ -125,6 +126,13 @@ layer is a file and not the process environment, which `systemctl show` prints t
    - Token contracts to watch: the `watcher.contracts.<network>` setting (a JSON
      list of contract addresses) is deliberately not on the panel and is entered
      manually — the owner's decision.
+   - The gateway fee ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md)) —
+     when you plan to charge one. The switch, the rate, the threshold, the payment
+     term, the reminders, the owner's email and the per-network token-contract lists
+     (counted towards turnover and accepted as payment) live on the same settings
+     page; the watching master-wallet xpubs — in the "Master wallets" block of the
+     panel's "Invoices" page. A network without a master wallet is not offered to
+     users, and no invoice is issued in it.
 4. **Verify**: register a cabinet user, attach a wallet, watch the watcher status
    block on the panel (see [Monitoring](monitoring.md)).
 
@@ -155,10 +163,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now seedrays
 ```
 
-Component failures inside the process (the API server, the watcher) are restarted
-by the gateway's own supervisor without touching the other component; `Restart=always`
-covers the whole-process death. `SIGTERM` (what `systemctl stop` sends) is a graceful
-shutdown: open API connections finish, the watcher is cancelled between passes.
+Component failures inside the process (the API server, the watcher, billing) are
+restarted by the gateway's own supervisor without touching the others;
+`Restart=always` covers the whole-process death. `SIGTERM` (what `systemctl stop`
+sends) is a graceful shutdown: open API connections finish, the watcher and billing
+are cancelled between passes.
 
 ## Publishing Schemes
 
@@ -271,7 +280,9 @@ after a restart" (trusted proxies, journal rotation) pick up their values here t
 
 ## Backup
 
-What to back up: the entire data directory — the registry database, the per-user
+What to back up: the entire data directory — the registry database, the billing
+database (`billing.db`: invoices, observed payments and manual credits —
+[ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md)), the per-user
 databases, the deleted-user archive (`archive/`,
 [ADR-0024](../20-architecture/decisions/0024-user-deletion-archive.md)) and, if
 desired, the security journal. The seed phrase is **not** part of
@@ -289,6 +300,10 @@ sudo systemctl stop seedrays && cp -a /var/lib/seedrays /backup/seedrays-$(date 
 # 2. Online copy of one database with SQLite's own backup command:
 sqlite3 /var/lib/seedrays/registry.db ".backup /backup/registry.db"
 ```
+
+The second option copies **one** database: a full online backup means the same
+command for every `*.db` file of the directory (the registry, billing, every
+per-user database).
 
 Restore is the reverse: stop the service, put the directory back, start.
 

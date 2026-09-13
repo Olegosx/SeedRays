@@ -20,8 +20,9 @@ Format: `time LEVEL logger: message`. What matters:
 - `gateway starting: api on …` / `trusted reverse proxies: …` — the startup lines
   with the effective bind and proxy trust.
 - `WARNING … exited unexpectedly, restarting` / `ERROR … crashed, restarting` —
-  a component (API server or watcher) fell and was restarted by the supervisor;
-  occasional network-caused watcher restarts are normal, a restart loop is not.
+  a component (the API server, the watcher or billing) fell and was restarted by
+  the supervisor; occasional network-caused restarts are normal, a restart loop
+  is not.
 - `ERROR` lines from mail sending or the chain provider — the operation that failed
   is answered to the user explicitly; the log carries the diagnostic context.
 
@@ -60,6 +61,32 @@ that does not move while those lines keep coming means the provider serves no ne
 blocks — or rate-limits the gateway (the per-second rate is a panel setting). No summary
 lines at all means the watcher itself is not running.
 
+## Billing
+
+The owner's fee ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md))
+runs in hourly passes and, like the watcher, writes a summary line per pass:
+
+```
+billing pass done: checked=… payments=… foreign=… billed=… issued=… overdue=… no_wallet=…
+```
+
+- `checked` / `payments` — how many invoice addresses were polled (only debtors
+  are polled) and how many new payments were stored; every payment and every
+  issued invoice also gets a line of its own with the amount, the login and the
+  transaction.
+- `foreign` above zero — an asset outside the `billing.payment_assets.<network>`
+  list arrived on an invoice address: it is stored but valued at zero and does not
+  move the balance; the owner is emailed.
+- `no_wallet` — the logins that have nowhere to be invoiced: their payment network
+  has no master wallet.
+- With the fee switched off the pass says so explicitly —
+  `the gateway fee is switched off: no invoices are issued` — and writes no summary.
+
+Suspending and restoring access is visible twice: as log lines (`user … suspended` /
+`user … restored`) and as `billing_suspend` / `billing_restore` events in the
+security journal. A failed notification email does not cancel the operation — it
+remains an `ERROR billing mail … failed` line.
+
 ## Tracing One Payment
 
 A user says their payment never arrived. The service log answers it without the server
@@ -93,6 +120,8 @@ Search the log for the transaction id. Three outcomes, and they are fixed differ
 | Deposits not appearing | watcher status, service log | Frozen cursor (provider), missing `watcher.contracts.<network>` list for token deposits, or the wallet/network mapping is not configured for the application. For one specific payment see [Tracing One Payment](#tracing-one-payment). |
 | The cursor does not move while passes keep running | service log | The pass could not store some owner's rows and left the cursor where it was on purpose, so the range is scanned again — the log names the owner. Fix that database and the cursor resumes. |
 | A row is missing from the history and the totals are short | service log: `absent from the registry catalog` | The registry catalog and a user's database were restored from copies made at different times. The rows are intact; the asset description is what is missing. |
+| An invoice was paid but the balance does not grow | billing summary: `foreign=` | The payment token is not listed in `billing.payment_assets.<network>` — the transfer is stored as a foreign asset valued at zero and is never revalued retroactively. Add the token to the list and credit this payment by confirming the invoice manually in the panel. |
+| No invoices are issued despite the turnover | service log | The fee is switched off (`billing.enabled`), the turnover is below the threshold, the turnover assets are not listed in `billing.assets.<network>` — or the user's payment network has no master wallet (`no_wallet=` in the summary names the login). |
 | Panel/cabinet sign-in impossible after restore | — | Sessions are server-side; a database restored from backup drops the ones created since. Sign in again. |
 
 ## Related

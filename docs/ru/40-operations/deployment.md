@@ -5,8 +5,10 @@
 Развёртывание шлюза на боевом сервере: установка, первый запуск, служба systemd,
 схемы публикации и обновление. Шлюз — один Python-процесс
 ([ADR-0003](../20-architecture/decisions/0003-single-process-supervised.md)),
-обслуживающий HTTP API, статику фронтенда и watcher; всё его состояние живёт в одном
-каталоге данных (SQLite в режиме WAL, журнал безопасности).
+обслуживающий HTTP API, статику фронтенда, watcher и биллинг — вознаграждение
+владельца ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md));
+всё его состояние живёт в одном каталоге данных (SQLite в режиме WAL, журнал
+безопасности).
 
 **Сначала о границе доверия**: онлайн-часть — только наблюдение
 ([ADR-0002](../20-architecture/decisions/0002-watch-only-online-part.md)) — сервер
@@ -78,8 +80,8 @@ sudoedit /etc/seedrays/seedrays.toml
 
 ```toml
 [gateway]
-# The data directory: the registry database, the per-user databases, the archive of
-# deleted users (archive/) and logs/security.log. Absolute on a server.
+# The data directory: the registry and billing databases, the per-user databases,
+# the archive of deleted users (archive/) and logs/security.log. Absolute on a server.
 data_dir = "/var/lib/seedrays"
 
 # API bind address; optional, defaults to 127.0.0.1:8080. Keep it on localhost —
@@ -126,6 +128,12 @@ bind = "127.0.0.1:8080"
    - Наблюдаемые токен-контракты: настройка `watcher.contracts.<сеть>` (JSON-список
      адресов контрактов) сознательно не вынесена в панель и вносится вручную —
      решение владельца.
+   - Вознаграждение шлюза ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md)) —
+     если планируете брать. Выключатель, ставка, порог, срок оплаты, напоминания,
+     почта владельца и списки токен-контрактов по сетям (учитываемые в обороте и
+     принимаемые в оплату) — на той же странице настроек; наблюдающие xpub
+     мастер-кошельков — блок «Мастер-кошельки» страницы «Счета» панели. Сеть без
+     мастер-кошелька пользователю не предлагается, и счёт в ней не выставляется.
 4. **Проверить**: зарегистрировать пользователя кабинета, прикрепить кошелёк,
    смотреть блок состояния watcher в панели (см. [Наблюдение](monitoring.md)).
 
@@ -156,10 +164,11 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now seedrays
 ```
 
-Сбои компонентов внутри процесса (API-сервер, watcher) перезапускает собственный
-надсмотрщик шлюза, не трогая второй компонент; `Restart=always` покрывает гибель
-процесса целиком. `SIGTERM` (его посылает `systemctl stop`) — плавная остановка:
-открытые соединения API дорабатываются, watcher отменяется между проходами.
+Сбои компонентов внутри процесса (API-сервер, watcher, биллинг) перезапускает
+собственный надсмотрщик шлюза, не трогая остальные; `Restart=always` покрывает
+гибель процесса целиком. `SIGTERM` (его посылает `systemctl stop`) — плавная
+остановка: открытые соединения API дорабатываются, watcher и биллинг отменяются
+между проходами.
 
 ## Схемы публикации
 
@@ -272,8 +281,10 @@ sudo systemctl restart seedrays
 
 ## Резервное копирование
 
-Что копировать: весь каталог данных — реестровую базу, базы пользователей, архив
-удалённых пользователей (`archive/`,
+Что копировать: весь каталог данных — реестровую базу, базу биллинга
+(`billing.db`: счета, наблюдённые оплаты и ручные зачисления —
+[ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md)), базы
+пользователей, архив удалённых пользователей (`archive/`,
 [ADR-0024](../20-architecture/decisions/0024-user-deletion-archive.md)) и, по
 желанию, журнал безопасности. Сид-фраза **не** входит ни в какой бэкап: шлюз её
 никогда не хранит ([ADR-0002](../20-architecture/decisions/0002-watch-only-online-part.md));
@@ -290,6 +301,9 @@ sudo systemctl stop seedrays && cp -a /var/lib/seedrays /backup/seedrays-$(date 
 # 2. Копия одной базы на ходу штатной командой SQLite:
 sqlite3 /var/lib/seedrays/registry.db ".backup /backup/registry.db"
 ```
+
+Второй путь копирует **одну** базу: полный бэкап на ходу — это та же команда для
+каждого файла `*.db` каталога (реестр, биллинг, каждая база пользователя).
 
 Восстановление — в обратном порядке: остановить службу, вернуть каталог, запустить.
 

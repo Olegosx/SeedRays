@@ -14,9 +14,9 @@
 
 [gateway]
 
-# The data directory: the registry database, the per-user databases, the
-# archive of deleted users and the security journal. Everything the gateway
-# stores lives under it, so this is what a backup must cover.
+# The data directory: the registry and billing databases, the per-user
+# databases, the archive of deleted users and the security journal. Everything
+# the gateway stores lives under it, so this is what a backup must cover.
 #
 # Use an ABSOLUTE path on a server. A relative one is resolved against the
 # directory holding this file, which is convenient for a development checkout
