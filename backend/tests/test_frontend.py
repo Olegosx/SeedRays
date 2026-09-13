@@ -47,6 +47,8 @@ def test_every_page_with_the_shell_loads_the_vendor_bundle() -> None:
 
 def test_every_error_code_reaching_the_browser_has_a_translation() -> None:
 	"""An untranslated code shows the server's English message to the user."""
+	from seedrays.api import errors as api_errors
+
 	codes: set[str] = set()
 	for source in BACKEND.rglob("*.py"):
 		codes |= set(
@@ -55,6 +57,10 @@ def test_every_error_code_reaching_the_browser_has_a_translation() -> None:
 				source.read_text(encoding="utf-8"),
 			)
 		)
+	# Отказы, которые рождает сам фреймворк (неизвестный путь, неверный метод)
+	# и непредвиденный сбой: они объявлены кодами, а не исключениями.
+	codes |= set(api_errors.FRAMEWORK_CODES.values())
+	codes |= {api_errors.INTERNAL_ERROR_CODE, api_errors.REQUEST_FAILED_CODE}
 	for language in ("en", "ru"):
 		translated = {
 			key.removeprefix("errors.")

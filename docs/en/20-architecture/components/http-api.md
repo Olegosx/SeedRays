@@ -60,7 +60,10 @@ Pagination: a row-count limit parameter, default 10, 0 = everything.
 - API version in the path (`/v1/…`).
 - JSON everywhere; amounts are strings, never floating-point numbers.
 - The API key travels in a request header, never in the URL.
-- Unified error format: machine code + human-readable message.
+- Unified error format: machine code + human-readable message. It covers the refusals the
+  framework itself produces — an unknown path, a method the address does not accept — and
+  any unexpected failure, which answers `internal_error` while the traceback goes to the
+  service log. An integration parsing the response never meets a second shape.
 - The OpenAPI schema and the interactive docs are not published: the schema lists every
   route of all three groups — the operator's included — with the shape of every request
   body, and an unauthenticated visitor has no business reading it.

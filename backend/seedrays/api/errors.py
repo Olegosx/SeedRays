@@ -7,6 +7,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from seedrays.orchestrator.operations import OperationError
 
@@ -69,6 +70,20 @@ def _body(code: str, message: str) -> dict:
 	return {"error": {"code": code, "message": message}}
 
 
+# Машинные коды для отказов, которые рождает сам фреймворк: до этих
+# обработчиков они уходили наружу в чужом формате, и разбор ответа на стороне
+# приложения ломался на первой же опечатке в пути (ADR-0011 объявляет единый
+# формат ошибок соглашением всей группы маршрутов).
+FRAMEWORK_CODES = {
+	404: "not_found",
+	405: "method_not_allowed",
+	422: "validation",
+}
+# Код любого непредвиденного сбоя и код отказа фреймворка без своего имени.
+INTERNAL_ERROR_CODE = "internal_error"
+REQUEST_FAILED_CODE = "request_failed"
+
+
 def register_error_handlers(app: FastAPI) -> None:
 	"""Attach the unified error format to a FastAPI application."""
 
@@ -94,6 +109,28 @@ def register_error_handlers(app: FastAPI) -> None:
 				exc.message,
 			)
 		return JSONResponse(status_code=status, content=_body(exc.code, exc.message))
+
+	@app.exception_handler(StarletteHTTPException)
+	async def _framework_error(
+		_request: Request, exc: StarletteHTTPException
+	) -> JSONResponse:
+		# Неизвестный путь, неверный метод, отказ монтированной статики:
+		# наружу должен уходить тот же конверт, что и у остальных ошибок.
+		code = FRAMEWORK_CODES.get(exc.status_code, REQUEST_FAILED_CODE)
+		message = exc.detail if isinstance(exc.detail, str) else code.replace("_", " ")
+		return JSONResponse(status_code=exc.status_code, content=_body(code, message))
+
+	@app.exception_handler(Exception)
+	async def _unexpected_error(request: Request, exc: Exception) -> JSONResponse:
+		# Непредвиденный сбой: трассировка — в журнал шлюза, наружу —
+		# машинный код без внутренних подробностей.
+		logger.exception(
+			"unhandled error on %s %s", request.method, request.url.path
+		)
+		return JSONResponse(
+			status_code=500,
+			content=_body(INTERNAL_ERROR_CODE, "the gateway failed to handle the request"),
+		)
 
 	@app.exception_handler(RequestValidationError)
 	async def _validation_error(

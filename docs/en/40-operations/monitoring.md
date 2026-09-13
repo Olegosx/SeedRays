@@ -48,13 +48,17 @@ operator events from unexpected addresses.
 
 ## The Watcher
 
-The panel's settings page shows the per-network watcher status: the last finalized
-block processed and the time of the last pass. A healthy gateway moves the block
-cursor and refreshes the pass time on every interval
-([ADR-0021](../20-architecture/decisions/0021-two-phase-scanning.md)). A frozen
-cursor with a fresh pass time means the provider serves no new finalized blocks — or
-rate-limits the gateway (see the service log; the per-second rate is a panel
-setting).
+The panel's settings page shows the per-network watcher status: the last finalized block
+processed and the token scan cursor. **Both are cursors, not signs of life.** The token
+cursor deliberately sits in the past while the scan is catching up after downtime
+([ADR-0021](../20-architecture/decisions/0021-two-phase-scanning.md)), so an old value
+there does not mean the passes stopped — the catch-up window advances it in bounded steps.
+
+Whether the passes are running at all is answered by the service log: every pass writes a
+summary line per network with the bounds it covered (`blocks=`, `tokens=`). A block cursor
+that does not move while those lines keep coming means the provider serves no new finalized
+blocks — or rate-limits the gateway (the per-second rate is a panel setting). No summary
+lines at all means the watcher itself is not running.
 
 ## Tracing One Payment
 

@@ -359,3 +359,31 @@ def test_the_api_schema_is_not_published_by_default(tmp_path: Path) -> None:
 	assert schema == 404, "схема отдаётся анонимно"
 	assert docs == 404, "интерактивная документация отдаётся анонимно"
 	assert on_request == 200, "по явному запросу схема должна открываться"
+
+
+def test_framework_refusals_use_the_gateway_error_format(tmp_path: Path) -> None:
+	"""A wrong path or method answers in the same envelope as everything else.
+
+	Единый формат ошибок объявлен соглашением всей группы маршрутов
+	(ADR-0011). Пока отказы фреймворка уходили в его собственном формате,
+	разбор ответа на стороне приложения ломался на первой же опечатке в пути.
+	"""
+
+	async def scenario() -> tuple[dict, int, dict, int]:
+		await seed_gateway(tmp_path, NETWORKS)
+		async with _client(tmp_path) as client:
+			# Опечатка в пути и неверный метод у существующего адреса.
+			missing = await client.get("/v1/app/users/u1/adresses", headers=HEADERS)
+			wrong_method = await client.delete("/v1/app/users", headers=HEADERS)
+			return (
+				missing.json(),
+				missing.status_code,
+				wrong_method.json(),
+				wrong_method.status_code,
+			)
+
+	missing, missing_status, wrong_method, method_status = asyncio.run(scenario())
+	assert missing_status == 404
+	assert missing["error"]["code"] == "not_found"
+	assert method_status == 405
+	assert wrong_method["error"]["code"] == "method_not_allowed"

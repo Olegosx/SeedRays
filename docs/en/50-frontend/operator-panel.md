@@ -99,7 +99,9 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
   highlights the field immediately) and the server check it — the server stays the source
   of truth.
 - Below — the per-network watcher status (read-only): the last processed block and the
-  time of the last pass.
+  token scan cursor. Both are cursors: while the scan catches up after downtime the token
+  one deliberately sits in the past, so it is not a sign of life — whether passes run is
+  told by the service log.
 
 ## Related
 
