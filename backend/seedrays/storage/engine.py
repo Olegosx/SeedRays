@@ -135,10 +135,13 @@ def create_sqlite_engine(path: Path) -> AsyncEngine:
 
 	@event.listens_for(engine.sync_engine, "connect")
 	def _configure_connection(dbapi_connection, _connection_record):
-		# WAL: readers are not blocked by the writer.
 		# foreign_keys: SQLite does not enforce FK constraints unless asked to.
+		# Режим журнала здесь НЕ трогается: WAL — постоянное свойство файла,
+		# его включает миграция при создании базы. Перевод в WAL требует
+		# эксклюзивной блокировки, и попытка на каждом подключении давала
+		# мгновенный «database is locked» при конкурентных первых запросах —
+		# взаимную блокировку SQLite разрешает ошибкой в обход busy_timeout.
 		cursor = dbapi_connection.cursor()
-		cursor.execute("PRAGMA journal_mode=WAL")
 		cursor.execute("PRAGMA foreign_keys=ON")
 		cursor.close()
 

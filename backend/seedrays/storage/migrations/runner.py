@@ -21,6 +21,22 @@ logger = logging.getLogger(__name__)
 _MIGRATIONS_DIR = Path(__file__).parent
 
 
+def _enable_wal(db_path: Path) -> None:
+	"""Switch the database file to WAL once and for all.
+
+	WAL — постоянное свойство файла: readers are not blocked by the writer.
+	Включается здесь, при миграции, потому что перевод требует эксклюзивной
+	блокировки — на живом шлюзе с конкурентными подключениями ему не место.
+	"""
+	import sqlite3
+
+	connection = sqlite3.connect(db_path)
+	try:
+		connection.execute("PRAGMA journal_mode=WAL")
+	finally:
+		connection.close()
+
+
 def _make_config(stream: str, db_url: str) -> Config:
 	"""Build an Alembic config for one migration stream and one database URL."""
 	config = Config()
@@ -43,6 +59,7 @@ def upgrade_registry(data_dir: Path) -> None:
 		command.upgrade(_make_config("registry", sqlite_sync_url(db_path)), "head")
 	except Exception as exc:
 		raise RuntimeError(f"registry migration failed for {db_path}: {exc}") from exc
+	_enable_wal(db_path)
 
 
 def upgrade_billing(data_dir: Path) -> None:
@@ -59,6 +76,7 @@ def upgrade_billing(data_dir: Path) -> None:
 		command.upgrade(_make_config("billing", sqlite_sync_url(db_path)), "head")
 	except Exception as exc:
 		raise RuntimeError(f"billing migration failed for {db_path}: {exc}") from exc
+	_enable_wal(db_path)
 
 
 def upgrade_user_db(db_path: Path) -> None:
@@ -73,6 +91,7 @@ def upgrade_user_db(db_path: Path) -> None:
 		command.upgrade(_make_config("user", sqlite_sync_url(db_path)), "head")
 	except Exception as exc:
 		raise RuntimeError(f"user database migration failed for {db_path}: {exc}") from exc
+	_enable_wal(db_path)
 
 
 def upgrade_all(data_dir: Path) -> None:

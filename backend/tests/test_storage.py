@@ -350,3 +350,33 @@ def test_history_read_returns_a_page_not_the_whole_table(tmp_path: Path) -> None
 	assert page == 5, "запрос отдал больше страницы"
 	assert confirmed == 25, "отбор по статусу не выполнен запросом"
 	assert len(pending) == 3
+
+
+def test_wal_is_a_file_property_set_by_the_migration(tmp_path: Path) -> None:
+	"""WAL включается миграцией — один раз и навсегда, а не каждым подключением.
+
+	Перевод в WAL требует эксклюзивной блокировки: выполняясь на каждом
+	подключении, он давал мгновенный «database is locked» при конкурентных
+	первых запросах (взаимную блокировку SQLite разрешает ошибкой в обход
+	busy_timeout).
+	"""
+	import sqlite3
+
+	upgrade_all(tmp_path)
+	assert (
+		sqlite3.connect(registry_db_path(tmp_path)).execute("PRAGMA journal_mode").fetchone()[0]
+		== "wal"
+	)
+
+	async def journal_mode_via_engine() -> str:
+		from sqlalchemy import text
+
+		engine = create_sqlite_engine(registry_db_path(tmp_path))
+		try:
+			async with engine.connect() as conn:
+				return (await conn.execute(text("PRAGMA journal_mode"))).scalar()
+		finally:
+			await engine.dispose()
+
+	# Боевое подключение видит WAL, не включая его само.
+	assert asyncio.run(journal_mode_via_engine()) == "wal"
