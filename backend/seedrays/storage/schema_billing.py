@@ -130,6 +130,22 @@ manual_credits = Table(
 	Column("created_at", DateTime, nullable=False, server_default=func.now()),
 )
 
+# Отметки об отправленных уведомлениях — только для писем, которые иначе
+# слались бы каждым проходом заново (напоминание о сроке, «выставить
+# некуда»). Письма-переходы (счёт выставлен, доступ закрыт/открыт) отметок
+# не требуют: сам переход случается один раз.
+notices = Table(
+	"notices",
+	metadata,
+	Column("id", Integer, primary_key=True),
+	Column("kind", String(32), nullable=False),
+	# Предмет уведомления: «invoice:5», «user:3:2026-09» — вид определяет
+	# трактовку. Одно письмо одного вида на предмет.
+	Column("subject", String(64), nullable=False),
+	Column("created_at", DateTime, nullable=False, server_default=func.now()),
+	UniqueConstraint("kind", "subject", name="uq_notices_key"),
+)
+
 # Состояние биллинга пользователя: чем платит и открыт ли доступ. Независимо от
 # статуса учётной записи в реестре — административная блокировка и приостановка
 # за неуплату снимаются каждая своим действием (ADR-0027).

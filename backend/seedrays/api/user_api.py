@@ -22,8 +22,8 @@ from seedrays.api.errors import ApiError
 from seedrays.orchestrator.operations import OperationError
 from seedrays.chains import explorer_tx_url, supported_networks
 from seedrays.families import Family
+from seedrays import mail
 from seedrays.mail.base import MailSender
-from seedrays.mail.resend import ResendSender
 from seedrays.orchestrator import apps as app_ops
 from seedrays.orchestrator import billing as billing_ops
 from seedrays.orchestrator import auth
@@ -49,8 +49,6 @@ SESSION_COOKIE = "seedrays_session"
 # Ключи настроек почты (реестр, ADR-0016).
 from seedrays import settings_keys
 from seedrays.settings_keys import GATEWAY_BASE_URL as SETTING_BASE_URL
-from seedrays.settings_keys import MAIL_API_KEY as SETTING_MAIL_API_KEY
-from seedrays.settings_keys import MAIL_FROM as SETTING_MAIL_FROM
 # Явный режим разработки: без отправителя почты адреса авто-подтверждаются
 # только при включённом флаге — молчаливый «fail-open» недопустим.
 from seedrays.settings_keys import MAIL_DEV_AUTOCONFIRM as SETTING_MAIL_DEV
@@ -161,15 +159,6 @@ class UserContext:
 	session_token: str
 
 
-async def _resolve_mailer(registry: AsyncEngine) -> MailSender | None:
-	"""Build the configured mail sender, or None when mail is not set up."""
-	api_key = await registry_ops.get_setting(registry, SETTING_MAIL_API_KEY)
-	from_address = await registry_ops.get_setting(registry, SETTING_MAIL_FROM)
-	if not api_key or not from_address:
-		return None
-	return ResendSender(api_key, from_address)
-
-
 def register_user_routes(
 	app: FastAPI,
 	data_dir: Path,
@@ -233,7 +222,7 @@ def register_user_routes(
 		if mailer is not None:
 			active: MailSender | None = mailer
 		else:
-			active = await _resolve_mailer(registry)
+			active = await mail.from_settings(registry)
 			if active is not None and not base_url:
 				logger.error(
 					"mail sender is configured but %s is not set; mail disabled",

@@ -44,6 +44,11 @@ BILLING_DUE_DAYS = "billing.due_days"
 # Списки активов задаются по сети, поэтому это префиксы, а не готовые ключи.
 BILLING_ASSETS_PREFIX = "billing.assets."
 BILLING_PAYMENT_ASSETS_PREFIX = "billing.payment_assets."
+# Уведомления: за сколько дней до срока напоминать о неоплаченном счёте
+# (пусто или ноль — не напоминать) и куда писать владельцу шлюза о событиях,
+# требующих его взгляда (чужой актив на адресе счёта, «выставить некуда»).
+BILLING_REMIND_DAYS = "billing.remind_days"
+BILLING_OWNER_EMAIL = "billing.owner_email"
 
 
 # Переключатель хранится строкой. Признанные значения перечислены здесь — по

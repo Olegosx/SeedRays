@@ -64,6 +64,7 @@
 			'billing.rate_percent': 'percent',
 			'billing.threshold_usdt': 'nonNegative',
 			'billing.due_days': 'positiveInt',
+			'billing.remind_days': 'positiveInt',
 		},
 		validate() {
 			this.fieldErrors = {};
@@ -293,6 +294,22 @@
 													x-model="values['billing.due_days']" placeholder="7">
 												<div class="invalid-feedback"
 													x-text="fieldErrors['billing.due_days']"></div>
+											</div>
+										</div>
+										<div class="row">
+											<div class="col-md-6 mb-3">
+												<label class="form-label" x-text="$store.i18n.t('op.feeRemindLabel')"></label>
+												<input type="text" class="form-control"
+													:class="fieldErrors['billing.remind_days'] ? 'is-invalid' : ''"
+													x-model="values['billing.remind_days']" placeholder="3">
+												<div class="invalid-feedback"
+													x-text="fieldErrors['billing.remind_days']"></div>
+											</div>
+											<div class="col-md-6 mb-3">
+												<label class="form-label" x-text="$store.i18n.t('op.feeOwnerEmailLabel')"></label>
+												<input type="text" class="form-control"
+													x-model="values['billing.owner_email']"
+													placeholder="owner@example.com" autocomplete="off">
 											</div>
 										</div>
 										<template x-for="network in assetNetworks" :key="network">

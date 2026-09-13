@@ -204,9 +204,14 @@ print another. Master wallets are
 entered there too but stored in the billing database — by the same logic that keeps a user's
 xpub in the user's database.
 
-Email notifications: an issued invoice, a reminder a configurable number of days before the due
-date, a suspension and a restoration of access; to the owner — underpayments, overpayments and
-foreign assets.
+Email notifications go through the same sender as the cabinet's mail (ADR-0020), under the
+same rule: a mail failure never touches issuing, crediting or access. To the user (their
+confirmed primary address): an issued invoice, a reminder a configurable number of days
+before the due date (zero or empty — never), a suspension and a restoration of access. To
+the owner (an address set on the panel): a foreign asset on an invoice address, and
+"nowhere to issue" — no master wallet in the user's network. Transition letters need no
+bookkeeping: a transition happens once; the reminder and "nowhere to issue" would be sent
+anew by every pass, so their sent-marks live in the billing database.
 
 ## Alternatives Considered
 

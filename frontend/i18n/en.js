@@ -322,6 +322,8 @@ export const en = {
 	"op.feeThresholdHint": "Empty means every turnover is billed, however small.",
 	"op.feeThresholdLabel": "Monthly turnover threshold, USDT",
 	"op.feeDueDaysLabel": "Payment term, days",
+	"op.feeRemindLabel": "Remind before the due date, days (empty — never)",
+	"op.feeOwnerEmailLabel": "Owner's email for service mail",
 	"op.feeTurnoverAssets": "Assets counted towards turnover:",
 	"op.feePaymentAssets": "Assets accepted as payment:",
 	"op.feeHint": "Assets are given as a JSON list of contract addresses. Symbols are not trusted: the catalog fills with whatever arrives on an address, and a counterfeit \"USDT\" would otherwise inflate the turnover. An empty list means nothing is counted or accepted in that network.",

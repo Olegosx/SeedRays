@@ -24,6 +24,7 @@ BILLING_TABLES = {
 	"invoices",
 	"invoice_payments",
 	"manual_credits",
+	"notices",
 	"user_billing",
 }
 
@@ -1452,3 +1453,142 @@ def test_cabinet_changes_the_payment_network_when_clear(tmp_path: Path) -> None:
 	assert unknown_status == 400
 	assert chosen_status == 200
 	assert network == "tron-nile"
+
+
+async def _mail_ready(tmp_path: Path) -> None:
+	"""Switch the gateway mail on: sender settings plus the owner's address."""
+	registry = create_sqlite_engine(registry_db_path(tmp_path))
+	await registry_ops.set_setting(registry, "mail.resend.api_key", "test-key")
+	await registry_ops.set_setting(registry, "mail.from", "gw@example.com")
+	await registry_ops.set_setting(registry, "billing.owner_email", "owner@example.com")
+	await registry_ops.set_setting(
+		registry, f"{billing.SETTING_PAYMENT_ASSETS_PREFIX}{PAY_NETWORK}", f'["{PAY_USDT}"]'
+	)
+	await registry_ops.set_setting(registry, "billing.remind_days", "3")
+	await registry_ops.set_setting(registry, "gateway.base_url", "https://gw.example.com")
+	await registry.dispose()
+
+
+def test_billing_mails_follow_the_invoice_lifecycle(tmp_path: Path) -> None:
+	"""Issued, reminded, suspended, restored — one letter each, to the right people."""
+
+	async def scenario() -> list[tuple[str, str]]:
+		from unittest.mock import patch
+
+		from tests.seeding import FakeMailer
+
+		mailer = FakeMailer()
+		registry, engine, assets = await _seed(tmp_path)
+		from seedrays.storage.engine import billing_db_path
+
+		billing_engine = create_sqlite_engine(billing_db_path(tmp_path))
+		await registry_ops.set_setting(registry, billing.SETTING_ENABLED, "1")
+		await registry_ops.set_setting(registry, billing.SETTING_RATE, "1.5")
+		await registry_ops.set_setting(registry, billing.SETTING_THRESHOLD, "100")
+		await registry_ops.set_setting(registry, billing.SETTING_DUE_DAYS, "7")
+		await billing.attach_master_wallet(
+			billing_engine, registry, network=PAY_NETWORK, xpub=await _master_xpub()
+		)
+		user = await registry_ops.get_user_by_login(registry, "alice")
+		await registry_ops.add_user_email(
+			registry, user_id=user.id, address="alice@example.com", is_primary=True,
+			confirm_token_hash=None, confirm_expires_at=None,
+			confirmed_at=datetime(2026, 9, 1),
+		)
+		await _record(engine, asset_id=assets["usdt"], amount=1000 * billing.MICRO_USDT,
+		              txid="september")
+		await engine.dispose()
+		await registry.dispose()
+		await _mail_ready(tmp_path)
+
+		with patch("seedrays.mail.from_settings", return_value=mailer) as _:
+			# Хронология: выставление (2 окт) → напоминание (10-го, срок 9-го
+			# октября... срок = 2+7 = 9 окт; напоминание за 3 дня — с 6-го) →
+			# просрочка (10-го) → оплата и возврат (11-го).
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 2))
+			issued = list(mailer.messages)
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 7))
+			reminded = list(mailer.messages)
+			# Повторный проход в тот же день напоминание не дублирует.
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 7, 12))
+			reminded_again = list(mailer.messages)
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 10))
+			suspended = list(mailer.messages)
+			rows = await billing_store_list(billing_engine)
+			source = FakePaymentSource(
+				{rows[0].address: [_incoming(rows[0].address, 15 * 10**6, txid="pay")]}
+			)
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 11), source_factory=lambda n, k, i: source
+			)
+			restored = list(mailer.messages)
+		await billing_engine.dispose()
+		assert len(reminded_again) == len(reminded), "напоминание не дублируется"
+		return [(m[0], m[1]) for m in restored], issued, reminded, suspended
+
+	from seedrays.storage import billing as billing_store_module
+
+	async def billing_store_list(engine):
+		return await billing_store_module.list_invoices(engine)
+
+	all_mail, issued, reminded, suspended = asyncio.run(scenario())
+	assert len(issued) == 1 and "invoice was issued" in issued[0][1]
+	assert issued[0][0] == "alice@example.com"
+	assert len(reminded) == 2 and "due soon" in reminded[1][1]
+	assert len(suspended) == 3 and "suspended" in suspended[2][1]
+	assert len(all_mail) == 4 and "restored" in all_mail[3][1]
+	assert all(to == "alice@example.com" for to, _ in all_mail)
+
+
+def test_owner_is_told_about_foreign_assets_and_missing_wallets(tmp_path: Path) -> None:
+	"""The owner's letters: a stray token and an invoice with nowhere to go."""
+
+	async def scenario() -> tuple[list, list]:
+		from unittest.mock import patch
+
+		from tests.seeding import FakeMailer
+
+		mailer = FakeMailer()
+		billing_engine, address = await _gateway_with_invoice(tmp_path)
+		await _mail_ready(tmp_path)
+		try:
+			with patch("seedrays.mail.from_settings", return_value=mailer):
+				source = FakePaymentSource({
+					address: [
+						_incoming(
+							address, 99 * 10**6, txid="spam",
+							contract="TSpamContract00000000000000000000", symbol="FAKE",
+						)
+					]
+				})
+				await billing.check_payments(
+					tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
+				)
+				foreign = list(mailer.messages)
+				# «Выставить некуда»: второй период без мастер-кошелька и без
+				# уже выданного адреса — как у пользователя, платящего впервые.
+				# (С выданным адресом счёт правильно выставился бы на него:
+				# адрес постоянный, и ключи от него у владельца остались.)
+				from sqlalchemy import delete as sa_delete
+
+				from seedrays.storage import billing as billing_store
+				from seedrays.storage.schema_billing import invoice_addresses
+
+				await billing_store.delete_master_wallet(billing_engine, PAY_NETWORK)
+				async with billing_engine.begin() as conn:
+					await conn.execute(sa_delete(invoice_addresses))
+				await _record_october_turnover(tmp_path)
+				await billing.run_pass(tmp_path, now=datetime(2026, 11, 2))
+				await billing.run_pass(tmp_path, now=datetime(2026, 11, 3))
+				return foreign, list(mailer.messages)
+		finally:
+			await billing_engine.dispose()
+
+	foreign, all_mail = asyncio.run(scenario())
+	owner_mail = [m for m in all_mail if m[0] == "owner@example.com"]
+	assert len(foreign) == 1 and "foreign asset" in foreign[0][1]
+	assert foreign[0][0] == "owner@example.com"
+	# Второй проход ноября письмо «выставить некуда» не дублирует.
+	no_wallet = [m for m in owner_mail if "could not be issued" in m[1]]
+	assert len(no_wallet) == 1
+	assert "alice" in no_wallet[0][2]

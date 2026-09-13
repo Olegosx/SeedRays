@@ -21,6 +21,7 @@ from seedrays.storage.schema_billing import (
 	invoices,
 	manual_credits,
 	master_wallets,
+	notices,
 	user_billing,
 )
 
@@ -538,3 +539,23 @@ async def get_invoice(engine: AsyncEngine, invoice_id: int):
 	"""One invoice row by id, or None."""
 	async with engine.connect() as conn:
 		return (await conn.execute(select(invoices).where(invoices.c.id == invoice_id))).first()
+
+
+async def mark_notified(engine: AsyncEngine, *, kind: str, subject: str) -> bool:
+	"""Claim one notification slot; False when it was already claimed.
+
+	Запись делается ДО отправки письма: два конкурентных прохода не должны
+	отправить его дважды. Сорвавшаяся после записи отправка не повторится —
+	принятая цена: письмо-напоминание вторично, а дубли раздражают.
+
+	Returns:
+		True — слот занят этим вызовом, письмо можно отправлять.
+	"""
+	try:
+		async with engine.begin() as conn:
+			await conn.execute(insert(notices).values(kind=kind, subject=subject))
+	except IntegrityError as exc:
+		if unique_violation(exc) is None:
+			raise  # не ключ идемпотентности — настоящая ошибка целостности
+		return False
+	return True

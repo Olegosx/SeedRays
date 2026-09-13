@@ -80,7 +80,9 @@ Forms over the registry `settings` table ([ADR-0016](../20-architecture/decision
   switch (off by default — an installation must not start issuing invoices on its own), the
   rate in percent, the turnover threshold in USDT, the payment term in days, the
   per-network lists of turnover assets and accepted payment
-  assets (JSON lists of contract addresses) and the notification parameters. The lists are
+  assets (JSON lists of contract addresses), how many days before the due date to remind
+  (empty — never) and the owner's email for service mail — about a foreign asset on an
+  invoice address and an invoice with nowhere to go. The lists are
   validated on save just like the numeric fields: a typo is refused outright, otherwise the
   turnover would quietly stop being counted. The rate takes at most two decimal places, and
   a finer value is refused for the same reason: a rate the arithmetic cannot hold would make

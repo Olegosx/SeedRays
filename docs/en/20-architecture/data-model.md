@@ -211,6 +211,12 @@ in micro-USDT, the operator, the reason, the time. A separate table rather than 
 synthetic payment row: a credit has neither a transaction nor an asset, and the record
 of observations is no place for it.
 
+### Notification marks
+
+Which letters have been sent — only for those every pass would otherwise send anew: the
+due-date reminder (one per invoice) and "nowhere to issue" (one per user and period).
+Kind, subject, time; the "kind + subject" pair is unique at the schema level.
+
 ### A user's billing state
 
 The payment network (TRON by default) and the access state: in order, or suspended for

@@ -89,6 +89,8 @@ SETTING_FIELDS = (
 	{"key": billing.SETTING_RATE, "secret": False, "number": NUMBER_PERCENT},
 	{"key": billing.SETTING_THRESHOLD, "secret": False, "number": NUMBER_NON_NEGATIVE},
 	{"key": billing.SETTING_DUE_DAYS, "secret": False, "number": NUMBER_POSITIVE_INT},
+	{"key": keys.BILLING_REMIND_DAYS, "secret": False, "number": NUMBER_POSITIVE_INT},
+	{"key": keys.BILLING_OWNER_EMAIL, "secret": False},
 )
 
 

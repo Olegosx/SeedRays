@@ -79,6 +79,14 @@ def upgrade() -> None:
 		sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
 	)
 	op.create_table(
+		"notices",
+		sa.Column("id", sa.Integer, primary_key=True),
+		sa.Column("kind", sa.String(32), nullable=False),
+		sa.Column("subject", sa.String(64), nullable=False),
+		sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
+		sa.UniqueConstraint("kind", "subject", name="uq_notices_key"),
+	)
+	op.create_table(
 		"user_billing",
 		sa.Column("user_id", sa.Integer, primary_key=True),
 		sa.Column("network", sa.String(32), nullable=False, server_default=""),
@@ -90,6 +98,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
 	op.drop_table("user_billing")
+	op.drop_table("notices")
 	op.drop_table("manual_credits")
 	op.drop_table("invoice_payments")
 	op.drop_table("invoices")

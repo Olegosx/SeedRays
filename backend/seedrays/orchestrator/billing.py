@@ -24,9 +24,10 @@ from pathlib import Path
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from seedrays import chains
+from seedrays import chains, mail, settings_keys
 from seedrays import settings_keys
 from seedrays.chains.base import ChainDataSourceError, Direction, TransferStatus
+from seedrays.mail.base import MailError
 from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_address
 from seedrays.orchestrator.money import format_amount
 from seedrays.orchestrator.operations import OperationError
@@ -538,15 +539,17 @@ async def run_pass(data_dir: Path, *, now: datetime | None = None) -> PassStats:
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	billing = create_sqlite_engine(billing_db_path(data_dir))
 	try:
+		notifier = await Notifier.build(registry)
 		terms = await read_terms(registry)
 		if terms is not None:
 			await _issue_invoices(
-				registry, billing, data_dir, moment=moment, terms=terms, stats=stats
+				registry, billing, data_dir,
+				moment=moment, terms=terms, stats=stats, notifier=notifier,
 			)
 		else:
 			logger.info("the gateway fee is switched off: no invoices are issued")
 		stats.invoices_overdue = await _reconcile_access(
-			registry, billing, journal, moment=moment
+			registry, billing, journal, moment=moment, notifier=notifier
 		)
 	finally:
 		journal.close()
@@ -561,6 +564,7 @@ async def _reconcile_access(
 	journal: SecurityLog,
 	*,
 	moment: datetime,
+	notifier: "Notifier",
 ) -> int:
 	"""Bring every user's access state in line with what their balance says.
 
@@ -582,6 +586,13 @@ async def _reconcile_access(
 		journal: The security journal.
 		moment: The moment the pass runs at.
 	"""
+	remind_days = int(
+		_decimal_setting(
+			await registry_ops.get_setting(registry, settings_keys.BILLING_REMIND_DAYS),
+			Decimal(0),
+			settings_keys.BILLING_REMIND_DAYS,
+		)
+	)
 	balances = await billing_store.user_balances(billing)
 	overdue_total = 0
 	owing: set[int] = set()
@@ -591,17 +602,21 @@ async def _reconcile_access(
 		# Должник. Просрочен ли долг — отвечает классификация его счетов.
 		rows = await billing_store.list_invoices(billing, user_id=user_id)
 		credits = await billing_store.user_credits(billing, user_id)
-		overdue_ids = [
-			row.id for row, state in classify_invoices(rows, credits, moment)
-			if state == STATE_OVERDUE
-		]
+		classified = classify_invoices(rows, credits, moment)
+		if remind_days > 0:
+			await _remind(
+				registry, billing, notifier,
+				user_id=user_id, balance=balance, classified=classified,
+				moment=moment, remind_days=remind_days,
+			)
+		overdue_ids = [row.id for row, state in classified if state == STATE_OVERDUE]
 		overdue_total += len(overdue_ids)
 		if not overdue_ids:
 			continue
 		owing.add(user_id)
 		try:
 			await _suspend(
-				registry, billing, journal,
+				registry, billing, journal, notifier,
 				user_id=user_id, invoice_id=overdue_ids[0], moment=moment,
 			)
 		except SQLAlchemyError:
@@ -612,16 +627,48 @@ async def _reconcile_access(
 		if user_id in owing:
 			continue
 		try:
-			await _restore(registry, billing, journal, user_id=user_id)
+			await _restore(registry, billing, journal, notifier, user_id=user_id)
 		except SQLAlchemyError:
 			logger.exception("user %d: restoring access failed", user_id)
 	return overdue_total
+
+
+async def _remind(
+	registry: AsyncEngine,
+	billing: AsyncEngine,
+	notifier: "Notifier",
+	*,
+	user_id: int,
+	balance: int,
+	classified: list[tuple],
+	moment: datetime,
+	remind_days: int,
+) -> None:
+	"""Remind about an unpaid invoice approaching its due date; once per invoice."""
+	for row, state in classified:
+		if state != STATE_ISSUED:
+			continue
+		if row.due_at - moment > timedelta(days=remind_days):
+			continue
+		if not await billing_store.mark_notified(
+			billing, kind="invoice_reminder", subject=f"invoice:{row.id}"
+		):
+			continue
+		await notifier.invoice_reminder(
+			registry,
+			user_id=user_id,
+			debt=-balance,
+			due_at=row.due_at,
+			network=row.network,
+			address=row.address,
+		)
 
 
 async def _suspend(
 	registry: AsyncEngine,
 	billing: AsyncEngine,
 	journal: SecurityLog,
+	notifier: "Notifier",
 	*,
 	user_id: int,
 	invoice_id: int,
@@ -641,12 +688,14 @@ async def _suspend(
 		"user %d suspended: invoice %d is past its due date", user_id, invoice_id
 	)
 	await _journal(registry, journal, "billing_suspend", user_id=user_id, invoice_id=invoice_id)
+	await notifier.access_suspended(registry, user_id=user_id)
 
 
 async def _restore(
 	registry: AsyncEngine,
 	billing: AsyncEngine,
 	journal: SecurityLog,
+	notifier: "Notifier",
 	*,
 	user_id: int,
 	invoice_id: int | None = None,
@@ -659,6 +708,7 @@ async def _restore(
 	)
 	logger.info("user %d restored: no overdue debt any more", user_id)
 	await _journal(registry, journal, "billing_restore", user_id=user_id, invoice_id=invoice_id)
+	await notifier.access_restored(registry, user_id=user_id)
 
 
 async def _journal(
@@ -692,6 +742,7 @@ async def _issue_invoices(
 	moment: datetime,
 	terms: Terms,
 	stats: PassStats,
+	notifier: "Notifier",
 ) -> None:
 	"""Issue the finished period's invoices for every user that owes one."""
 	period_start, period_end = previous_period(moment)
@@ -733,6 +784,16 @@ async def _issue_invoices(
 				network,
 			)
 			stats.no_master_wallet.append(user.login)
+			# Письмо владельцу — один раз на пользователя и период, а не
+			# каждым проходом заново.
+			if await billing_store.mark_notified(
+				billing,
+				kind="no_master_wallet",
+				subject=f"user:{user.id}:{period_start.date().isoformat()}",
+			):
+				await notifier.owner_no_wallet(
+					login=user.login, network=network, amount=amount
+				)
 			continue
 		invoice_id = await billing_store.insert_invoice(
 			billing,
@@ -750,6 +811,15 @@ async def _issue_invoices(
 		if invoice_id is None:
 			continue  # период уже выставлен — повторный проход ничего не меняет
 		stats.invoices_issued += 1
+		# Выставление случается один раз (ключ счёта) — письмо о нём тоже.
+		await notifier.invoice_issued(
+			registry,
+			user_id=user.id,
+			amount=amount,
+			due_at=due_at,
+			network=network,
+			address=address,
+		)
 		logger.info(
 			"invoice %d issued to %s for %s: %s USDT on turnover %s",
 			invoice_id,
@@ -857,6 +927,7 @@ async def check_payments(
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	billing = create_sqlite_engine(billing_db_path(data_dir))
 	try:
+		notifier = await Notifier.build(registry)
 		balances = await billing_store.user_balances(billing)
 		debtors = {user_id for user_id, balance in balances.items() if balance < 0}
 		targets = await billing_store.poll_addresses(billing, debtors)
@@ -899,7 +970,7 @@ async def check_payments(
 
 			for transfer in _merged_by_transaction(transfers):
 				await _record_transfer(
-					registry, billing, transfer,
+					registry, billing, notifier, transfer,
 					user_id=target.user_id, accepted=accepted, moment=moment, stats=stats,
 				)
 			await billing_store.set_address_checked(
@@ -910,7 +981,7 @@ async def check_payments(
 		# какие уже лежат в базе. От исхода опроса она не зависит — иначе
 		# деньги, записанные прошлым проходом, не вернули бы доступ, пока
 		# провайдер недоступен.
-		await _reconcile_access(registry, billing, journal, moment=moment)
+		await _reconcile_access(registry, billing, journal, moment=moment, notifier=notifier)
 	finally:
 		journal.close()
 		await billing.dispose()
@@ -955,6 +1026,7 @@ def _merged_by_transaction(transfers: list) -> list:
 async def _record_transfer(
 	registry: AsyncEngine,
 	billing: AsyncEngine,
+	notifier: "Notifier",
 	transfer,
 	*,
 	user_id: int,
@@ -1024,6 +1096,14 @@ async def _record_transfer(
 			transfer.asset.symbol or transfer.asset.contract_address,
 			transfer.address,
 			transfer.txid,
+		)
+		# Запись только что состоялась (PAYMENT_NEW) — идемпотентность письма
+		# даром: повторный опрос тот же перевод заново не запишет.
+		await notifier.owner_foreign_asset(
+			network=transfer.network,
+			address=transfer.address,
+			txid=transfer.txid,
+			symbol=transfer.asset.symbol or transfer.asset.contract_address,
 		)
 
 
@@ -1177,7 +1257,9 @@ async def confirm_manually(
 		invoice.user_id,
 		reason.strip(),
 	)
-	await _reconcile_access(registry, billing, journal, moment=moment)
+	await _reconcile_access(
+		registry, billing, journal, moment=moment, notifier=await Notifier.build(registry)
+	)
 	return invoice.user_id
 
 
@@ -1255,3 +1337,118 @@ async def choose_payment_network(
 			"settle the outstanding invoice first: its payment details must not move",
 		)
 	await billing_store.set_payment_network(billing, user_id=user_id, network=network)
+
+
+class Notifier:
+	"""Sends the billing emails of one pass (ADR-0027, ADR-0020).
+
+	Собирается один раз на проход: почтовик и адреса решаются в момент
+	создания. Без настроенной почты каждое письмо превращается в строку
+	журнала — проход от почты не зависит никогда.
+	"""
+
+	def __init__(self, mailer, owner_email: str, base_url: str) -> None:
+		self._mailer = mailer
+		self._owner = owner_email.strip()
+		self._base = base_url.rstrip("/")
+
+	@classmethod
+	async def build(cls, registry: AsyncEngine) -> "Notifier":
+		"""Resolve the mailer and the owner's address from the settings."""
+		mailer = await mail.from_settings(registry)
+		owner = await registry_ops.get_setting(registry, settings_keys.BILLING_OWNER_EMAIL)
+		base = await registry_ops.get_setting(registry, settings_keys.GATEWAY_BASE_URL)
+		return cls(mailer, owner or "", base or "")
+
+	def _billing_link(self) -> str:
+		"""The cabinet's invoices page, when the gateway knows its address."""
+		return f"\n\nYour balance and payment details: {self._base}/billing.html" if self._base else ""
+
+	async def _send(self, to: str, subject: str, text: str) -> None:
+		if self._mailer is None or not to:
+			logger.info("billing mail skipped (mail not set up): %s", subject)
+			return
+		try:
+			await self._mailer.send(to, subject, text)
+		except MailError as exc:
+			# Письмо вторично: сбой почты не должен трогать ни выставление,
+			# ни зачёт, ни доступ (ADR-0020).
+			logger.error("billing mail %r to %s failed: %s", subject, to, exc)
+
+	async def _user_email(self, registry: AsyncEngine, user_id: int) -> str:
+		"""The user's confirmed primary address, or nothing to send to."""
+		emails = await registry_ops.list_user_emails(registry, user_id)
+		primary = next((e for e in emails if e.is_primary), None)
+		if primary is None or primary.confirmed_at is None:
+			return ""
+		return primary.address
+
+	async def invoice_issued(
+		self, registry: AsyncEngine, *, user_id: int, amount: int, due_at: datetime,
+		network: str, address: str,
+	) -> None:
+		"""Tell the user a new invoice exists and how to pay it."""
+		await self._send(
+			await self._user_email(registry, user_id),
+			"SeedRays: a gateway fee invoice was issued",
+			f"The gateway issued an invoice of {format_usdt(amount)} USDT for the past "
+			f"month.\nPay it before {due_at.date().isoformat()} with a stablecoin "
+			f"transfer to your payment address in {network}:\n{address}"
+			+ self._billing_link(),
+		)
+
+	async def invoice_reminder(
+		self, registry: AsyncEngine, *, user_id: int, debt: int, due_at: datetime,
+		network: str, address: str,
+	) -> None:
+		"""Remind the user the due date is close and the balance is short."""
+		await self._send(
+			await self._user_email(registry, user_id),
+			"SeedRays: the gateway fee is due soon",
+			f"Your balance is short {format_usdt(debt)} USDT and the due date is "
+			f"{due_at.date().isoformat()}.\nTop up your payment address in {network}:\n"
+			f"{address}\n\nAfter the due date the gateway access is suspended until "
+			"the balance is settled." + self._billing_link(),
+		)
+
+	async def access_suspended(self, registry: AsyncEngine, *, user_id: int) -> None:
+		"""Tell the user their access closed over an overdue debt."""
+		await self._send(
+			await self._user_email(registry, user_id),
+			"SeedRays: gateway access suspended over an unpaid fee",
+			"The gateway fee invoice is past its due date, so access to the gateway "
+			"and its API is suspended.\nSettle the balance and access returns "
+			"automatically." + self._billing_link(),
+		)
+
+	async def access_restored(self, registry: AsyncEngine, *, user_id: int) -> None:
+		"""Tell the user their access is back."""
+		await self._send(
+			await self._user_email(registry, user_id),
+			"SeedRays: gateway access restored",
+			"The gateway fee is settled and access to the gateway and its API is "
+			"restored. Thank you." + self._billing_link(),
+		)
+
+	async def owner_foreign_asset(
+		self, *, network: str, address: str, txid: str, symbol: str
+	) -> None:
+		"""Tell the owner a stray asset landed on an invoice address."""
+		await self._send(
+			self._owner,
+			"SeedRays: a foreign asset arrived on an invoice address",
+			f"A transfer of {symbol!r} arrived on the invoice address {address} "
+			f"({network}, tx {txid}).\nIt is not an accepted payment asset and was "
+			"not credited.",
+		)
+
+	async def owner_no_wallet(self, *, login: str, network: str, amount: int) -> None:
+		"""Tell the owner an invoice could not be issued: no master wallet."""
+		await self._send(
+			self._owner,
+			"SeedRays: an invoice could not be issued",
+			f"User {login!r} owes {format_usdt(amount)} USDT for the past month, but "
+			f"the gateway has no master wallet in {network!r} — there is nowhere to "
+			"issue the invoice to.\nEnter the master wallet on the panel's invoices "
+			"page, and the next pass will issue it.",
+		)
