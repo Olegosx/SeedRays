@@ -298,3 +298,61 @@ def test_application_errors(tmp_path: Path) -> None:
 			await client.aclose()
 
 	asyncio.run(scenario())
+
+
+def test_network_mapping_refuses_an_unknown_network_and_a_foreign_wallet(
+	tmp_path: Path,
+) -> None:
+	"""The server checks the network and the wallet's family, not just the wallet.
+
+	Настройка на сеть, которой шлюз не знает, выдала бы плательщику рабочий
+	адрес, а поступление на него не увидел бы никто: наблюдающая часть такую
+	сеть пропускает. Кошелёк чужого семейства даёт адреса по другому
+	стандарту — в этой сети они попросту недействительны.
+	"""
+
+	async def scenario() -> tuple[dict, dict]:
+		from seedrays.families import Family
+		from seedrays.keygen.generate import account_xpub
+
+		client, csrf = await signed_in_client(tmp_path)
+		headers = {"X-CSRF-Token": csrf}
+		try:
+			phrase = (
+				"abandon abandon abandon abandon abandon abandon "
+				"abandon abandon abandon abandon abandon about"
+			)
+			# Кошелёк семейства EVM: кабинет предлагает это семейство, а сетей
+			# EVM у шлюза ещё нет — значит привязать его можно только к чужой.
+			evm = await client.post(
+				"/v1/user/wallets",
+				json={
+					"family": Family.EVM.value,
+					"xpub": account_xpub(phrase, Family.EVM),
+					"label": "EVM",
+				},
+				headers=headers,
+			)
+			assert evm.status_code == 200, evm.text
+			app = await client.post(
+				"/v1/user/applications", json={"name": "Shop"}, headers=headers
+			)
+			app_id = app.json()["application"]["id"]
+
+			typo = await client.put(
+				f"/v1/user/applications/{app_id}/networks",
+				json={"network": "tron-nil", "wallet_id": evm.json()["wallet"]["id"]},
+				headers=headers,
+			)
+			foreign = await client.put(
+				f"/v1/user/applications/{app_id}/networks",
+				json={"network": "tron", "wallet_id": evm.json()["wallet"]["id"]},
+				headers=headers,
+			)
+			return typo.json(), foreign.json()
+		finally:
+			await client.aclose()
+
+	typo, foreign = asyncio.run(scenario())
+	assert typo["error"]["code"] == "unknown_network"
+	assert foreign["error"]["code"] == "wallet_family_mismatch"

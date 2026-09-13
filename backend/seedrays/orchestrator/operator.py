@@ -24,6 +24,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
+from seedrays import settings_keys as keys
 from seedrays.orchestrator import billing
 from seedrays.orchestrator.auth import hash_password, verify_password
 from seedrays.orchestrator.operations import OperationError
@@ -67,19 +68,24 @@ NUMBER_PERCENT = "percent"
 # молчаливо не считаемый оборот или непринятая оплата.
 KIND_CONTRACT_LIST = "contract_list"
 
+# Поле-переключатель. Проверяется по той же причине, что и числовые: значение,
+# которое читатель не признаёт за «включено», оператор увидит как сохранённое.
+KIND_FLAG = "flag"
+
+
 SETTING_FIELDS = (
-	{"key": "provider.trongrid.api_key", "secret": True},
-	{"key": "provider.trongrid.rate_per_sec", "secret": False, "number": NUMBER_NON_NEGATIVE},
-	{"key": "watcher.interval_seconds", "secret": False, "number": NUMBER_NON_NEGATIVE},
-	{"key": "watcher.overlap_minutes", "secret": False, "number": NUMBER_NON_NEGATIVE},
-	{"key": "mail.resend.api_key", "secret": True},
-	{"key": "mail.from", "secret": False},
-	{"key": "gateway.base_url", "secret": False},
-	{"key": "gateway.trusted_proxies", "secret": False},
-	{"key": "mail.dev_autoconfirm", "secret": False},
-	{"key": "seclog.rotate_mb", "secret": False, "number": NUMBER_POSITIVE_INT},
-	{"key": "seclog.backups", "secret": False, "number": NUMBER_POSITIVE_INT},
-	{"key": billing.SETTING_ENABLED, "secret": False},
+	{"key": keys.PROVIDER_API_KEY, "secret": True},
+	{"key": keys.PROVIDER_RATE_PER_SEC, "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": keys.WATCHER_INTERVAL, "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": keys.WATCHER_OVERLAP, "secret": False, "number": NUMBER_NON_NEGATIVE},
+	{"key": keys.MAIL_API_KEY, "secret": True},
+	{"key": keys.MAIL_FROM, "secret": False},
+	{"key": keys.GATEWAY_BASE_URL, "secret": False},
+	{"key": keys.GATEWAY_TRUSTED_PROXIES, "secret": False},
+	{"key": keys.MAIL_DEV_AUTOCONFIRM, "secret": False, "kind": KIND_FLAG},
+	{"key": keys.SECLOG_ROTATE_MB, "secret": False, "number": NUMBER_POSITIVE_INT},
+	{"key": keys.SECLOG_BACKUPS, "secret": False, "number": NUMBER_POSITIVE_INT},
+	{"key": billing.SETTING_ENABLED, "secret": False, "kind": KIND_FLAG},
 	{"key": billing.SETTING_RATE, "secret": False, "number": NUMBER_PERCENT},
 	{"key": billing.SETTING_THRESHOLD, "secret": False, "number": NUMBER_NON_NEGATIVE},
 	{"key": billing.SETTING_DUE_DAYS, "secret": False, "number": NUMBER_POSITIVE_INT},
@@ -126,6 +132,10 @@ def _number_kinds() -> dict[str, str]:
 
 def _contract_list_keys() -> set[str]:
 	return {f["key"] for f in setting_fields() if f.get("kind") == KIND_CONTRACT_LIST}
+
+
+def _flag_keys() -> set[str]:
+	return {f["key"] for f in setting_fields() if f.get("kind") == KIND_FLAG}
 
 
 def _sha256(value: str) -> str:
@@ -524,6 +534,25 @@ def _check_contract_list(key: str, value: str) -> None:
 		)
 
 
+def _check_flag(key: str, value: str) -> None:
+	"""Validate one switch setting; blank passes as "off".
+
+	Значение, которого читатель не признаёт, оператор увидел бы как
+	сохранённое, а настройка осталась бы выключенной — молча.
+
+	Raises:
+		OperationError: invalid_setting.
+	"""
+	if value.strip().lower() in keys.FLAG_TRUE_VALUES + keys.FLAG_FALSE_VALUES:
+		return
+	raise OperationError(
+		"invalid_setting",
+		f"setting {key!r} is a switch: "
+		f"{', '.join(keys.FLAG_TRUE_VALUES)} turn it on, blank or "
+		f"{', '.join(v for v in keys.FLAG_FALSE_VALUES if v)} turn it off",
+	)
+
+
 def _check_number(key: str, value: str) -> None:
 	"""Validate one numeric setting; blank passes as "cleared".
 
@@ -592,6 +621,7 @@ async def update_settings(registry: AsyncEngine, values: dict[str, str]) -> None
 	numbers = _number_kinds()
 	contract_lists = _contract_list_keys()
 	secrets_keys = _secret_keys()
+	flags = _flag_keys()
 	# Значение нормализуется один раз: проверка «пустое секретное поле —
 	# оставить как есть» и запись обязаны смотреть на одно и то же, иначе
 	# поле из одних пробелов стирает сохранённый ключ.
@@ -603,6 +633,8 @@ async def update_settings(registry: AsyncEngine, values: dict[str, str]) -> None
 			_check_number(key, value)
 		if key in contract_lists and value:
 			_check_contract_list(key, value)
+		if key in flags and value:
+			_check_flag(key, value)
 	for key, value in cleaned.items():
 		if key in secrets_keys and value == "":
 			continue

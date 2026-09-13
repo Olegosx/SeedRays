@@ -39,6 +39,8 @@ export const ru = {
 	"errors.invalid_name": "Название: от 1 до 64 знаков.",
 	"errors.unknown_application": "Такого приложения нет.",
 	"errors.unknown_wallet": "Такого кошелька нет — обновите список кошельков.",
+	"errors.unknown_network": "Шлюз не обслуживает эту сеть.",
+	"errors.wallet_family_mismatch": "Кошелёк относится к другому семейству цепочек — его адреса в этой сети не работают.",
 	"errors.wallet_missing": "Такого кошелька нет.",
 	"errors.unknown_email": "Такой почты на учётной записи нет.",
 	"errors.invalid_token": "Ссылка недействительна или устарела — запросите сброс заново.",

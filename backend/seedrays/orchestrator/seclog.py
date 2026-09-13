@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 
 # Параметры ротации — настройки реестра (страница настроек панели);
 # применяются при старте процесса.
-SETTING_ROTATE_MB = "seclog.rotate_mb"
-SETTING_BACKUPS = "seclog.backups"
+from seedrays.settings_keys import SECLOG_BACKUPS as SETTING_BACKUPS
+from seedrays.settings_keys import SECLOG_ROTATE_MB as SETTING_ROTATE_MB
 DEFAULT_ROTATE_MB = 100
 DEFAULT_BACKUPS = 10
 

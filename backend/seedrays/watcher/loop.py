@@ -15,7 +15,7 @@ from seedrays.watcher.single_pass import PassStats, read_float_setting, run_pass
 
 logger = logging.getLogger(__name__)
 
-SETTING_INTERVAL = "watcher.interval_seconds"
+from seedrays.settings_keys import WATCHER_INTERVAL as SETTING_INTERVAL
 DEFAULT_INTERVAL_SECONDS = 60.0
 
 

@@ -46,8 +46,8 @@ logger = logging.getLogger(__name__)
 
 # Ключи настроек (реестр, ADR-0016). Доступ к провайдеру — общий ресурс шлюза,
 # поэтому его ключи живут в слое цепочек, а не здесь.
-SETTING_OVERLAP = "watcher.overlap_minutes"
-SETTING_SCAN_START = "watcher.scan_start"
+from seedrays.settings_keys import WATCHER_OVERLAP as SETTING_OVERLAP
+from seedrays.settings_keys import WATCHER_SCAN_START as SETTING_SCAN_START
 
 DEFAULT_OVERLAP_MINUTES = 10
 # Предохранитель на догон нативного сканирования за один проход (~1 час цепочки TRON).

@@ -46,12 +46,13 @@ logger = logging.getLogger(__name__)
 SESSION_COOKIE = "seedrays_session"
 
 # Ключи настроек почты (реестр, ADR-0016).
-SETTING_MAIL_API_KEY = "mail.resend.api_key"
-SETTING_MAIL_FROM = "mail.from"
-SETTING_BASE_URL = "gateway.base_url"
+from seedrays import settings_keys
+from seedrays.settings_keys import GATEWAY_BASE_URL as SETTING_BASE_URL
+from seedrays.settings_keys import MAIL_API_KEY as SETTING_MAIL_API_KEY
+from seedrays.settings_keys import MAIL_FROM as SETTING_MAIL_FROM
 # Явный режим разработки: без отправителя почты адреса авто-подтверждаются
 # только при включённом флаге — молчаливый «fail-open» недопустим.
-SETTING_MAIL_DEV = "mail.dev_autoconfirm"
+from seedrays.settings_keys import MAIL_DEV_AUTOCONFIRM as SETTING_MAIL_DEV
 
 # Тормоз перебора (скользящие окна в памяти процесса, ADR-0003).
 LOGIN_LIMIT = 10
@@ -233,7 +234,7 @@ def register_user_routes(
 				)
 				active = None
 		dev_raw = await registry_ops.get_setting(registry, SETTING_MAIL_DEV)
-		dev = (dev_raw or "").strip().lower() in ("1", "true", "yes")
+		dev = settings_keys.is_on(dev_raw)
 		return active, base_url, dev
 
 	async def registry_engine() -> AsyncIterator[AsyncEngine]:

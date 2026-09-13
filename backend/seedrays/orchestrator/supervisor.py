@@ -31,7 +31,7 @@ RESTART_DELAY_SECONDS = 5.0
 # Доверенные обратные прокси (настройка реестра, применяется при старте):
 # адреса/диапазоны через запятую, чьим заголовкам X-Forwarded-For можно
 # верить. По умолчанию — только локальный прокси на этой же машине.
-SETTING_TRUSTED_PROXIES = "gateway.trusted_proxies"
+from seedrays.settings_keys import GATEWAY_TRUSTED_PROXIES as SETTING_TRUSTED_PROXIES
 DEFAULT_TRUSTED_PROXIES = "127.0.0.1"
 
 

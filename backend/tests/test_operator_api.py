@@ -548,3 +548,56 @@ def test_billing_settings_are_validated(tmp_path: Path) -> None:
 	assert "billing.payment_assets.tron-nile" in keys
 	assert bad_status == 400, "сломанный список контрактов отвергается целиком"
 	assert good_status == 200
+
+
+def test_panel_setting_keys_come_from_the_shared_module() -> None:
+	"""No field of the panel spells a setting name of its own.
+
+	Панель — единственный писатель настроек, читают их другие модули. Пока
+	каждая сторона писала название сама, они могли разойтись молча: оператор
+	увидел бы «сохранено», а читатель по новому названию ничего не нашёл бы
+	и взял умолчание — для ключа провайдера это запросы без ключа.
+	"""
+	from seedrays import settings_keys
+	from seedrays.orchestrator import operator as operator_ops
+
+	known = {
+		value
+		for name, value in vars(settings_keys).items()
+		if not name.startswith("_") and isinstance(value, str)
+	}
+	prefixes = tuple(
+		value for name, value in vars(settings_keys).items() if name.endswith("_PREFIX")
+	)
+	stray = [
+		field["key"]
+		for field in operator_ops.setting_fields()
+		if field["key"] not in known and not field["key"].startswith(prefixes)
+	]
+	assert not stray, f"ключи написаны мимо общего модуля: {stray}"
+
+
+def test_a_switch_setting_refuses_a_value_no_reader_understands(tmp_path: Path) -> None:
+	"""A switch takes only recognized values; otherwise it saves as "off" silently."""
+
+	async def scenario() -> tuple[int, str]:
+		client, csrf = await _operator_client(tmp_path)
+		try:
+			refused = await client.put(
+				"/v1/operator/settings",
+				json={"values": {"billing.enabled": "включить"}},
+				headers={"X-CSRF-Token": csrf},
+			)
+			accepted = await client.put(
+				"/v1/operator/settings",
+				json={"values": {"billing.enabled": "on"}},
+				headers={"X-CSRF-Token": csrf},
+			)
+			assert accepted.status_code == 200, accepted.text
+			return refused.status_code, refused.json()["error"]["code"]
+		finally:
+			await client.aclose()
+
+	status, code = asyncio.run(scenario())
+	assert status == 400
+	assert code == "invalid_setting"

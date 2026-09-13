@@ -14,8 +14,8 @@ from seedrays.families import Family
 # для всего шлюза: ключ один на установку, и темп запросов тоже. Живут здесь,
 # а не у потребителя, потому что потребителей несколько (watcher, биллинг),
 # а провайдер — один ресурс.
-SETTING_API_KEY = "provider.trongrid.api_key"
-SETTING_RATE = "provider.trongrid.rate_per_sec"
+from seedrays.settings_keys import PROVIDER_API_KEY as SETTING_API_KEY
+from seedrays.settings_keys import PROVIDER_RATE_PER_SEC as SETTING_RATE
 DEFAULT_RATE_PER_SEC = 3.0
 
 

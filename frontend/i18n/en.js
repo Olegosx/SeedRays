@@ -39,6 +39,8 @@ export const en = {
 	"errors.invalid_name": "The name is 1 to 64 characters.",
 	"errors.unknown_application": "No such application.",
 	"errors.unknown_wallet": "No such wallet — refresh the wallet list.",
+	"errors.unknown_network": "The gateway does not serve this network.",
+	"errors.wallet_family_mismatch": "This wallet belongs to another chain family — its addresses would not work in this network.",
 	"errors.wallet_missing": "No such wallet.",
 	"errors.unknown_email": "No such email on this account.",
 	"errors.invalid_token": "The link is invalid or expired — request a new reset.",

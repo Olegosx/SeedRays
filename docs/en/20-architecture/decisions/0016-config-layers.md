@@ -26,6 +26,14 @@ and restarts.
   entering, replacing or revoking a provider key requires no server console and no
   restart.
 - Secrets never appear in code, logs or the repository, in either layer.
+- **The setting names are declared in one module**, imported by the panel that writes them
+  and by every module that reads them. Spelled separately on each side, they could drift
+  apart without a word: the panel reports "saved", the reader finds nothing under the new
+  name and falls back to its default — for the provider key that means requests without a
+  key. A test checks that no panel field names a setting of its own.
+- **A switch is read the same way everywhere**: one set of recognized values, and the panel
+  refuses anything outside it instead of storing a value some readers count as "on" and
+  others do not.
 
 ## Alternatives Considered
 

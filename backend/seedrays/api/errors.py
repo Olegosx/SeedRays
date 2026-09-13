@@ -28,6 +28,7 @@ _OPERATION_STATUS = {
 	"unknown_app_user": 404,
 	"network_not_configured": 400,
 	"unknown_wallet": 400,
+	"wallet_family_mismatch": 400,
 	"wallet_missing": 500,
 	"invalid_status": 400,
 	"invalid_limit": 400,

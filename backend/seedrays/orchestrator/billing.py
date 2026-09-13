@@ -25,6 +25,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
+from seedrays import settings_keys
 from seedrays.chains.base import ChainDataSourceError, Direction, TransferStatus
 from seedrays.derivation.derive import InvalidKeyError, PrivateKeyError, derive_address
 from seedrays.orchestrator.money import format_amount
@@ -57,18 +58,18 @@ DEFAULT_PAYMENT_NETWORK = "tron"
 # Настройка реестра: JSON-список адресов контрактов, засчитываемых в оборот
 # по одной сети. Символам активов доверия нет — каталог пополняется всем, что
 # пришло на адрес, и поддельный «USDT» раздул бы оборот (ADR-0027).
-SETTING_ASSETS_PREFIX = "billing.assets."
+from seedrays.settings_keys import BILLING_ASSETS_PREFIX as SETTING_ASSETS_PREFIX
 
 # Условия вознаграждения — настройки реестра (ADR-0016), страница панели.
 # Выключено по умолчанию: установка не должна начать выставлять счета сама.
-SETTING_ENABLED = "billing.enabled"
-SETTING_RATE = "billing.rate_percent"
-SETTING_THRESHOLD = "billing.threshold_usdt"
-SETTING_DUE_DAYS = "billing.due_days"
+from seedrays.settings_keys import BILLING_DUE_DAYS as SETTING_DUE_DAYS
+from seedrays.settings_keys import BILLING_ENABLED as SETTING_ENABLED
+from seedrays.settings_keys import BILLING_RATE_PERCENT as SETTING_RATE
+from seedrays.settings_keys import BILLING_THRESHOLD_USDT as SETTING_THRESHOLD
 
 # Активы, которыми принимается оплата счетов, по сетям: JSON-список адресов
 # контрактов. Всё остальное, пришедшее на адрес счёта, — чужой актив.
-SETTING_PAYMENT_ASSETS_PREFIX = "billing.payment_assets."
+from seedrays.settings_keys import BILLING_PAYMENT_ASSETS_PREFIX as SETTING_PAYMENT_ASSETS_PREFIX
 DEFAULT_DUE_DAYS = 7
 # Ставка хранится в сотых долях процента: «x.xx%» ложится в целое без потерь,
 # и вся денежная арифметика остаётся целочисленной. Точнее задать ставку
@@ -249,11 +250,6 @@ def _decimal_setting(raw: str | None, default: Decimal, key: str) -> Decimal:
 	return value
 
 
-def _is_on(raw: str | None) -> bool:
-	"""The gateway's convention for a switch stored as a setting string."""
-	return (raw or "").strip().lower() in ("1", "true", "yes", "on")
-
-
 def _percent_text(hundredths: int) -> str:
 	"""The rate as text, from its hundredths of a percent: 150 → "1.5"."""
 	return str((Decimal(hundredths) / RATE_HUNDREDTHS_IN_PERCENT).normalize())
@@ -266,7 +262,7 @@ async def read_terms(registry: AsyncEngine) -> Terms | None:
 		The terms, or None — either the switch is off or the rate is zero,
 		which means the same thing in practice and saves a pass over users.
 	"""
-	if not _is_on(await registry_ops.get_setting(registry, SETTING_ENABLED)):
+	if not settings_keys.is_on(await registry_ops.get_setting(registry, SETTING_ENABLED)):
 		return None
 	rate = _decimal_setting(
 		await registry_ops.get_setting(registry, SETTING_RATE), Decimal(0), SETTING_RATE

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from seedrays import chains
 from seedrays.orchestrator import operations
 from seedrays.orchestrator.operations import OperationError, hash_api_key
 from seedrays.storage import registry as registry_ops
@@ -229,12 +230,31 @@ async def set_network_mapping(
 	"""Create or replace the application's "network → wallet" mapping entry.
 
 	Raises:
-		OperationError: unknown_application / unknown_wallet.
+		OperationError: unknown_application / unknown_wallet / unknown_network /
+			wallet_family_mismatch.
 	"""
 	await _require_summary(engine, app_id)
-	if await user_wallets.get_wallet(engine, wallet_id) is None:
+	# Сеть сверяется с единым перечнем слоя цепочек. Кабинет предлагает выбор
+	# из присланного списка, но проверить обязан сервер: настройка на сеть,
+	# которую шлюз не наблюдает, выдала бы плательщику рабочий адрес, а
+	# поступление на него не увидел бы никто — ни кабинет, ни API, ни оборот.
+	family = chains.supported_networks().get(network)
+	if family is None:
+		raise OperationError("unknown_network", f"unknown network {network!r}")
+	wallet = await user_wallets.get_wallet(engine, wallet_id)
+	if wallet is None:
 		# Ошибка ввода пользователя кабинета, не серверная несогласованность.
 		raise OperationError("unknown_wallet", f"wallet {wallet_id} does not exist")
+	if wallet.family != family.value:
+		# Адреса выводятся по стандарту семейства: кошелёк чужого семейства
+		# дал бы адреса, которые в этой сети принадлежат не владельцу кошелька.
+		# Сегодня обе сети шлюза из одного семейства, и нарушить это нельзя, —
+		# проверка стоит здесь до того, как появится вторая цепочка.
+		raise OperationError(
+			"wallet_family_mismatch",
+			f"wallet {wallet_id} belongs to family {wallet.family!r}, "
+			f"network {network!r} needs {family.value!r}",
+		)
 	await user_apps.upsert_network_mapping(
 		engine, app_id=app_id, network=network, wallet_id=wallet_id
 	)
