@@ -273,6 +273,7 @@
 												<input type="text" class="form-control"
 													:class="fieldErrors['billing.rate_percent'] ? 'is-invalid' : ''"
 													x-model="values['billing.rate_percent']" placeholder="1.5">
+												<div class="form-hint" x-text="$store.i18n.t('op.feeRateHint')"></div>
 												<div class="invalid-feedback"
 													x-text="fieldErrors['billing.rate_percent']"></div>
 											</div>
@@ -281,6 +282,7 @@
 												<input type="text" class="form-control"
 													:class="fieldErrors['billing.threshold_usdt'] ? 'is-invalid' : ''"
 													x-model="values['billing.threshold_usdt']" placeholder="1000">
+												<div class="form-hint" x-text="$store.i18n.t('op.feeThresholdHint')"></div>
 												<div class="invalid-feedback"
 													x-text="fieldErrors['billing.threshold_usdt']"></div>
 											</div>
