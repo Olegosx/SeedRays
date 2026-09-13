@@ -23,6 +23,7 @@ BILLING_TABLES = {
 	"invoice_addresses",
 	"invoices",
 	"invoice_payments",
+	"manual_credits",
 	"user_billing",
 }
 
@@ -583,7 +584,6 @@ def test_pass_issues_one_invoice_per_period(tmp_path: Path) -> None:
 	assert invoice.rate_percent == "1.5"
 	assert invoice.threshold == str(100 * billing.MICRO_USDT)
 	assert invoice.due_at == datetime(2026, 10, 12)
-	assert invoice.state == "issued"
 	assert invoice.address.startswith("T")
 
 
@@ -633,17 +633,18 @@ def test_overdue_is_marked_even_when_the_fee_is_switched_off(tmp_path: Path) -> 
 			await billing.run_pass(tmp_path, now=datetime(2026, 10, 5))
 			registry = create_sqlite_engine(registry_db_path(tmp_path))
 			await registry_ops.set_setting(registry, billing.SETTING_ENABLED, "0")
+			user = await registry_ops.get_user_by_login(registry, "alice")
 			await registry.dispose()
-			# Срок оплаты — 12 октября; проход 20-го застаёт счёт просроченным.
+			# Срок оплаты — 12 октября; проход 20-го застаёт долг просроченным.
 			stats = await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
-			rows = await billing_store.list_invoices(billing_engine)
-			return stats, rows[0].state
+			state = await billing_store.access_state(billing_engine, user.id)
+			return stats, state
 		finally:
 			await billing_engine.dispose()
 
 	stats, state = asyncio.run(scenario())
 	assert stats.invoices_overdue == 1
-	assert state == "overdue"
+	assert state == "suspended", "выключение вознаграждения не прощает долгов"
 	assert stats.invoices_issued == 0
 
 
@@ -710,6 +711,20 @@ async def _gateway_with_invoice(tmp_path: Path) -> tuple[AsyncEngine, str]:
 	return billing_engine, invoices[0].address
 
 
+async def _alice_billing(billing_engine: AsyncEngine, now: datetime) -> tuple[int, list[str]]:
+	"""(balance, invoice states oldest first) — сквозная проверка балансовой модели."""
+	from seedrays.storage import billing as billing_store
+
+	balances = await billing_store.user_balances(billing_engine)
+	rows = await billing_store.list_invoices(billing_engine)
+	if not rows:
+		return next(iter(balances.values()), 0), []
+	user_id = rows[0].user_id
+	credits = await billing_store.user_credits(billing_engine, user_id)
+	states = [s for _, s in billing.classify_invoices(rows, credits, now)]
+	return balances.get(user_id, 0), states
+
+
 def test_full_payment_settles_the_invoice(tmp_path: Path) -> None:
 	"""The exact amount closes the invoice, and a re-check changes nothing."""
 
@@ -723,24 +738,24 @@ def test_full_payment_settles_the_invoice(tmp_path: Path) -> None:
 			first = await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
 			)
-			settled = (await billing_store.list_invoices(billing_engine))[0]
+			balance, states = await _alice_billing(billing_engine, datetime(2026, 10, 7))
 			# Повторный проход видит тот же перевод: ключ идемпотентности не
 			# даёт зачесть его дважды.
 			again = await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 8), source_factory=lambda n, k, i: source
 			)
-			return first, settled, again
+			balance_again, _ = await _alice_billing(billing_engine, datetime(2026, 10, 8))
+			return first, balance, states, again, balance_again
 		finally:
 			await billing_engine.dispose()
 
-	first, settled, again = asyncio.run(scenario())
+	first, balance, states, again, balance_again = asyncio.run(scenario())
 	assert first.payments_recorded == 1
-	assert first.invoices_settled == 1
-	assert settled.state == "paid"
-	assert settled.credited == str(15 * 10**6)
-	assert settled.paid_at is not None
+	assert balance == 0, "оплата ровно в размере счёта выводит баланс в ноль"
+	assert states == ["paid"]
 	assert again.payments_recorded == 0, "повтор не создаёт второй платёж"
-	assert again.addresses_checked == 0, "оплаченный счёт больше не опрашивается"
+	assert balance_again == 0, "повторный проход не зачисляет деньги дважды"
+	assert again.addresses_checked == 0, "адрес без долга больше не опрашивается"
 
 
 def test_underpayment_leaves_the_invoice_open(tmp_path: Path) -> None:
@@ -755,7 +770,7 @@ def test_underpayment_leaves_the_invoice_open(tmp_path: Path) -> None:
 			await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: short
 			)
-			after_part = (await billing_store.list_invoices(billing_engine))[0]
+			part = await _alice_billing(billing_engine, datetime(2026, 10, 7))
 			rest = FakePaymentSource({
 				address: [
 					_incoming(address, 10 * 10**6, txid="part1"),
@@ -765,16 +780,16 @@ def test_underpayment_leaves_the_invoice_open(tmp_path: Path) -> None:
 			await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 8), source_factory=lambda n, k, i: rest
 			)
-			after_rest = (await billing_store.list_invoices(billing_engine))[0]
-			return after_part, after_rest
+			full = await _alice_billing(billing_engine, datetime(2026, 10, 8))
+			return part, full
 		finally:
 			await billing_engine.dispose()
 
-	after_part, after_rest = asyncio.run(scenario())
-	assert after_part.state == "issued", "недоплата не открывает доступ"
-	assert after_part.credited == str(10 * 10**6)
-	assert after_rest.state == "paid", "доплата закрывает счёт"
-	assert after_rest.credited == str(15 * 10**6)
+	(part_balance, part_states), (full_balance, full_states) = asyncio.run(scenario())
+	assert part_balance == -5 * 10**6, "недоплата оставляет баланс в минусе"
+	assert part_states == ["issued"], "срок ещё не вышел — счёт ожидает доплаты"
+	assert full_balance == 0, "доплата выводит баланс в ноль"
+	assert full_states == ["paid"]
 
 
 def test_overpayment_becomes_credit_for_the_next_invoice(tmp_path: Path) -> None:
@@ -790,22 +805,20 @@ def test_overpayment_becomes_credit_for_the_next_invoice(tmp_path: Path) -> None
 			await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
 			)
-			first = (await billing_store.list_invoices(billing_engine))[0]
+			first = await _alice_billing(billing_engine, datetime(2026, 10, 7))
 			# Ноябрьский проход выставляет счёт за октябрь; оборот тот же.
 			await _record_october_turnover(tmp_path)
 			await billing.run_pass(tmp_path, now=datetime(2026, 11, 2))
-			await billing.check_payments(
-				tmp_path, now=datetime(2026, 11, 3), source_factory=lambda n, k, i: source
-			)
-			rows = await billing_store.list_invoices(billing_engine)
-			return first, rows[0]
+			second = await _alice_billing(billing_engine, datetime(2026, 11, 3))
+			return first, second
 		finally:
 			await billing_engine.dispose()
 
-	first, second = asyncio.run(scenario())
-	assert first.state == "paid"
-	assert second.period_start == datetime(2026, 10, 1)
-	assert second.state == "paid", "аванс закрыл следующий счёт без нового перевода"
+	(first_balance, first_states), (second_balance, second_states) = asyncio.run(scenario())
+	assert first_balance == 25 * 10**6, "переплата остаётся плюсом на балансе"
+	assert first_states == ["paid"]
+	assert second_balance == 10 * 10**6, "второй счёт съел часть аванса"
+	assert second_states == ["paid", "paid"], "аванс закрыл следующий счёт сам"
 
 
 async def _record_october_turnover(tmp_path: Path) -> None:
@@ -842,16 +855,14 @@ def test_foreign_asset_is_recorded_but_not_credited(tmp_path: Path) -> None:
 			stats = await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
 			)
-			invoice = (await billing_store.list_invoices(billing_engine))[0]
-			return stats, invoice
+			return stats, await _alice_billing(billing_engine, datetime(2026, 10, 7))
 		finally:
 			await billing_engine.dispose()
 
-	stats, invoice = asyncio.run(scenario())
+	stats, (balance, states) = asyncio.run(scenario())
 	assert stats.foreign_assets == 1
-	assert stats.invoices_settled == 0
-	assert invoice.state == "issued"
-	assert invoice.credited == "0"
+	assert balance == -15 * 10**6, "чужой токен не деньги: долг не уменьшился"
+	assert states == ["issued"]
 
 
 def test_check_polls_only_addresses_with_unpaid_invoices(tmp_path: Path) -> None:
@@ -1090,15 +1101,14 @@ def test_two_transfers_of_one_transaction_settle_the_invoice(tmp_path: Path) -> 
 			stats = await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
 			)
-			invoice = (await billing_store.list_invoices(billing_engine))[0]
-			return stats, invoice
+			return stats, await _alice_billing(billing_engine, datetime(2026, 10, 7))
 		finally:
 			await billing_engine.dispose()
 
-	stats, invoice = asyncio.run(scenario())
+	stats, (balance, states) = asyncio.run(scenario())
 	assert stats.payments_recorded == 1, "переводы одной транзакции — один платёж"
-	assert invoice.state == "paid"
-	assert invoice.credited == str(15 * 10**6)
+	assert balance == 0, "обе части транзакции зачлись"
+	assert states == ["paid"]
 
 
 def test_a_short_answer_is_topped_up_on_the_next_check(tmp_path: Path) -> None:
@@ -1126,13 +1136,13 @@ def test_a_short_answer_is_topped_up_on_the_next_check(tmp_path: Path) -> None:
 			await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 8), source_factory=lambda n, k, i: full
 			)
-			return (await billing_store.list_invoices(billing_engine))[0]
+			return await _alice_billing(billing_engine, datetime(2026, 10, 8))
 		finally:
 			await billing_engine.dispose()
 
-	invoice = asyncio.run(scenario())
-	assert invoice.state == "paid", "сумма платежа дописана, счёт закрыт"
-	assert invoice.credited == str(15 * 10**6)
+	balance, states = asyncio.run(scenario())
+	assert balance == 0, "сумма платежа дописана, долг погашен"
+	assert states == ["paid"]
 
 
 def test_payment_is_valued_by_the_catalog_not_by_the_answer(tmp_path: Path) -> None:
@@ -1143,20 +1153,32 @@ def test_payment_is_valued_by_the_catalog_not_by_the_answer(tmp_path: Path) -> N
 
 		billing_engine, address = await _gateway_with_invoice(tmp_path)
 		try:
-			# Каталог знает USDT с шестью знаками; ответ заявляет ноль —
-			# по нему 15 единиц стали бы 15 миллионами USDT.
+			# Каталог знает USDT сети оплаты с шестью знаками (без посева
+			# актив создался бы прямо из ответа — и «каталог» совпал бы с
+			# подделкой); ответ заявляет ноль — по нему 15 единиц стали бы
+			# 15 миллионами USDT.
+			registry = create_sqlite_engine(registry_db_path(tmp_path))
+			await registry_ops.get_or_create_asset(
+				registry,
+				network=PAY_NETWORK,
+				kind=registry_ops.KIND_TOKEN,
+				contract_address=PAY_USDT,
+				symbol="USDT",
+				decimals=6,
+			)
+			await registry.dispose()
 			source = FakePaymentSource(
 				{address: [_incoming(address, 15 * 10**6, txid="pay1", decimals=0)]}
 			)
 			await billing.check_payments(
 				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
 			)
-			return (await billing_store.list_invoices(billing_engine))[0]
+			return await _alice_billing(billing_engine, datetime(2026, 10, 7))
 		finally:
 			await billing_engine.dispose()
 
-	invoice = asyncio.run(scenario())
-	assert invoice.credited == str(15 * 10**6), "оценка по каталогу, а не по ответу"
+	balance, _states = asyncio.run(scenario())
+	assert balance == 0, "оценка по каталогу, а не по ответу"
 
 
 def test_credit_survives_an_unreachable_provider(tmp_path: Path) -> None:
@@ -1174,12 +1196,14 @@ def test_credit_survives_an_unreachable_provider(tmp_path: Path) -> None:
 		try:
 			# Деньги пришли раньше и уже записаны — зачесть их можно, не
 			# спрашивая провайдера ни о чём.
+			rows = await billing_store.list_invoices(billing_engine)
 			await billing_store.record_payment(
 				billing_engine,
 				network=PAY_NETWORK,
 				address=address,
 				txid="paid-earlier",
 				asset_id=1,
+				user_id=rows[0].user_id,
 				amount=15 * 10**6,
 				value=15 * 10**6,
 				tx_time=datetime(2026, 10, 6),
@@ -1191,12 +1215,13 @@ def test_credit_survives_an_unreachable_provider(tmp_path: Path) -> None:
 				now=datetime(2026, 10, 7),
 				source_factory=lambda n, k, i: unreachable,
 			)
-			return (await billing_store.list_invoices(billing_engine))[0]
+			return await _alice_billing(billing_engine, datetime(2026, 10, 7))
 		finally:
 			await billing_engine.dispose()
 
-	invoice = asyncio.run(scenario())
-	assert invoice.state == "paid", "зачёт не должен зависеть от доступности провайдера"
+	balance, states = asyncio.run(scenario())
+	assert balance == 0, "сверка не должна зависеть от доступности провайдера"
+	assert states == ["paid"]
 
 
 def test_access_is_reconciled_with_the_invoices_not_with_one_lucky_step(
@@ -1311,27 +1336,6 @@ def test_a_rate_rounding_down_to_zero_stops_the_pass_loudly(tmp_path: Path) -> N
 	assert asyncio.run(scenario()) is None
 
 
-def test_the_full_amount_is_credited_without_leaving_dust(tmp_path: Path) -> None:
-	"""Paying the invoice credits all of it: nothing settles for less than its amount."""
-
-	async def scenario() -> object:
-		from seedrays.storage import billing as billing_store
-
-		billing_engine, address = await _gateway_with_invoice(tmp_path)
-		try:
-			source = FakePaymentSource({address: [_incoming(address, 15 * 10**6, txid="pay")]})
-			await billing.check_payments(
-				tmp_path, now=datetime(2026, 10, 7), source_factory=lambda n, k, i: source
-			)
-			return (await billing_store.list_invoices(billing_engine))[0]
-		finally:
-			await billing_engine.dispose()
-
-	invoice = asyncio.run(scenario())
-	assert invoice.state == "paid"
-	assert invoice.credited == invoice.amount, "зачтена вся сумма счёта, без остатка"
-
-
 def test_a_new_user_inherits_nothing_from_a_deleted_one(tmp_path: Path) -> None:
 	"""The next user to register gets no trace of a deleted user's billing state.
 
@@ -1370,3 +1374,81 @@ def test_a_new_user_inherits_nothing_from_a_deleted_one(tmp_path: Path) -> None:
 	state, address = asyncio.run(scenario())
 	assert state == "ok", "новый пользователь получил чужую приостановку доступа"
 	assert address is None, "новый пользователь получил чужой платёжный адрес"
+
+
+def test_cabinet_billing_shows_debt_and_survives_suspension(tmp_path: Path) -> None:
+	"""The billing section answers "how much and where" — suspended included."""
+
+	async def scenario() -> tuple[dict, int, dict, int, int]:
+		billing_engine, _address = await _gateway_with_invoice(tmp_path)
+		try:
+			# Счёт на 15 USDT выставлен; долг просрочен проходом от 20-го.
+			await billing.run_pass(tmp_path, now=datetime(2026, 10, 20))
+			client, csrf = await _client_for_alice(tmp_path)
+			view = (await client.get("/v1/user/billing")).json()
+			wallets_status = (await client.get("/v1/user/wallets")).status_code
+			# Смена сети в долгах запрещена — реквизиты счёта не должны ехать.
+			refused = await client.put(
+				"/v1/user/billing/network",
+				json={"network": PAY_NETWORK},
+				headers={"X-CSRF-Token": csrf},
+			)
+			# Оплата: баланс выходит в ноль, раздел показывает это сразу.
+			source = FakePaymentSource(
+				{view["address"]: [_incoming(view["address"], 15 * 10**6, txid="pay")]}
+			)
+			await billing.check_payments(
+				tmp_path, now=datetime(2026, 10, 21), source_factory=lambda n, k, i: source
+			)
+			paid_view = (await client.get("/v1/user/billing")).json()
+			restored_status = (await client.get("/v1/user/wallets")).status_code
+			await client.aclose()
+			return view, wallets_status, paid_view, refused.status_code, restored_status
+		finally:
+			await billing_engine.dispose()
+
+	view, wallets_status, paid_view, refused_status, restored_status = asyncio.run(scenario())
+	assert view["balance"] == "-15"
+	assert view["debt"] == "15"
+	assert view["network"] == PAY_NETWORK
+	assert view["address"], "реквизиты оплаты видны и приостановленному"
+	assert view["invoices"][0]["amount"] == "15"
+	assert wallets_status == 403, "остальной кабинет в долгах закрыт"
+	assert refused_status == 409, "сеть оплаты в долгах не меняется"
+	assert paid_view["balance"] == "0"
+	assert paid_view["debt"] == "0"
+	assert restored_status == 200, "оплата вернула кабинет"
+
+
+def test_cabinet_changes_the_payment_network_when_clear(tmp_path: Path) -> None:
+	"""With no debt the user may switch to any network holding a master wallet."""
+
+	async def scenario() -> tuple[int, int, str]:
+		upgrade_all(tmp_path)
+		registry = create_sqlite_engine(registry_db_path(tmp_path))
+		billing_engine = create_sqlite_engine(billing_db_path(tmp_path))
+		try:
+			await registry_ops.create_user(registry, tmp_path, "alice", "hash")
+			await billing.attach_master_wallet(
+				billing_engine, registry, network="tron-nile", xpub=await _master_xpub()
+			)
+			client, csrf = await _client_for_alice(tmp_path)
+			headers = {"X-CSRF-Token": csrf}
+			# Сети без мастер-кошелька в выборе не существует.
+			unknown = await client.put(
+				"/v1/user/billing/network", json={"network": "tron"}, headers=headers
+			)
+			chosen = await client.put(
+				"/v1/user/billing/network", json={"network": "tron-nile"}, headers=headers
+			)
+			view = (await client.get("/v1/user/billing")).json()
+			await client.aclose()
+			return unknown.status_code, chosen.status_code, view["network"]
+		finally:
+			await billing_engine.dispose()
+			await registry.dispose()
+
+	unknown_status, chosen_status, network = asyncio.run(scenario())
+	assert unknown_status == 400
+	assert chosen_status == 200
+	assert network == "tron-nile"

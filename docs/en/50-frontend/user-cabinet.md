@@ -92,10 +92,9 @@ The sidebar — six sections:
   a click on the item opens or closes it.
 - **Operation History** — incoming operations across all wallets with filters (wallet,
   network, asset, status).
-- **Invoices** — the gateway's invoices for the owner's fee: the amount, the due date,
-  the payment details and the choice of payment network (planned by
-  [ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md); not implemented
-  yet).
+- **Invoices** — the balance towards the gateway, the owner's fee invoices, the payment
+  details and the choice of payment network
+  ([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md)).
 - **Settings** — the cabinet owner's personal settings: profile (the username — immutable
   after registration; email addresses — a second email can be attached to the account,
   each is confirmed by a message) and security — password change, sign-in methods
@@ -201,35 +200,35 @@ opened; a forgotten passphrase means permanently lost access to the funds.
 
 ## Invoices
 
-> Planned by [ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md); not
-> implemented yet.
+The gateway owner takes a fee — a percentage of the user's turnover over a calendar
+month, provided that turnover crossed a threshold
+([ADR-0027](../20-architecture/decisions/0027-gateway-fee-billing.md)). Turnover means
+confirmed incoming payments in the assets the operator designated; moving funds between
+one's own addresses is not income. The section answers two questions: how much and where.
 
-The gateway owner takes a fee — a percentage of the user's turnover over a calendar month,
-provided that turnover crossed a threshold. Turnover means confirmed incoming payments in
-the assets the operator designated; moving funds between one's own addresses is not income.
-The section answers two questions: how much to pay and where.
-
-- **An unpaid invoice** sits in a card on top: the amount in USDT, the due date, the payment
-  network and address with a copy button, the rate and threshold applied, and the turnover
-  the invoice was computed from. If only part of the amount arrived, the remainder to be
-  paid is right there — to the same address.
+- **The balance** — a card on top, one figure: the sum of credits minus the sum of
+  invoices. Zero or above — everything is in order; a negative one is highlighted, with
+  the amount to pay next to it.
+- **How to pay** (shown while in debt): the permanent payment address with a copy button
+  and a note — an ordinary stablecoin transfer from any wallet or exchange. The gateway
+  notices the money itself; an underpayment and an overpayment are not special cases but
+  simply the size of the balance, and the remainder is topped up to the same address.
 - **Invoice history**: period, turnover, rate, amount, due date, state (paid / awaiting
-  payment / overdue), payment date.
-- **The payment network**: TRON by default; any network where the owner has set up a master
-  wallet can be chosen instead. Changing it is refused while an invoice is unpaid — the
-  details of an issued invoice must not move.
-- Paying is an ordinary stablecoin transfer to the address shown, made outside the gateway.
-  The gateway notices the transfer itself and credits it on finalization; the invoice closes
-  without the operator.
+  payment / overdue). The state is computed from the balance: credits covering the
+  invoice and everything older than it — paid; an uncovered invoice past its due date —
+  overdue.
+- **The payment network**: TRON by default; any network where the owner has set up a
+  master wallet can be chosen instead. Changing it is refused while the balance is
+  negative — the details of an issued invoice must not move.
 
-### An overdue invoice
+### An overdue debt
 
-Missing the due date puts the cabinet into "payment only" mode: the Application API refuses
-calls, the other cabinet sections are closed and only this one stays open — otherwise the
-user would see neither the invoice nor its details, that is, would lose the means of paying.
-Observation of their addresses does not stop: their payers keep paying and those payments
-reach the history. Access returns automatically as soon as the full amount is credited; the
-operator can confirm a payment by hand if the money arrived outside the gateway.
+A negative balance past its due date puts the cabinet into "payment only" mode: the
+Application API refuses calls, and any cabinet section opens on the invoices page — the
+debt and the payment details live there, otherwise the user would lose the means of
+paying. Observation of their addresses does not stop: their payers keep paying and those
+payments reach the history. Access returns automatically as soon as the balance stops
+being negative; the operator can credit money by hand if it arrived outside the gateway.
 
 ## Settings
 

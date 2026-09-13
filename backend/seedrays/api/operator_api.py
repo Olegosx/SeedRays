@@ -78,9 +78,11 @@ class MasterWalletRequest(BaseModel):
 
 
 class ConfirmPaymentRequest(BaseModel):
-	"""Body of the manual payment confirmation: why it is settled by hand."""
+	"""Body of the manual credit: why, and optionally how much (USDT)."""
 
 	reason: str = Field(min_length=1, max_length=500)
+	# Пусто — зачисляется ровно сумма счёта, на котором нажата кнопка.
+	amount: str = Field(default="", max_length=32)
 
 
 @dataclass
@@ -391,9 +393,14 @@ def register_operator_routes(
 		billing: AsyncEngine = BillingDep,
 		state: str | None = None,
 	) -> dict:
-		"""Every user's invoices, newest period first; filterable by state."""
-		invoices = await billing_ops.panel_invoices(billing, ctx.registry, state=state)
-		return {"invoices": [vars(invoice) for invoice in invoices]}
+		"""Every user's invoices with computed states and the users' balances."""
+		invoices, balances = await billing_ops.panel_invoices(
+			billing, ctx.registry, state=state
+		)
+		return {
+			"invoices": [vars(invoice) for invoice in invoices],
+			"balances": balances,
+		}
 
 	@app.post("/v1/operator/billing/invoices/{invoice_id}/confirm")
 	async def confirm_invoice(
@@ -403,7 +410,7 @@ def register_operator_routes(
 		ctx: OperatorContext = MutatingSessionDep,
 		billing: AsyncEngine = BillingDep,
 	) -> dict:
-		"""Settle an invoice by hand: money that arrived outside the gateway."""
+		"""Credit money that arrived outside the gateway, on the operator's word."""
 		user_id = await billing_ops.confirm_manually(
 			billing,
 			ctx.registry,
@@ -411,6 +418,7 @@ def register_operator_routes(
 			invoice_id=invoice_id,
 			operator_id=ctx.operator.operator_id,
 			reason=body.reason,
+			amount=body.amount or None,
 		)
 		await journal.event(
 			ctx.registry, "billing_manual_payment", actor=ACTOR_OPERATOR,

@@ -48,14 +48,8 @@ def upgrade() -> None:
 		sa.Column("due_at", sa.DateTime, nullable=False),
 		sa.Column("network", sa.String(32), nullable=False),
 		sa.Column("address", sa.String(128), nullable=False),
-		sa.Column("state", sa.String(16), nullable=False, server_default="issued"),
-		sa.Column("credited", sa.Text, nullable=False, server_default="0"),
 		sa.Column("issued_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
-		sa.Column("paid_at", sa.DateTime),
-		sa.Column("manual_operator_id", sa.Integer),
-		sa.Column("manual_reason", sa.Text, nullable=False, server_default=""),
 		sa.UniqueConstraint("user_id", "period_start", name="uq_invoices_period"),
-		sa.CheckConstraint("state IN ('issued', 'paid', 'overdue')", name="ck_invoices_state"),
 	)
 	op.create_table(
 		"invoice_payments",
@@ -70,11 +64,19 @@ def upgrade() -> None:
 		sa.Column("tx_time", sa.DateTime),
 		sa.Column("first_seen_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
 		sa.Column("finalized_at", sa.DateTime),
-		sa.Column("invoice_id", sa.Integer, sa.ForeignKey("invoices.id")),
-		sa.Column("credited", sa.Text, nullable=False, server_default="0"),
+		sa.Column("user_id", sa.Integer, nullable=False),
 		sa.UniqueConstraint(
 			"txid", "address", "asset_id", "event_index", name="uq_invoice_payments_key"
 		),
+	)
+	op.create_table(
+		"manual_credits",
+		sa.Column("id", sa.Integer, primary_key=True),
+		sa.Column("user_id", sa.Integer, nullable=False),
+		sa.Column("value", sa.Text, nullable=False),
+		sa.Column("operator_id", sa.Integer, nullable=False),
+		sa.Column("reason", sa.Text, nullable=False),
+		sa.Column("created_at", sa.DateTime, nullable=False, server_default=sa.func.now()),
 	)
 	op.create_table(
 		"user_billing",
@@ -88,6 +90,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
 	op.drop_table("user_billing")
+	op.drop_table("manual_credits")
 	op.drop_table("invoice_payments")
 	op.drop_table("invoices")
 	op.drop_table("invoice_addresses")

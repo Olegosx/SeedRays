@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en" data-bs-theme="light" data-title-key="billing.pageTitle">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SeedRays</title>
+	<link rel="stylesheet" href="vendor/tabler/tabler.min.css">
+	<link rel="stylesheet" href="vendor/tabler-icons/tabler-icons.min.css">
+	<link rel="stylesheet" href="css/app.css">
+	<script type="module" src="js/i18n.js"></script>
+	<script type="module" src="js/auth-guard.js"></script>
+	<script type="module" src="js/layout.js"></script>
+	<script defer src="vendor/alpinejs/alpine.min.js"></script>
+	<script defer src="vendor/tabler/tabler.min.js"></script>
+</head>
+<body>
+	<div class="page" x-cloak x-data="{
+		balance: '0',
+		debt: '0',
+		network: '',
+		address: null,
+		invoices: [],
+		networks: [],
+		copied: false,
+		loadError: '',
+		networkError: '',
+		inDebt() { return this.balance.startsWith('-'); },
+		async init() {
+			try {
+				const { api } = await import('/js/api.js');
+				const data = await api('GET', '/v1/user/billing');
+				this.balance = data.balance;
+				this.debt = data.debt;
+				this.network = data.network;
+				this.address = data.address;
+				this.invoices = data.invoices;
+				this.networks = data.networks;
+			} catch (e) { this.loadError = this.$store.i18n.errorText(e); }
+		},
+		async copyAddress() {
+			try {
+				await navigator.clipboard.writeText(this.address);
+				this.copied = true;
+				setTimeout(() => { this.copied = false; }, 1500);
+			} catch (_e) {
+				// Буфер обмена недоступен (без HTTPS) — адрес виден текстом.
+			}
+		},
+		async chooseNetwork(network) {
+			this.networkError = '';
+			try {
+				const { api } = await import('/js/api.js');
+				await api('PUT', '/v1/user/billing/network', { network });
+				this.network = network;
+			} catch (e) { this.networkError = this.$store.i18n.errorText(e); }
+		},
+		stateClass(state) {
+			return { paid: 'bg-green-lt', issued: 'bg-yellow-lt', overdue: 'bg-red-lt' }[state];
+		},
+		stateText(state) {
+			return this.$store.i18n.t({
+				paid: 'billing.statePaid',
+				issued: 'billing.stateIssued',
+				overdue: 'billing.stateOverdue',
+			}[state]);
+		},
+	}">
+		<div data-layout="sidebar" data-active="billing"></div>
+
+		<div class="page-wrapper">
+			<div data-layout="topbar"></div>
+			<div class="page-header d-print-none">
+				<div class="container-xl">
+					<div class="row g-2 align-items-center">
+						<div class="col">
+							<h2 class="page-title" x-text="$store.i18n.t('billing.title')"></h2>
+						</div>
+					</div>
+				</div>
+			</div>
+			<div class="page-body">
+				<div class="container-xl">
+					<div class="alert alert-danger" x-show="loadError" x-text="loadError"></div>
+
+					<!-- Баланс: одна цифра, которая отвечает на всё -->
+					<div class="card mb-3" :class="inDebt() ? 'border-danger' : ''">
+						<div class="card-body d-flex align-items-center justify-content-between">
+							<div>
+								<div class="text-secondary" x-text="$store.i18n.t('billing.balance')"></div>
+								<div class="h1 mb-0" :class="inDebt() ? 'text-danger' : ''"
+									x-text="balance + ' USDT'"></div>
+							</div>
+							<div class="text-end" x-show="inDebt()">
+								<div class="text-secondary" x-text="$store.i18n.t('billing.debt')"></div>
+								<div class="h2 mb-0 text-danger" x-text="debt + ' USDT'"></div>
+							</div>
+						</div>
+					</div>
+
+					<!-- Как оплатить: адрес постоянный, платёж — обычный перевод -->
+					<div class="card mb-3" x-show="inDebt()">
+						<div class="card-header">
+							<h3 class="card-title" x-text="$store.i18n.t('billing.howToPay')"></h3>
+						</div>
+						<div class="card-body">
+							<p class="text-secondary" x-text="$store.i18n.t('billing.howToPayHint')"></p>
+							<div x-show="address">
+								<label class="form-label">
+									<span x-text="$store.i18n.t('billing.payAddress')"></span>
+									<span class="text-secondary ms-1" x-text="'(' + network + ')'"></span>
+								</label>
+								<div class="input-group">
+									<input class="form-control font-monospace" :value="address" readonly>
+									<button class="btn" @click="copyAddress()"
+										x-text="copied ? $store.i18n.t('billing.copied') : $store.i18n.t('billing.copy')"></button>
+								</div>
+							</div>
+							<p class="text-danger mb-0" x-show="!address"
+								x-text="$store.i18n.t('billing.noAddress')"></p>
+						</div>
+					</div>
+
+					<!-- История счетов: статусы вычислены из баланса -->
+					<div class="card mb-3">
+						<div class="card-header">
+							<h3 class="card-title" x-text="$store.i18n.t('billing.invoices')"></h3>
+						</div>
+						<div class="card-body">
+							<p class="text-secondary mb-0" x-show="!invoices.length"
+								x-text="$store.i18n.t('billing.invoicesEmpty')"></p>
+							<div class="table-responsive" x-show="invoices.length">
+								<table class="table table-vcenter">
+									<thead>
+										<tr>
+											<th x-text="$store.i18n.t('billing.colPeriod')"></th>
+											<th x-text="$store.i18n.t('billing.colTurnover')"></th>
+											<th x-text="$store.i18n.t('billing.colRate')"></th>
+											<th x-text="$store.i18n.t('billing.colAmount')"></th>
+											<th x-text="$store.i18n.t('billing.colDue')"></th>
+											<th x-text="$store.i18n.t('billing.colState')"></th>
+										</tr>
+									</thead>
+									<tbody>
+										<template x-for="invoice in invoices" :key="invoice.period">
+											<tr>
+												<td x-text="invoice.period"></td>
+												<td x-text="invoice.turnover"></td>
+												<td x-text="invoice.rate_percent + '%'"></td>
+												<td x-text="invoice.amount"></td>
+												<td x-text="invoice.due_at"></td>
+												<td>
+													<span class="badge" :class="stateClass(invoice.state)"
+														x-text="stateText(invoice.state)"></span>
+												</td>
+											</tr>
+										</template>
+									</tbody>
+								</table>
+							</div>
+						</div>
+					</div>
+
+					<!-- Сеть оплаты: менять можно, пока нет долга -->
+					<div class="card" x-show="networks.length">
+						<div class="card-header">
+							<h3 class="card-title" x-text="$store.i18n.t('billing.network')"></h3>
+						</div>
+						<div class="card-body">
+							<p class="text-secondary" x-text="$store.i18n.t('billing.networkHint')"></p>
+							<div class="alert alert-danger" x-show="networkError" x-text="networkError"></div>
+							<div class="btn-group">
+								<template x-for="candidate in networks" :key="candidate">
+									<button class="btn" :class="candidate === network ? 'btn-primary' : ''"
+										:disabled="inDebt() && candidate !== network"
+										@click="chooseNetwork(candidate)" x-text="candidate"></button>
+								</template>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+</body>
+</html>

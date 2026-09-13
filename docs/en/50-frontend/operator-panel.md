@@ -49,11 +49,12 @@ those payments.
   permanent invoice address is derived from. The key is validated exactly like a user's
   wallet, gateway-wide uniqueness included. A network with no wallet entered is not offered
   to users for payment, and no invoice is issued in it — the operator is notified instead.
-- **Every user's invoices**: user, period, turnover, amount, due date, state, amount
-  credited; filtered by state.
-- **Manual payment confirmation** — for money that arrived outside the gateway: a confirming
-  dialog with a mandatory reason. The result is the same as a credited payment — suspended
-  access opens. The event lands in the security journal
+- **Every user's invoices**: user, period, turnover, amount, the user's balance, due
+  date, state; filtered by state. States are computed from the balance at request time.
+- **Manual payment confirmation** — a credit to the balance for money that arrived outside
+  the gateway: a dialog with the amount (defaulting to the invoice's) and a mandatory
+  reason. The result is the same as an observed payment — suspended access opens. The
+  event lands in the security journal
   ([ADR-0023](../20-architecture/decisions/0023-security-journal.md)) next to blocks and
   password resets.
 - Users suspended for non-payment are marked in the user list as well — separately from an

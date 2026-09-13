@@ -17,6 +17,7 @@
 		wallets: [],
 		networks: [],
 		invoices: [],
+		balances: {},
 		filter: '',
 		newWallet: { network: '', xpub: '' },
 		walletError: '',
@@ -24,6 +25,7 @@
 		error: '',
 		confirming: null,
 		reason: '',
+		amount: '',
 		async init() {
 			try {
 				const { api } = await import('/js/api.js');
@@ -38,7 +40,9 @@
 			const path = this.filter
 				? '/v1/operator/billing/invoices?state=' + this.filter
 				: '/v1/operator/billing/invoices';
-			this.invoices = (await api('GET', path)).invoices;
+			const data = await api('GET', path);
+			this.invoices = data.invoices;
+			this.balances = data.balances;
 		},
 		freeNetworks() {
 			return this.networks.filter((n) => !this.wallets.some((w) => w.network === n));
@@ -71,6 +75,9 @@
 		openConfirm(invoice) {
 			this.confirming = invoice;
 			this.reason = '';
+			// Сумма зачисления: по умолчанию — сумма счёта, оператор может
+			// вписать фактически полученную.
+			this.amount = invoice.amount;
 			this.error = '';
 		},
 		async confirmPayment() {
@@ -81,7 +88,7 @@
 				await api(
 					'POST',
 					'/v1/operator/billing/invoices/' + this.confirming.id + '/confirm',
-					{ reason: this.reason.trim() },
+					{ reason: this.reason.trim(), amount: this.amount.trim() },
 				);
 				this.confirming = null;
 				await this.loadInvoices();
@@ -189,7 +196,7 @@
 											<th x-text="$store.i18n.t('op.colPeriod')"></th>
 											<th x-text="$store.i18n.t('op.colTurnover')"></th>
 											<th x-text="$store.i18n.t('op.colAmount')"></th>
-											<th x-text="$store.i18n.t('op.colCredited')"></th>
+											<th x-text="$store.i18n.t('op.colBalance')"></th>
 											<th x-text="$store.i18n.t('op.colDue')"></th>
 											<th x-text="$store.i18n.t('op.colState')"></th>
 											<th></th>
@@ -206,13 +213,13 @@
 													<span class="text-secondary ms-1"
 														x-text="'(' + invoice.rate_percent + '%)'"></span>
 												</td>
-												<td x-text="invoice.credited"></td>
+												<td :class="(balances[invoice.user_id] || '0').startsWith('-')
+														? 'text-danger' : ''"
+													x-text="balances[invoice.user_id] || '0'"></td>
 												<td x-text="invoice.due_at"></td>
 												<td>
 													<span class="badge" :class="stateClass(invoice.state)"
 														x-text="stateText(invoice.state)"></span>
-													<div class="text-secondary small" x-show="invoice.manual_reason"
-														x-text="$store.i18n.t('op.manualMark') + ': ' + invoice.manual_reason"></div>
 												</td>
 												<td class="text-end">
 													<button class="btn btn-sm" x-show="invoice.state !== 'paid'"
@@ -246,6 +253,10 @@
 							x-text="$store.i18n.t('op.confirmPaymentBody')
 								.replace('{user}', confirming ? confirming.username : '')
 								.replace('{amount}', confirming ? confirming.amount : '')"></p>
+						<div class="mb-3">
+							<label class="form-label" x-text="$store.i18n.t('op.amountLabel')"></label>
+							<input class="form-control" x-model="amount">
+						</div>
 						<div class="mb-3">
 							<label class="form-label" x-text="$store.i18n.t('op.reasonLabel')"></label>
 							<input class="form-control" x-model="reason"

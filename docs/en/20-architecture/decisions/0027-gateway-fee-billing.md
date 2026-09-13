@@ -62,6 +62,11 @@ attributed by the receiving address.
   USDT, the due date, and the payment network and address. **The rate, the threshold and the
   term are frozen into the invoice** as it is issued: changing the settings never rewrites
   invoices that already exist.
+- **An invoice is a pure charge and has no state.** The user's balance decides everything:
+  the sum of credits minus the sum of invoiced amounts. Zero or above — everything is in
+  order; below zero — a debt. Whether one invoice is paid is computed: the credits cover it
+  and every invoice older than it; an uncovered invoice past its due date is overdue. Facts
+  are stored, states are derived — the same principle as confirmations in ADR-0010.
 - **One invoice per "user + period"** — guaranteed by a unique key in the database, not by the
   carefulness of the code.
 - The invoice is issued in the **user's payment network**; TRON by default, and the network can
@@ -98,7 +103,7 @@ attributed by the receiving address.
 
 - **Billing watches its own addresses and shares nothing with the watcher** beyond the chain
   data source interface. The check is a per-address poll in "confirmed only" mode, once an
-  hour, and only for addresses carrying an unpaid invoice. This is exactly the targeted task
+  hour, and only for the debtors' addresses. This is exactly the targeted task
   [ADR-0018](0018-range-scanning.md) kept per-address queries for while rejecting them as the
   watcher's main intake: a handful of addresses, a low frequency, and a cost that does not
   grow with the number of gateway users.
@@ -119,17 +124,16 @@ attributed by the receiving address.
   decimals multiply the sum, so taking them from the provider would let it revalue this
   payment and every past one. A disagreement is logged; decimals outside a sane range
   make the answer unusable at the chain-source boundary.
-- **The full amount** settles the invoice and restores access automatically, without the
-  operator. Nothing less does: a tolerance for underpayment would be a second rule about
-  the same thing, contradicting the one below it.
-- **An underpayment** leaves the invoice unpaid and access closed; the cabinet shows the
-  remainder to be paid to the same address, and the owner is notified.
-- **An overpayment** is credited against the next invoice; the owner is notified.
+- **A credit is a plus on the balance, nothing more.** No allocation of payments to
+  invoices exists: an underpayment and an overpayment are not special cases but simply the
+  size of the balance. A negative balance is the debt to top up on the same address; a
+  positive one is the advance that covers the next invoice by itself.
 - **A foreign asset** on an invoice address (a stray or spam token) is recorded as a transfer,
   never credited to the invoice, and reported to the operator.
 - **Manual confirmation by the operator** covers money that arrived outside the gateway. It
   requires a stated reason, lands in the security journal
-  ([ADR-0023](0023-security-journal.md)) and has exactly the effect of a credited payment.
+  ([ADR-0023](0023-security-journal.md)) and has exactly the effect of an observed payment:
+  a manual credit to the balance.
 - The price of this design, accepted deliberately: **the provider sees the invoice addresses**.
   A per-address poll publishes them, unlike range scanning, and the provider can tie them to
   the gateway. For the owner's revenue addresses the risk is moderate, and it goes away with a
@@ -141,8 +145,8 @@ attributed by the receiving address.
 ### 5. Storage — a separate billing database
 
 The owner's billing data lives in a **separate `billing.db`** inside the gateway data
-directory, with its own migration stream: master wallets, invoice addresses, invoices, payments
-and their crediting, and the billing state of users.
+directory, with its own migration stream: master wallets, invoice addresses, invoices,
+observed payments, the operator's manual credits and the users' access state.
 
 - **Not the registry**: [ADR-0008](0008-shared-registry-db.md) forbids financial data in the
   shared registry database outright.
@@ -166,30 +170,27 @@ and their crediting, and the billing state of users.
   gateway declares them itself, with no operator and no user action behind them.
 - **Observation of the user's addresses does not stop**: their payers keep paying, and a gap
   would tear a hole in the history and in the next period's turnover.
-- Access is restored **automatically** once the full amount is credited.
-- **The access state is reconciled with the invoices, never driven by an event.** A pass
-  brings every user's state in line with what the invoices say right now: whoever holds an
-  overdue invoice is suspended, whoever has nothing awaiting money is let back in. Acting
-  on the rows one call happened to change would make any failure permanent — the invoice
-  is marked already, so the next pass would no longer see that user, and an overdue
-  invoice would sit beside an open gateway for good. The operator's manual confirmation
-  stays immediate: it is a synchronous action whose result the operator must see in the
-  answer, and the reconciliation confirms it afterwards.
+- Access is restored **automatically** as soon as the balance stops being negative over
+  the overdue invoices.
+- **The access state is reconciled with the balance, not derived from an event.** A pass
+  brings every user's state in line with what the balance says right now: a debtor past
+  the due date is out, everyone else is in. Reacting to events would make any failure
+  permanent; reconciliation heals on the next pass. The operator's manual credit
+  reconciles immediately — its result must show up in the answer.
 
 ### 7. The billing task
 
 A third background task under the same supervisor as the API server and the watcher
 ([ADR-0003](0003-single-process-supervised.md)). Once an hour it does two things in order:
-first it checks for payments (otherwise an invoice paid yesterday would have time to turn
-overdue), then it issues the invoices of the finished period, marks the overdue ones and
-reconciles access. The payment check itself falls into two parts: polling the provider and
-storing what it reports, then crediting the payments the database already holds. The second
-part never depends on the outcome of the first — it touches no network — so an unreachable
-provider cannot leave money that arrived in advance uncredited and turn a paid invoice
-overdue.
-Issuing is not tied to a calendar day: a pass always bills the last period that has ended, so
-a gateway that was down on the first of the month issues at its next start. Repeats duplicate
-nothing — idempotency rests on the invoice key, not on the schedule.
+it issues the finished period's invoices, then polls the debtors' addresses and reconciles
+access — a fresh invoice makes its user a debtor and joins the same pass's poll. The
+reconciliation does not depend on the poll's outcome — it touches no network — so an
+unreachable provider cannot stop money already in the database from reopening access.
+Issuing is not tied to a calendar day: a pass always bills the last period that has ended,
+so a gateway that was down on the first of the month issues at its next start. Repeats
+duplicate nothing — idempotency rests on the invoice key, not on the schedule. Only debtors
+are polled: the address of a user with a non-negative balance costs no request at all, and
+their early payment is noticed with the next invoice.
 
 ### 8. Settings
 

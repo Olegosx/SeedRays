@@ -41,6 +41,11 @@ export async function api(method, path, body) {
 	}
 	if (!response.ok) {
 		const error = (data && data.error) || {};
+		if (error.code === "billing_suspended" && !location.pathname.endsWith("/billing.html")) {
+			// Доступ приостановлен за неуплату: любой раздел кабинета ведёт
+			// на страницу счетов — там долг и реквизиты оплаты.
+			location.href = "billing.html";
+		}
 		throw new ApiError(error.code || `http_${response.status}`, error.message || response.statusText);
 	}
 	return data;

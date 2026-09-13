@@ -154,7 +154,10 @@ The owner's billing data — the fee they take from the users (see
 registry is no place for financial data, while a user's database is moved, restored from a
 copy and carried into the archive together with them.
 
-> Planned by ADR-0027; not implemented yet.
+The design is balance-based: **a user's balance = the sum of credits − the sum of
+invoices**. Zero or above — everything is in order, below zero — a debt. Only facts are
+stored (invoices, observed payments, manual credits); whether an invoice is paid, overdue,
+and whether access is suspended are all computed from them.
 
 ### The owner's master wallets
 
@@ -174,15 +177,16 @@ address's whole history.
 
 ### Invoices
 
-One row per "user + period", unique at the schema level: the period bounds, the period's
-turnover, the rate and threshold applied, the amount due, the due date, the payment
-network and address, the state (issued / paid / overdue), the amount credited, the times
-of issue and payment, and the mark of a manual confirmation — the operator and the reason.
+Pure charges — the minus side of the balance. One row per "user + period", unique at the
+schema level: the period bounds, the period's turnover, the rate and threshold applied,
+the amount due, the due date, the payment network and address, the time of issue.
 
+- **An invoice has no state** — being paid is computed: the user's credits cover it and
+  every invoice older than it; an uncovered invoice past its due date is overdue. The
+  same principle as confirmations in ADR-0010: facts are stored, states are derived.
 - The billing money values are integers in **micro-USDT** (the sixth decimal place, the
   way USDT itself is denominated in TRON), stored as strings like every amount in the
   gateway.
-
 - The rate, the threshold and the term are a snapshot of the settings as the invoice was
   issued: a later change of the settings never rewrites invoices that already exist.
 - The turnover is stored as a total: it is the result of a calculation over the user's
@@ -190,22 +194,22 @@ of issue and payment, and the mark of a manual confirmation — the operator and
 
 ### Invoice payments
 
-Transfers observed on invoice addresses: the address, the transaction id, the asset, the
-amount, the time and the finalization marker — plus the crediting: which invoice it went
-to and how much of it counted.
+Transfers observed on invoice addresses — the plus side of the balance: the user, the
+address, the transaction id, the asset, the amount, the time and the finalization marker.
 
-- The amount is kept twice: in the minimal units of the asset that arrived (as is, for the
-  record of observations) and valued in micro-USDT, the invoice's unit. A zero valuation
-  means "not invoice money" — that is what a stray token on an invoice address looks like.
-- Crediting goes in order: an address's money covers invoices from the oldest to the
-  newest, and the leftover stays uncredited on the payment — that leftover is the credit
-  the next invoice draws on. A manual confirmation by the operator lives in the invoice
-itself rather than here: it has neither a transaction nor an asset, and a synthetic
-payment row would only muddy the record of observations.
+- **A payment is not tied to any invoice**: it simply raises the balance. There are no
+  "advance" or "underpayment" entities — those are the sign and size of the balance.
+- The amount is kept twice: in the minimal units of the asset that arrived (as is, for
+  the record of observations) and valued in micro-USDT, the invoice's unit. A zero
+  valuation means "not invoice money" — that is what a stray token on an invoice address
+  looks like.
 
-- An overpayment stays an uncredited remainder and counts against the next invoice; there
-  is no separate "credit balance" entity — that state follows from the payments.
-- A foreign asset arriving on an invoice address is recorded but attributed to no invoice.
+### Manual credits
+
+Money that arrived outside the gateway, confirmed by the operator: the user, the amount
+in micro-USDT, the operator, the reason, the time. A separate table rather than a
+synthetic payment row: a credit has neither a transaction nor an asset, and the record
+of observations is no place for it.
 
 ### A user's billing state
 

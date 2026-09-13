@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import delete, func, insert, select, update
+from sqlalchemy import Integer, delete, func, insert, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -19,16 +19,13 @@ from seedrays.storage.schema_billing import (
 	invoice_addresses,
 	invoice_payments,
 	invoices,
+	manual_credits,
 	master_wallets,
 	user_billing,
 )
 
-# Состояния счёта (ADR-0027) — единственная точка правды для сравнений.
-STATE_ISSUED = "issued"
-STATE_PAID = "paid"
-STATE_OVERDUE = "overdue"
-
-# Состояния доступа по биллингу.
+# Состояния доступа по биллингу. Хранятся; всё остальное — оплаченность
+# счёта, просрочка — вычисляется из баланса (решение владельца).
 ACCESS_OK = "ok"
 ACCESS_SUSPENDED = "suspended"
 
@@ -233,71 +230,94 @@ async def insert_invoice(
 	return result.inserted_primary_key[0]
 
 
-async def list_invoices(
-	engine: AsyncEngine, *, user_id: int | None = None, state: str | None = None
-) -> list:
-	"""Invoice rows, newest period first; optionally scoped to a user or a state."""
-	query = select(invoices).order_by(invoices.c.period_start.desc(), invoices.c.id.desc())
+async def list_invoices(engine: AsyncEngine, *, user_id: int | None = None) -> list:
+	"""Invoice rows, oldest period first; optionally scoped to a user.
+
+	Старые первыми сознательно: оплаченность вычисляется накопительно —
+	деньги пользователя покрывают счета в порядке выставления.
+	"""
+	query = select(invoices).order_by(invoices.c.period_start, invoices.c.id)
 	if user_id is not None:
 		query = query.where(invoices.c.user_id == user_id)
-	if state is not None:
-		query = query.where(invoices.c.state == state)
 	async with engine.connect() as conn:
 		return (await conn.execute(query)).all()
 
 
-async def mark_overdue(engine: AsyncEngine, *, now: datetime) -> list[tuple[int, int]]:
-	"""Move issued invoices past their deadline into the overdue state.
+async def user_balances(engine: AsyncEngine) -> dict[int, int]:
+	"""user id → balance in micro-USDT: credits minus invoiced amounts.
 
-	Returns:
-		``(invoice id, user id)`` pairs just moved — the caller suspends those
-		users and writes the journal lines.
+	Баланс — две суммы, а не распределение платежей по счетам (решение
+	владельца): сумма зачислений (наблюдённые платежи и ручные зачисления
+	оператора) минус сумма выставленных счетов. Ноль и выше — всё в порядке.
 	"""
-	condition = (invoices.c.state == STATE_ISSUED, invoices.c.due_at < now)
-	async with engine.begin() as conn:
-		rows = (
-			await conn.execute(select(invoices.c.id, invoices.c.user_id).where(*condition))
-		).all()
-		if rows:
-			await conn.execute(update(invoices).where(*condition).values(state=STATE_OVERDUE))
-	return [(row.id, row.user_id) for row in rows]
-
-
-async def has_unpaid(engine: AsyncEngine, user_id: int) -> bool:
-	"""Whether the user still has an invoice awaiting money."""
+	balances: dict[int, int] = {}
 	async with engine.connect() as conn:
-		row = (
+		paid = (
 			await conn.execute(
-				select(invoices.c.id).where(
-					invoices.c.user_id == user_id,
-					invoices.c.state.in_((STATE_ISSUED, STATE_OVERDUE)),
+				select(
+					invoice_payments.c.user_id,
+					func.sum(invoice_payments.c.value.cast(Integer)),
+				).group_by(invoice_payments.c.user_id)
+			)
+		).all()
+		manual = (
+			await conn.execute(
+				select(
+					manual_credits.c.user_id,
+					func.sum(manual_credits.c.value.cast(Integer)),
+				).group_by(manual_credits.c.user_id)
+			)
+		).all()
+		owed = (
+			await conn.execute(
+				select(
+					invoices.c.user_id,
+					func.sum(invoices.c.amount.cast(Integer)),
+				).group_by(invoices.c.user_id)
+			)
+		).all()
+	for row in paid:
+		balances[row[0]] = balances.get(row[0], 0) + int(row[1] or 0)
+	for row in manual:
+		balances[row[0]] = balances.get(row[0], 0) + int(row[1] or 0)
+	for row in owed:
+		balances[row[0]] = balances.get(row[0], 0) - int(row[1] or 0)
+	return balances
+
+
+async def user_credits(engine: AsyncEngine, user_id: int) -> int:
+	"""The user's total credits in micro-USDT: observed payments plus manual ones."""
+	async with engine.connect() as conn:
+		paid = (
+			await conn.execute(
+				select(func.sum(invoice_payments.c.value.cast(Integer))).where(
+					invoice_payments.c.user_id == user_id
 				)
 			)
-		).first()
-	return row is not None
+		).scalar()
+		manual = (
+			await conn.execute(
+				select(func.sum(manual_credits.c.value.cast(Integer))).where(
+					manual_credits.c.user_id == user_id
+				)
+			)
+		).scalar()
+	return int(paid or 0) + int(manual or 0)
 
 
-async def users_with_overdue(engine: AsyncEngine) -> list[tuple[int, int]]:
-	"""``(user id, invoice id)`` for every user holding an overdue invoice.
-
-	The work list of the access reconciliation: the access state is brought
-	in line with the state of the invoices, not with the rows one lucky call
-	happened to change. Otherwise a failure on the suspending step would
-	leave an overdue invoice beside an open gateway for good — the next pass
-	would no longer see that user, because the invoice is already marked.
-
-	Returns:
-		One pair per user, carrying their earliest overdue invoice (the one
-		named in the journal line).
-	"""
-	query = (
-		select(invoices.c.user_id, func.min(invoices.c.id).label("invoice_id"))
-		.where(invoices.c.state == STATE_OVERDUE)
-		.group_by(invoices.c.user_id)
-	)
-	async with engine.connect() as conn:
-		rows = (await conn.execute(query)).all()
-	return [(row.user_id, row.invoice_id) for row in rows]
+async def add_manual_credit(
+	engine: AsyncEngine, *, user_id: int, value: int, operator_id: int, reason: str
+) -> None:
+	"""Record money that arrived outside the gateway, on the operator's word."""
+	async with engine.begin() as conn:
+		await conn.execute(
+			insert(manual_credits).values(
+				user_id=user_id,
+				value=str(value),
+				operator_id=operator_id,
+				reason=reason,
+			)
+		)
 
 
 async def users_in_access_state(engine: AsyncEngine, state: str) -> list[int]:
@@ -344,6 +364,12 @@ async def set_access_state(
 		)
 
 
+async def set_payment_network(engine: AsyncEngine, *, user_id: int, network: str) -> None:
+	"""Store the user's payment network choice."""
+	async with engine.begin() as conn:
+		await upsert(conn, user_billing, {"user_id": user_id}, {"network": network})
+
+
 async def get_user_billing(engine: AsyncEngine, user_id: int):
 	"""The user's billing state row, or None before anything was set."""
 	async with engine.connect() as conn:
@@ -353,56 +379,37 @@ async def get_user_billing(engine: AsyncEngine, user_id: int):
 
 
 @dataclass(frozen=True)
-class UnpaidInvoice:
-	"""An invoice awaiting payment, with the address it is paid to."""
+class PollAddress:
+	"""One invoice address the payment check should poll."""
 
-	id: int
 	user_id: int
 	network: str
 	address: str
-	amount: int
-	credited: int
-	state: str
 	checked_at: datetime | None
 
 
-async def list_unpaid(engine: AsyncEngine) -> list[UnpaidInvoice]:
-	"""Invoices still awaiting money, oldest first — the payment check's work list.
+async def poll_addresses(engine: AsyncEngine, user_ids: set[int]) -> list[PollAddress]:
+	"""The invoice addresses of the given users — the payment check's work list.
 
-	Only these addresses are polled: an address whose invoices are all settled
-	costs nothing to leave alone until its user is billed again.
+	Опрашиваются только должники (баланс ниже нуля): адрес пользователя с
+	неотрицательным балансом не стоит ни одного запроса к провайдеру, а его
+	досрочный платёж будет замечен при следующем счёте.
 	"""
-	query = (
-		select(
-			invoices.c.id,
-			invoices.c.user_id,
-			invoices.c.network,
-			invoices.c.address,
-			invoices.c.amount,
-			invoices.c.credited,
-			invoices.c.state,
-			invoice_addresses.c.checked_at,
-		)
-		.join(
-			invoice_addresses,
-			(invoice_addresses.c.user_id == invoices.c.user_id)
-			& (invoice_addresses.c.network == invoices.c.network),
-			isouter=True,
-		)
-		.where(invoices.c.state.in_((STATE_ISSUED, STATE_OVERDUE)))
-		.order_by(invoices.c.period_start, invoices.c.id)
-	)
+	if not user_ids:
+		return []
 	async with engine.connect() as conn:
-		rows = (await conn.execute(query)).all()
+		rows = (
+			await conn.execute(
+				select(invoice_addresses)
+				.where(invoice_addresses.c.user_id.in_(user_ids))
+				.order_by(invoice_addresses.c.network, invoice_addresses.c.user_id)
+			)
+		).all()
 	return [
-		UnpaidInvoice(
-			id=row.id,
+		PollAddress(
 			user_id=row.user_id,
 			network=row.network,
 			address=row.address,
-			amount=int(row.amount),
-			credited=int(row.credited),
-			state=row.state,
 			checked_at=row.checked_at,
 		)
 		for row in rows
@@ -440,6 +447,7 @@ async def record_payment(
 	address: str,
 	txid: str,
 	asset_id: int,
+	user_id: int,
 	amount: int,
 	value: int,
 	tx_time: datetime | None,
@@ -458,6 +466,7 @@ async def record_payment(
 		address: The invoice address it landed on.
 		txid: Transaction id.
 		asset_id: Registry asset id of the asset that arrived.
+		user_id: The user whose invoice address received it.
 		amount: Integer amount in the asset's minimal units.
 		value: The same amount in micro-USDT, or zero when the asset is not
 			one the gateway accepts as payment.
@@ -478,6 +487,7 @@ async def record_payment(
 					address=address,
 					txid=txid,
 					asset_id=asset_id,
+					user_id=user_id,
 					event_index=event_index,
 					amount=str(amount),
 					value=str(value),
@@ -510,67 +520,6 @@ async def record_payment(
 	return PAYMENT_NEW
 
 
-async def creditable_payments(engine: AsyncEngine, *, address: str) -> list:
-	"""Payments on one address with money still not credited, oldest first.
-
-	Читается по адресу, а не по счёту: адрес постоянный, а счета сменяют друг
-	друга, и незачтённый остаток прошлого платежа — это аванс, который должен
-	достаться следующему счёту.
-	"""
-	query = (
-		select(
-			invoice_payments.c.id,
-			invoice_payments.c.value,
-			invoice_payments.c.credited,
-		)
-		.where(
-			invoice_payments.c.address == address,
-			# Нулевая оценка — чужой актив: деньгами счёта он не является.
-			invoice_payments.c.value != "0",
-			invoice_payments.c.value != invoice_payments.c.credited,
-		)
-		.order_by(invoice_payments.c.tx_time, invoice_payments.c.id)
-	)
-	async with engine.connect() as conn:
-		return (await conn.execute(query)).all()
-
-
-async def apply_credits(
-	engine: AsyncEngine,
-	*,
-	invoice_id: int,
-	allocations: list[tuple[int, int]],
-	credited_total: int,
-	paid_at: datetime | None,
-) -> None:
-	"""Credit payments to an invoice; the invoice and the payments move together.
-
-	The whole allocation lands in one database transaction: a credited payment
-	without the matching invoice state — or the reverse — would be money the
-	gateway cannot account for.
-
-	Args:
-		engine: The billing database engine.
-		invoice_id: The invoice being settled.
-		allocations: ``(payment id, its new credited total)`` pairs.
-		credited_total: The invoice's new credited total.
-		paid_at: Settlement time when the invoice is now paid; None while it
-			is still short.
-	"""
-	async with engine.begin() as conn:
-		for payment_id, credited in allocations:
-			await conn.execute(
-				update(invoice_payments)
-				.where(invoice_payments.c.id == payment_id)
-				.values(credited=str(credited), invoice_id=invoice_id)
-			)
-		values: dict = {"credited": str(credited_total)}
-		if paid_at is not None:
-			values["state"] = STATE_PAID
-			values["paid_at"] = paid_at
-		await conn.execute(update(invoices).where(invoices.c.id == invoice_id).values(**values))
-
-
 async def invoice_exists(engine: AsyncEngine, *, user_id: int, period_start: datetime) -> bool:
 	"""Whether this user's period is already billed (the pass skips it then)."""
 	async with engine.connect() as conn:
@@ -589,31 +538,3 @@ async def get_invoice(engine: AsyncEngine, invoice_id: int):
 	"""One invoice row by id, or None."""
 	async with engine.connect() as conn:
 		return (await conn.execute(select(invoices).where(invoices.c.id == invoice_id))).first()
-
-
-async def mark_paid_manually(
-	engine: AsyncEngine,
-	*,
-	invoice_id: int,
-	operator_id: int,
-	reason: str,
-	paid_at: datetime,
-	amount: int,
-) -> None:
-	"""Settle an invoice by the operator's word: money that arrived outside the gateway.
-
-	The invoice carries who confirmed it and why — that is the only trace such
-	a payment leaves, since it has neither a transaction nor an asset behind it.
-	"""
-	async with engine.begin() as conn:
-		await conn.execute(
-			update(invoices)
-			.where(invoices.c.id == invoice_id)
-			.values(
-				state=STATE_PAID,
-				paid_at=paid_at,
-				credited=str(amount),
-				manual_operator_id=operator_id,
-				manual_reason=reason,
-			)
-		)

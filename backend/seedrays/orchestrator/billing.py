@@ -459,6 +459,44 @@ async def payment_network(billing: AsyncEngine, user_id: int) -> str:
 	return row.network
 
 
+# Вычисляемые состояния счёта. В базе их нет: оплаченность выводится из
+# баланса пользователя (решение владельца) — деньги покрывают счета в
+# порядке выставления, распределение нигде не хранится.
+STATE_ISSUED = "issued"
+STATE_PAID = "paid"
+STATE_OVERDUE = "overdue"
+
+
+def classify_invoices(rows: list, credits: int, now: datetime) -> list[tuple]:
+	"""Assign each invoice its computed state, oldest first.
+
+	Правило владельца: баланс — сумма зачислений минус сумма счетов; ноль и
+	выше — всё в порядке. По счетам это разворачивается так: счёт оплачен,
+	когда зачислений хватает на него и на все счета старше него; непокрытый
+	счёт с прошедшим сроком — просрочен, иначе — ожидает оплаты.
+
+	Args:
+		rows: Invoice rows sorted oldest first (as ``list_invoices`` returns).
+		credits: The user's total credits in micro-USDT.
+		now: The moment the states are computed at.
+
+	Returns:
+		``(row, state)`` pairs in the same order.
+	"""
+	classified = []
+	cumulative = 0
+	for row in rows:
+		cumulative += int(row.amount)
+		if credits >= cumulative:
+			state = STATE_PAID
+		elif row.due_at < now:
+			state = STATE_OVERDUE
+		else:
+			state = STATE_ISSUED
+		classified.append((row, state))
+	return classified
+
+
 @dataclass
 class PassStats:
 	"""Outcome of one billing pass."""
@@ -476,14 +514,14 @@ class PassStats:
 
 
 async def run_pass(data_dir: Path, *, now: datetime | None = None) -> PassStats:
-	"""Run one billing pass: issue invoices for the finished period, mark overdue ones.
+	"""Run one billing pass: issue the finished period's invoices, reconcile access.
 
 	Issuing is idempotent and not tied to the calendar day: the pass always
 	bills the last period that has already ended, and the invoice key of the
 	schema absorbs the repeats. A gateway that was down on the first of the
 	month therefore issues its invoices at the next start, not never.
 
-	Marking overdue invoices runs even when the fee is switched off: turning
+	The access reconciliation runs even when the fee is switched off: turning
 	the fee off means "issue no new invoices", not "forgive the old ones".
 
 	Args:
@@ -507,9 +545,9 @@ async def run_pass(data_dir: Path, *, now: datetime | None = None) -> PassStats:
 			)
 		else:
 			logger.info("the gateway fee is switched off: no invoices are issued")
-		overdue = await billing_store.mark_overdue(billing, now=moment)
-		stats.invoices_overdue = len(overdue)
-		await _reconcile_access(registry, billing, journal, moment=moment)
+		stats.invoices_overdue = await _reconcile_access(
+			registry, billing, journal, moment=moment
+		)
 	finally:
 		journal.close()
 		await billing.dispose()
@@ -523,8 +561,8 @@ async def _reconcile_access(
 	journal: SecurityLog,
 	*,
 	moment: datetime,
-) -> None:
-	"""Bring every user's access state in line with the state of their invoices.
+) -> int:
+	"""Bring every user's access state in line with what their balance says.
 
 	Сверка, а не реакция на событие. Прежде доступ закрывался только тем,
 	чьи счета перевёл в просрочку именно этот вызов, — и сбой на шаге
@@ -544,13 +582,27 @@ async def _reconcile_access(
 		journal: The security journal.
 		moment: The moment the pass runs at.
 	"""
-	debtors = await billing_store.users_with_overdue(billing)
-	owing = {user_id for user_id, _ in debtors}
-	for user_id, invoice_id in debtors:
+	balances = await billing_store.user_balances(billing)
+	overdue_total = 0
+	owing: set[int] = set()
+	for user_id, balance in balances.items():
+		if balance >= 0:
+			continue
+		# Должник. Просрочен ли долг — отвечает классификация его счетов.
+		rows = await billing_store.list_invoices(billing, user_id=user_id)
+		credits = await billing_store.user_credits(billing, user_id)
+		overdue_ids = [
+			row.id for row, state in classify_invoices(rows, credits, moment)
+			if state == STATE_OVERDUE
+		]
+		overdue_total += len(overdue_ids)
+		if not overdue_ids:
+			continue
+		owing.add(user_id)
 		try:
 			await _suspend(
 				registry, billing, journal,
-				user_id=user_id, invoice_id=invoice_id, moment=moment,
+				user_id=user_id, invoice_id=overdue_ids[0], moment=moment,
 			)
 		except SQLAlchemyError:
 			logger.exception("user %d: suspending for non-payment failed", user_id)
@@ -560,10 +612,10 @@ async def _reconcile_access(
 		if user_id in owing:
 			continue
 		try:
-			# Внутри проверяется, что ничего больше не ждёт денег.
 			await _restore(registry, billing, journal, user_id=user_id)
 		except SQLAlchemyError:
 			logger.exception("user %d: restoring access failed", user_id)
+	return overdue_total
 
 
 async def _suspend(
@@ -599,16 +651,13 @@ async def _restore(
 	user_id: int,
 	invoice_id: int | None = None,
 ) -> None:
-	"""Let a user back in once nothing of theirs is awaiting money."""
+	"""Let a user back in: the reconciliation found no overdue debt on them."""
 	if await billing_store.access_state(billing, user_id) != billing_store.ACCESS_SUSPENDED:
-		return
-	if await billing_store.has_unpaid(billing, user_id):
-		# Один счёт закрыт, но другой ещё ждёт денег — доступ не открываем.
 		return
 	await billing_store.set_access_state(
 		billing, user_id=user_id, state=billing_store.ACCESS_OK, suspended_at=None
 	)
-	logger.info("user %d restored: nothing is awaiting payment any more", user_id)
+	logger.info("user %d restored: no overdue debt any more", user_id)
 	await _journal(registry, journal, "billing_restore", user_id=user_id, invoice_id=invoice_id)
 
 
@@ -719,14 +768,15 @@ async def run_forever(data_dir: Path) -> None:
 	"""
 	while True:
 		try:
-			checked = await check_payments(data_dir)
+			# Сначала выставление: свежий счёт делает пользователя должником,
+			# и его адрес попадает в опрос и сверку этого же прохода.
 			stats = await run_pass(data_dir)
+			checked = await check_payments(data_dir)
 			logger.info(
-				"billing pass done: checked=%d payments=%d settled=%d foreign=%d"
+				"billing pass done: checked=%d payments=%d foreign=%d"
 				" billed=%d issued=%d overdue=%d no_wallet=%s",
 				checked.addresses_checked,
 				checked.payments_recorded,
-				checked.invoices_settled,
 				checked.foreign_assets,
 				stats.users_billed,
 				stats.invoices_issued,
@@ -774,7 +824,6 @@ class CheckStats:
 
 	addresses_checked: int = 0
 	payments_recorded: int = 0
-	invoices_settled: int = 0
 	# Поступления на адреса счетов в активах, которыми оплата не принимается.
 	foreign_assets: int = 0
 
@@ -785,13 +834,13 @@ async def check_payments(
 	now: datetime | None = None,
 	source_factory=None,
 ) -> CheckStats:
-	"""Poll the addresses of unpaid invoices and credit what arrived (ADR-0027).
+	"""Poll the debtors' invoice addresses and credit what arrived (ADR-0027).
 
 	The billing check is deliberately independent of the watcher: it asks the
 	provider for the confirmed transfers of a handful of addresses, and only
-	of those whose invoices still await money. Nothing provisional is stored,
-	so a chain reorganization has nothing to take back here — the provider
-	reports finalized transfers only.
+	of those whose owner's balance is below zero. Nothing provisional is
+	stored, so a chain reorganization has nothing to take back here — the
+	provider reports finalized transfers only.
 
 	Args:
 		data_dir: The gateway data directory.
@@ -808,8 +857,10 @@ async def check_payments(
 	registry = create_sqlite_engine(registry_db_path(data_dir))
 	billing = create_sqlite_engine(billing_db_path(data_dir))
 	try:
-		unpaid = await billing_store.list_unpaid(billing)
-		if not unpaid:
+		balances = await billing_store.user_balances(billing)
+		debtors = {user_id for user_id, balance in balances.items() if balance < 0}
+		targets = await billing_store.poll_addresses(billing, debtors)
+		if not targets:
 			return stats
 		api_key = await registry_ops.get_setting(registry, chains.SETTING_API_KEY)
 		rate = _decimal_setting(
@@ -819,32 +870,28 @@ async def check_payments(
 		)
 		interval = float(1 / rate) if rate > 0 else 0.0
 
-		# По адресу может ждать несколько счетов: неоплаченный прошлый и
-		# свежий. Опрашивается адрес один раз, зачёт идёт по порядку периодов.
-		by_address: dict[tuple[str, str], list] = {}
-		for invoice in unpaid:
-			by_address.setdefault((invoice.network, invoice.address), []).append(invoice)
-
 		# Первая фаза: опросить провайдера и записать наблюдения. Сбой по
 		# адресу законно откладывает его до следующего прохода.
-		for (network, address), invoices_here in sorted(by_address.items()):
-			accepted = await _payment_assets(registry, network)
+		for target in targets:
+			accepted = await _payment_assets(registry, target.network)
 			try:
-				source = factory(network, api_key, interval)
+				source = factory(target.network, api_key, interval)
 			except ValueError:
-				logger.error("network %s has no data source; payments not checked", network)
+				logger.error(
+					"network %s has no data source; payments not checked", target.network
+				)
 				continue
-			checked_at = min(
-				(i.checked_at for i in invoices_here if i.checked_at is not None),
-				default=None,
+			since = (
+				(target.checked_at - CHECK_OVERLAP)
+				if target.checked_at is not None
+				else None
 			)
-			since = (checked_at - CHECK_OVERLAP) if checked_at is not None else None
 			try:
-				transfers = await source.transfers(address, since, True)
+				transfers = await source.transfers(target.address, since, True)
 			except ChainDataSourceError as exc:
 				# Провайдер недоступен или просит сбавить темп: курсор не
 				# двигаем, следующий проход спросит то же самое.
-				logger.warning("payment check for %s failed: %s", address, exc)
+				logger.warning("payment check for %s failed: %s", target.address, exc)
 				continue
 			finally:
 				await source.aclose()
@@ -852,22 +899,18 @@ async def check_payments(
 
 			for transfer in _merged_by_transaction(transfers):
 				await _record_transfer(
-					registry, billing, transfer, accepted=accepted, moment=moment, stats=stats
+					registry, billing, transfer,
+					user_id=target.user_id, accepted=accepted, moment=moment, stats=stats,
 				)
 			await billing_store.set_address_checked(
-				billing, user_id=invoices_here[0].user_id, network=network, checked_at=moment
+				billing, user_id=target.user_id, network=target.network, checked_at=moment
 			)
 
-		# Вторая фаза: разнести по счетам платежи, которые уже лежат в
-		# базе. Операция чисто внутрибазовая, и от исхода опроса она не
-		# зависит — иначе деньги, пришедшие авансом в прошлом периоде,
-		# не закрыли бы счёт, пока провайдер недоступен, и пользователь
-		# получил бы просрочку при деньгах, давно лежащих у владельца.
-		for (network, address), invoices_here in sorted(by_address.items()):
-			stats.invoices_settled += await _credit_address(
-				registry, billing, journal,
-				address=address, invoices_here=invoices_here, moment=moment,
-			)
+		# Вторая фаза — сверка: состояние доступа выводится из балансов,
+		# какие уже лежат в базе. От исхода опроса она не зависит — иначе
+		# деньги, записанные прошлым проходом, не вернули бы доступ, пока
+		# провайдер недоступен.
+		await _reconcile_access(registry, billing, journal, moment=moment)
 	finally:
 		journal.close()
 		await billing.dispose()
@@ -914,6 +957,7 @@ async def _record_transfer(
 	billing: AsyncEngine,
 	transfer,
 	*,
+	user_id: int,
 	accepted: set[str],
 	moment: datetime,
 	stats: CheckStats,
@@ -946,6 +990,7 @@ async def _record_transfer(
 		address=transfer.address,
 		txid=transfer.txid,
 		asset_id=asset.id,
+		user_id=user_id,
 		amount=transfer.amount,
 		value=value,
 		tx_time=naive_utc(transfer.timestamp),
@@ -982,77 +1027,14 @@ async def _record_transfer(
 		)
 
 
-async def _credit_address(
-	registry: AsyncEngine,
-	billing: AsyncEngine,
-	journal: SecurityLog,
-	*,
-	address: str,
-	invoices_here: list,
-	moment: datetime,
-) -> int:
-	"""Credit an address's uncredited money to its invoices, oldest first.
-
-	Money follows the invoices in order, and whatever is left over stays
-	uncredited on the payment — that leftover is the credit balance the next
-	invoice will draw on (ADR-0027).
-
-	Returns:
-		How many invoices became settled.
-	"""
-	payments = await billing_store.creditable_payments(billing, address=address)
-	# (id платежа, свободный остаток, уже зачтено) — расходуется по порядку.
-	purse = [
-		[row.id, int(row.value) - int(row.credited), int(row.credited)] for row in payments
-	]
-	settled = 0
-	for invoice in sorted(invoices_here, key=lambda i: i.id):
-		needed = invoice.amount - invoice.credited
-		if needed <= 0:
-			continue
-		allocations: list[tuple[int, int]] = []
-		credited_total = invoice.credited
-		for entry in purse:
-			if needed <= 0:
-				break
-			if entry[1] <= 0:
-				continue
-			take = min(entry[1], needed)
-			entry[1] -= take
-			entry[2] += take
-			credited_total += take
-			needed -= take
-			allocations.append((entry[0], entry[2]))
-		if not allocations:
-			continue
-		paid = credited_total >= invoice.amount
-		await billing_store.apply_credits(
-			billing,
-			invoice_id=invoice.id,
-			allocations=allocations,
-			credited_total=credited_total,
-			paid_at=moment if paid else None,
-		)
-		if paid:
-			settled += 1
-			logger.info(
-				"invoice %d settled: %s USDT credited",
-				invoice.id,
-				format_usdt(credited_total),
-			)
-		else:
-			logger.warning(
-				"invoice %d underpaid: %s of %s USDT credited, access stays closed",
-				invoice.id,
-				format_usdt(credited_total),
-				format_usdt(invoice.amount),
-			)
-	return settled
+def supported_payment_networks() -> set[str]:
+	"""Networks an invoice can be issued in — those the gateway can watch at all."""
+	return set(chains.supported_networks())
 
 
 @dataclass(frozen=True)
 class PanelInvoice:
-	"""One invoice as the operator panel shows it."""
+	"""One invoice as the operator panel shows it, with its computed state."""
 
 	id: int
 	user_id: int
@@ -1061,62 +1043,70 @@ class PanelInvoice:
 	turnover: str
 	rate_percent: str
 	amount: str
-	credited: str
 	due_at: str
 	state: str
 	network: str
 	address: str
-	paid_at: str | None
-	manual_reason: str
-
-
-def supported_payment_networks() -> set[str]:
-	"""Networks an invoice can be issued in — those the gateway can watch at all."""
-	return set(chains.supported_networks())
 
 
 async def panel_invoices(
-	billing: AsyncEngine, registry: AsyncEngine, *, state: str | None = None
-) -> list[PanelInvoice]:
-	"""Every user's invoices for the panel, newest period first.
+	billing: AsyncEngine,
+	registry: AsyncEngine,
+	*,
+	state: str | None = None,
+	now: datetime | None = None,
+) -> tuple[list[PanelInvoice], dict[int, str]]:
+	"""Every user's invoices with computed states, newest period first.
 
 	Args:
 		billing: The billing database engine.
 		registry: Engine of the shared registry database (for the logins).
-		state: Filter by invoice state, or None for all of them.
+		state: Filter by computed invoice state, or None for all of them.
+		now: The moment states are computed at; defaults to the current time.
+
+	Returns:
+		``(invoices, balances)`` — the rows for the panel and each involved
+		user's balance as an exact decimal string.
 
 	Raises:
 		OperationError: invalid_state.
 	"""
-	if state is not None and state not in (
-		billing_store.STATE_ISSUED,
-		billing_store.STATE_PAID,
-		billing_store.STATE_OVERDUE,
-	):
+	if state is not None and state not in (STATE_ISSUED, STATE_PAID, STATE_OVERDUE):
 		raise OperationError("invalid_state", f"unknown invoice state {state!r}")
+	moment = now if now is not None else now_utc()
 	logins = {user.id: user.login for user in await registry_ops.list_users(registry)}
-	rows = await billing_store.list_invoices(billing, state=state)
-	return [
-		PanelInvoice(
-			id=row.id,
-			user_id=row.user_id,
-			# Пользователь мог быть удалён (ADR-0024), а счёт остаётся: долг
-			# и его история переживают учётную запись.
-			username=logins.get(row.user_id, "—"),
-			period=row.period_start.date().isoformat(),
-			turnover=format_usdt(int(row.turnover)),
-			rate_percent=row.rate_percent,
-			amount=format_usdt(int(row.amount)),
-			credited=format_usdt(int(row.credited)),
-			due_at=row.due_at.isoformat(sep=" ", timespec="minutes"),
-			state=row.state,
-			network=row.network,
-			address=row.address,
-			paid_at=row.paid_at.isoformat(sep=" ", timespec="minutes") if row.paid_at else None,
-			manual_reason=row.manual_reason,
-		)
-		for row in rows
-	]
+	balances = await billing_store.user_balances(billing)
+	rows = await billing_store.list_invoices(billing)
+	by_user: dict[int, list] = {}
+	for row in rows:
+		by_user.setdefault(row.user_id, []).append(row)
+	result = []
+	for user_id, user_rows in by_user.items():
+		credits = await billing_store.user_credits(billing, user_id)
+		for row, computed in classify_invoices(user_rows, credits, moment):
+			if state is not None and computed != state:
+				continue
+			result.append(
+				PanelInvoice(
+					id=row.id,
+					user_id=row.user_id,
+					# Пользователь мог быть удалён (ADR-0024), а счёт
+					# остаётся: долг переживает учётную запись.
+					username=logins.get(row.user_id, "—"),
+					period=row.period_start.date().isoformat(),
+					turnover=format_usdt(int(row.turnover)),
+					rate_percent=row.rate_percent,
+					amount=format_usdt(int(row.amount)),
+					due_at=row.due_at.isoformat(sep=" ", timespec="minutes"),
+					state=computed,
+					network=row.network,
+					address=row.address,
+				)
+			)
+	result.sort(key=lambda invoice: (invoice.period, invoice.id), reverse=True)
+	return result, {
+		user_id: format_usdt(balance) for user_id, balance in balances.items()
+	}
 
 
 async def confirm_manually(
@@ -1127,49 +1117,141 @@ async def confirm_manually(
 	invoice_id: int,
 	operator_id: int,
 	reason: str,
+	amount: str | None = None,
 	now: datetime | None = None,
 ) -> int:
-	"""Settle an invoice on the operator's word and reopen the user's access.
+	"""Credit money that arrived outside the gateway, on the operator's word.
 
-	The path for money that reached the owner outside the gateway (ADR-0027).
-	The result is exactly that of a credited payment, including the automatic
-	restoration of access.
+	В балансовой модели это ручное ЗАЧИСЛЕНИЕ, а не пометка счёта: сумма
+	падает на баланс пользователя, оплаченность счетов из него выводится, и
+	сверка тут же возвращает доступ, если долга больше нет.
 
 	Args:
 		billing: The billing database engine.
 		registry: Engine of the shared registry database.
 		journal: The gateway's security journal.
-		invoice_id: The invoice to settle.
+		invoice_id: The invoice the operator is looking at; names the user
+			and the default amount.
 		operator_id: The operator taking responsibility.
-		reason: Why it is being settled by hand; stored with the invoice.
-		now: Settlement time; defaults to the current moment.
+		reason: Why the money is credited by hand; stored with the credit.
+		amount: The amount in USDT as a decimal string; None credits the
+			invoice's exact amount.
+		now: The reconciliation moment; defaults to the current time.
 
 	Returns:
-		The id of the user whose invoice was settled.
+		The id of the user credited.
 
 	Raises:
-		OperationError: unknown_invoice / invoice_already_paid / reason_required.
+		OperationError: unknown_invoice / reason_required / invalid_amount.
 	"""
 	if not reason.strip():
-		# Причина обязательна: ручное закрытие долга — административное
+		# Причина обязательна: ручное зачисление — административное
 		# действие над деньгами, и оно должно объяснять себя (ADR-0023).
-		raise OperationError("reason_required", "state why the invoice is settled by hand")
+		raise OperationError("reason_required", "state why the money is credited by hand")
 	invoice = await billing_store.get_invoice(billing, invoice_id)
 	if invoice is None:
 		raise OperationError("unknown_invoice", f"invoice {invoice_id} does not exist")
-	if invoice.state == billing_store.STATE_PAID:
-		raise OperationError("invoice_already_paid", "this invoice is already settled")
+	if amount is None or not amount.strip():
+		value = int(invoice.amount)
+	else:
+		try:
+			value = int(Decimal(amount.strip()) * MICRO_USDT)
+		except InvalidOperation:
+			raise OperationError(
+				"invalid_amount", "the amount must be a decimal number of USDT"
+			) from None
+		if value <= 0:
+			raise OperationError("invalid_amount", "the amount must be positive")
 	moment = now if now is not None else now_utc()
-	await billing_store.mark_paid_manually(
+	await billing_store.add_manual_credit(
 		billing,
-		invoice_id=invoice_id,
+		user_id=invoice.user_id,
+		value=value,
 		operator_id=operator_id,
 		reason=reason.strip(),
-		paid_at=moment,
-		amount=int(invoice.amount),
 	)
 	logger.info(
-		"invoice %d settled manually by operator %d: %s", invoice_id, operator_id, reason.strip()
+		"operator %d credited %s USDT to user %d by hand: %s",
+		operator_id,
+		format_usdt(value),
+		invoice.user_id,
+		reason.strip(),
 	)
-	await _restore(registry, billing, journal, user_id=invoice.user_id, invoice_id=invoice_id)
+	await _reconcile_access(registry, billing, journal, moment=moment)
 	return invoice.user_id
+
+
+async def cabinet_view(
+	billing: AsyncEngine, user_id: int, *, now: datetime | None = None
+) -> dict:
+	"""The cabinet's billing section: the balance, the invoices, where to pay.
+
+	Answers the user's two questions — how much and where. The balance is the
+	single figure of merit (ADR-0027): zero or above means everything is in
+	order, below zero is the debt to be paid to the shown address.
+
+	Args:
+		billing: The billing database engine.
+		user_id: The signed-in user.
+		now: The moment states are computed at; defaults to the current time.
+	"""
+	moment = now if now is not None else now_utc()
+	credits = await billing_store.user_credits(billing, user_id)
+	rows = await billing_store.list_invoices(billing, user_id=user_id)
+	owed = sum(int(row.amount) for row in rows)
+	balance = credits - owed
+	network = await payment_network(billing, user_id)
+	address_row = await billing_store.get_invoice_address(
+		billing, user_id=user_id, network=network
+	)
+	invoices = [
+		{
+			"period": row.period_start.date().isoformat(),
+			"turnover": format_usdt(int(row.turnover)),
+			"rate_percent": row.rate_percent,
+			"amount": format_usdt(int(row.amount)),
+			"due_at": row.due_at.isoformat(sep=" ", timespec="minutes"),
+			"state": state,
+			"network": row.network,
+			"address": row.address,
+		}
+		for row, state in reversed(classify_invoices(rows, credits, moment))
+	]
+	wallets = await billing_store.list_master_wallets(billing)
+	return {
+		"balance": format_usdt(balance),
+		"debt": format_usdt(-balance) if balance < 0 else "0",
+		"network": network,
+		# Куда платить: постоянный адрес пользователя в его сети оплаты.
+		# Появляется вместе с первым счётом — раньше платить не за что.
+		"address": address_row.address if address_row is not None else None,
+		"invoices": invoices,
+		# Сети, доступные для выбора: те, где владелец завёл мастер-кошелёк.
+		"networks": sorted(wallet.network for wallet in wallets),
+	}
+
+
+async def choose_payment_network(
+	billing: AsyncEngine, *, user_id: int, network: str
+) -> None:
+	"""Store the user's payment network choice.
+
+	Raises:
+		OperationError: unknown_network — сети нет среди мастер-кошельков;
+			debt_pending — реквизиты выставленного счёта менять нельзя, пока
+			долг не погашен (ADR-0027).
+	"""
+	wallet = await billing_store.get_master_wallet(billing, network)
+	if wallet is None:
+		raise OperationError(
+			"unknown_network", f"network {network!r} is not available for payment"
+		)
+	credits = await billing_store.user_credits(billing, user_id)
+	rows = await billing_store.list_invoices(billing, user_id=user_id)
+	owed = sum(int(row.amount) for row in rows)
+	if credits - owed < 0:
+		raise OperationError(
+			"debt_pending",
+			"settle the outstanding invoice first: its payment details must not move",
+		)
+	await billing_store.set_payment_network(billing, user_id=user_id, network=network)

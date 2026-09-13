@@ -25,6 +25,7 @@ from seedrays.families import Family
 from seedrays.mail.base import MailSender
 from seedrays.mail.resend import ResendSender
 from seedrays.orchestrator import apps as app_ops
+from seedrays.orchestrator import billing as billing_ops
 from seedrays.orchestrator import auth
 from seedrays.orchestrator import overview as overview_ops
 from seedrays.orchestrator import wallets as wallet_ops
@@ -109,6 +110,12 @@ class ResetConfirmRequest(BaseModel):
 
 	token: str = Field(min_length=1, max_length=128)
 	new_password: str = Field(min_length=1, max_length=1024)
+
+
+class PaymentNetworkRequest(BaseModel):
+	"""Body of the payment-network choice (ADR-0027)."""
+
+	network: str = Field(min_length=1, max_length=32)
 
 
 class AddEmailRequest(BaseModel):
@@ -779,6 +786,29 @@ def register_user_routes(
 			"receipts": data.receipts,
 			"recent": [_history_json(row) for row in data.recent],
 		}
+
+	@app.get("/v1/user/billing")
+	async def billing_view(
+		ctx: UserContext = PaymentSessionDep, billing: AsyncEngine = BillingDep
+	) -> dict:
+		"""The billing section: the balance, the invoices, where to pay.
+
+		Работает и у приостановленного за неуплату — иначе он не увидел бы
+		ни долга, ни реквизитов (ADR-0027).
+		"""
+		return await billing_ops.cabinet_view(billing, ctx.user.user_id)
+
+	@app.put("/v1/user/billing/network")
+	async def choose_payment_network(
+		body: PaymentNetworkRequest,
+		ctx: UserContext = PaymentMutatingDep,
+		billing: AsyncEngine = BillingDep,
+	) -> dict:
+		"""Choose the network invoices are issued in; refused while in debt."""
+		await billing_ops.choose_payment_network(
+			billing, user_id=ctx.user.user_id, network=body.network
+		)
+		return {"ok": True}
 
 	@app.get("/v1/user/me")
 	async def me(ctx: UserContext = PaymentSessionDep) -> dict:

@@ -15,6 +15,7 @@ const MENU = [
 	["wallets", "wallets.html", "ti-wallet", "menu.wallets"],
 	["apps", "applications.html", "ti-plug-connected", "menu.apps"],
 	["history", "history.html", "ti-history", "menu.history"],
+	["billing", "billing.html", "ti-receipt", "menu.billing"],
 	["settings", "settings.html", "ti-settings", "menu.settings"],
 ];
 

@@ -127,6 +127,8 @@ GET    /v1/user/overview     (counters, receipts by asset, recent operations)
 POST   /v1/user/emails       body: {"address"}   (a second email, confirmed by a message)
 DELETE /v1/user/emails/{id}                      (the primary one cannot be removed)
 POST   /v1/user/password     body: {"current_password", "new_password"}
+GET    /v1/user/billing      (the balance, invoices with computed states, payment address)
+PUT    /v1/user/billing/network         body: {"network"}
 POST   /v1/user/password-reset          body: {"email", "captcha"}
 POST   /v1/user/password-reset/confirm  body: {"token", "new_password"}
 ```
@@ -241,38 +243,35 @@ POST   /v1/operator/billing/invoices/{id}/confirm  body: {"reason"}
   The data moves into a server-side archive; restoring is the `seedrays user-restore`
   console command.
 
-## The Gateway Fee: Planned Routes
+## The Gateway Fee
 
-The billing routes ([ADR-0027](../decisions/0027-gateway-fee-billing.md)) sit in a section
-of their own on purpose: the decision is made, the code is not written yet, and mixing them
-with the implemented routes above is not an option.
+The rules of the billing routes of both groups
+([ADR-0027](../decisions/0027-gateway-fee-billing.md)):
 
-The user group:
-
-```
-GET  /v1/user/billing            (invoices, details of the unpaid one, payment network)
-PUT  /v1/user/billing/network    body: {"network"}
-```
-
-The operator group is already implemented — its routes are listed above.
-
-- **Suspension for non-payment is already in force** (unlike the routes above) — an access
-  state of its own, independent of the account status: an overdue invoice closes the
-  Application API entirely (refused 403 with the `billing_suspended` code) and every cabinet
-  route except billing, reading `/v1/user/me` and signing out — otherwise there would be no
-  way to pay. Access opens by itself as soon as the invoice is credited.
-- **Changing the payment network** is refused while an invoice is unpaid: the details of an
-  issued invoice are immutable. Networks without the owner's master wallet are not offered.
-- **Manual payment confirmation** requires a reason (an empty one is refused with
-  `reason_required`), lands in the security journal and has the same result as a credited
-  payment, restored access included.
+- **The balance decides everything**: the sum of credits minus the sum of invoices.
+  `GET /v1/user/billing` returns it together with the invoices, whose states are computed
+  at request time; the operator's answer carries every user's balance next to the
+  invoices.
+- **Suspension for non-payment** is an access state of its own, independent of the
+  account status: an overdue debt closes the Application API entirely (refused 403 with
+  the `billing_suspended` code) and every cabinet route except billing, reading
+  `/v1/user/me` and signing out — otherwise there would be no way to pay. Access opens by
+  itself as soon as the balance stops being negative.
+- **Changing the payment network** is refused while the balance is negative
+  (`debt_pending`): the details of an issued invoice are immutable. Networks without the
+  owner's master wallet are not offered.
+- **Manual payment confirmation** is a credit to the balance: it requires a reason (an
+  empty one is refused with `reason_required`), the amount defaults to the invoice's,
+  lands in the security journal and has the same result as an observed payment, restored
+  access included.
 - **The master wallet** is entered per network; the key is validated by deriving address
-  zero, a private one is refused with `private_key_rejected`, and one already taken anywhere
-  in the gateway with the neutral `invalid_xpub`.
-- The fee settings (rate, threshold, term, turnover assets, notifications) get no routes of their own — they live in the operator's general set of
-  settings, like everything else they manage while the gateway runs.
-- Amounts travel as strings, as everywhere; an invoice is denominated in USDT and paid with
-  a stablecoin of the chosen network.
+  zero, a private one is refused with `private_key_rejected`, and one already taken
+  anywhere in the gateway with the neutral `invalid_xpub`.
+- The fee settings (rate, threshold, term, turnover assets, notifications) get no routes
+  of their own — they live in the operator's general set of settings, like everything
+  else they manage while the gateway runs.
+- Amounts travel as strings, as everywhere; an invoice is denominated in USDT and paid
+  with a stablecoin of the chosen network.
 
 ## Detailed Specifications
 

@@ -60,9 +60,10 @@ _OPERATION_STATUS = {
 	"user_not_blocked": 409,
 	"unknown_network": 400,
 	"unknown_invoice": 404,
-	"invoice_already_paid": 409,
 	"reason_required": 400,
 	"invalid_state": 400,
+	"invalid_amount": 400,
+	"debt_pending": 409,
 }
 
 

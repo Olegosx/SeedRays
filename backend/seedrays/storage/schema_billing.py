@@ -17,7 +17,6 @@ from sqlalchemy import (
 	CheckConstraint,
 	Column,
 	DateTime,
-	ForeignKey,
 	Integer,
 	MetaData,
 	String,
@@ -63,11 +62,12 @@ invoice_addresses = Table(
 	UniqueConstraint("network", "derivation_index", name="uq_invoice_addresses_index"),
 )
 
-# Счёт за период. Ставка, порог и срок — снимок настроек на момент выставления:
-# позднейшее изменение настроек не переписывает выставленные счета.
-# Ручное подтверждение оператором живёт здесь же (кто и почему), а не строкой
-# платежа: у подтверждения нет ни транзакции, ни актива, и синтетический
-# платёж только запутал бы журнал наблюдений.
+# Счёт за период — чистое начисление, минусовая сторона баланса пользователя.
+# Ставка, порог и срок — снимок настроек на момент выставления: позднейшее
+# изменение настроек не переписывает выставленные счета. Состояния и зачтённой
+# суммы у счёта НЕТ: оплаченность выводится из баланса (сумма зачислений минус
+# сумма счетов) — храним факты, состояние вычисляем, как подтверждения в
+# ADR-0010.
 invoices = Table(
 	"invoices",
 	metadata,
@@ -82,24 +82,16 @@ invoices = Table(
 	Column("due_at", DateTime, nullable=False),
 	Column("network", String(32), nullable=False),
 	Column("address", String(128), nullable=False),
-	Column("state", String(16), nullable=False, server_default="issued"),
-	Column("credited", Text, nullable=False, server_default="0"),
 	Column("issued_at", DateTime, nullable=False, server_default=func.now()),
-	Column("paid_at", DateTime),
-	Column("manual_operator_id", Integer),
-	Column("manual_reason", Text, nullable=False, server_default=""),
 	# Один счёт на пару «пользователь + период» — идемпотентность выставления
 	# держится ключом схемы, а не аккуратностью задачи биллинга.
 	UniqueConstraint("user_id", "period_start", name="uq_invoices_period"),
-	CheckConstraint(
-		"state IN ('issued', 'paid', 'overdue')", name="ck_invoices_state"
-	),
 )
 
-# Поступления, наблюдаемые на адресах счетов. Ключ идемпотентности — тот же по
-# смыслу, что у транзакций пользователя (ADR-0021). Строка без invoice_id ни к
-# какому счёту не отнесена: так выглядит чужой актив на адресе счёта и
-# переплата, ожидающая следующего счёта.
+# Поступления, наблюдаемые на адресах счетов, — плюсовая сторона баланса.
+# Ключ идемпотентности — тот же по смыслу, что у транзакций пользователя
+# (ADR-0021). К счетам платежи не привязываются: баланс — это две суммы,
+# а не распределение (решение владельца).
 invoice_payments = Table(
 	"invoice_payments",
 	metadata,
@@ -117,11 +109,25 @@ invoice_payments = Table(
 	Column("tx_time", DateTime),
 	Column("first_seen_at", DateTime, nullable=False, server_default=func.now()),
 	Column("finalized_at", DateTime),
-	Column("invoice_id", Integer, ForeignKey("invoices.id")),
-	Column("credited", Text, nullable=False, server_default="0"),
+	# Владелец адреса: платёж зачисляется пользователю, а не счёту.
+	Column("user_id", Integer, nullable=False),
 	UniqueConstraint(
 		"txid", "address", "asset_id", "event_index", name="uq_invoice_payments_key"
 	),
+)
+
+# Ручные зачисления: деньги, пришедшие мимо шлюза и подтверждённые оператором.
+# Отдельная таблица, а не синтетическая строка платежа: у зачисления нет ни
+# транзакции, ни актива, и в журнале наблюдений ему не место.
+manual_credits = Table(
+	"manual_credits",
+	metadata,
+	Column("id", Integer, primary_key=True),
+	Column("user_id", Integer, nullable=False),
+	Column("value", Text, nullable=False),
+	Column("operator_id", Integer, nullable=False),
+	Column("reason", Text, nullable=False),
+	Column("created_at", DateTime, nullable=False, server_default=func.now()),
 )
 
 # Состояние биллинга пользователя: чем платит и открыт ли доступ. Независимо от
