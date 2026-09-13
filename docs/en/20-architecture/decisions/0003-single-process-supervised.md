@@ -27,7 +27,13 @@ the failed component is restarted without taking down the other.
 ## Consequences
 
 - Failure isolation is at the logic level, not the process level: if the whole process dies,
-  both components die with it.
+  both components die with it. A component leaving by way of `sys.exit` — which is how a
+  server reports a socket it cannot bind — counts as that component failing, not as the
+  gateway failing.
+- Anything slow and CPU-bound has to leave the event loop, or it stops the other components.
+  Password hashing is the case that matters: one Argon2 check takes about 50 ms, so some
+  18 sign-ins a second would occupy the loop completely and the watcher would scan nothing
+  meanwhile. Password hashing and the captcha check therefore run in a worker thread.
 - Deployment and operations stay simple: one backend process.
 - A future split into two processes does not require reworking the components.
 

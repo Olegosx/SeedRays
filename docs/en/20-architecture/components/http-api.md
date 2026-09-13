@@ -61,6 +61,9 @@ Pagination: a row-count limit parameter, default 10, 0 = everything.
 - JSON everywhere; amounts are strings, never floating-point numbers.
 - The API key travels in a request header, never in the URL.
 - Unified error format: machine code + human-readable message.
+- The OpenAPI schema and the interactive docs are not published: the schema lists every
+  route of all three groups — the operator's included — with the shape of every request
+  body, and an unauthenticated visitor has no business reading it.
 
 ## Planned Extensions
 

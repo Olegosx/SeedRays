@@ -47,6 +47,7 @@ def create_app(
 	frontend_dir: Path | None = None,
 	mailer: MailSender | None = None,
 	captcha_cost: int | None = None,
+	expose_schema: bool = False,
 ) -> FastAPI:
 	"""Build the FastAPI application: the Application and User API groups.
 
@@ -58,11 +59,25 @@ def create_app(
 			built from the registry settings.
 		captcha_cost: Proof-of-work cost override for tests; by default
 			the production cost of the captcha module.
+		expose_schema: Publish the interactive docs and the OpenAPI
+			schema. Off by default: the schema lists every route of all
+			three groups — the operator's included — together with the
+			shape of every request body, and an unauthenticated visitor
+			has no business reading it.
 
 	Returns:
 		The configured FastAPI application.
 	"""
-	app = FastAPI(title="SeedRays API", version="1")
+	# Схема и интерактивная документация закрыты, пока их не попросили:
+	# анонимный посетитель иначе получает полный перечень маршрутов
+	# всех трёх групп вместе с формой тел запросов.
+	app = FastAPI(
+		title="SeedRays API",
+		version="1",
+		docs_url="/docs" if expose_schema else None,
+		redoc_url="/redoc" if expose_schema else None,
+		openapi_url="/openapi.json" if expose_schema else None,
+	)
 	register_error_handlers(app)
 	# Общий журнал безопасности обеих групп: один файл на шлюз (ADR-0023).
 	seclog = SecurityLog(data_dir)

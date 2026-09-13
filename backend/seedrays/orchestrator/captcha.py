@@ -10,6 +10,7 @@ configure, challenges simply restart with the process.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -60,8 +61,14 @@ class CaptchaGuard:
 		)
 		return challenge.to_dict()
 
-	def verify(self, payload: str) -> bool:
+	async def verify(self, payload: str) -> bool:
 		"""Check one solution; every solution is accepted at most once.
+
+		Проверка доказательства работы считает PBKDF2 и занимает единицы
+		миллисекунд — она уходит в отдельный поток. Процесс у шлюза один
+		(ADR-0003), и на потоке входов эти миллисекунды складываются в
+		простой watcher. Реестр использованных решений меняется только
+		в цикле событий, поэтому гонок между потоками не возникает.
 
 		Args:
 			payload: Base64-encoded JSON with the challenge and its
@@ -70,7 +77,9 @@ class CaptchaGuard:
 		Returns:
 			True when the solution is genuine, unexpired and fresh.
 		"""
-		result = altcha.verify_solution(payload, self._secret, hmac_key_secret=self._secret)
+		result = await asyncio.to_thread(
+			altcha.verify_solution, payload, self._secret, hmac_key_secret=self._secret
+		)
 		if not result.verified:
 			logger.info(
 				"captcha solution rejected: expired=%s error=%s", result.expired, result.error

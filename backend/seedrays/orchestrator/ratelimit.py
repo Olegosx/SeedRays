@@ -45,10 +45,18 @@ class RateLimiter:
 			self._evict(now)
 		return True
 
+	def _eviction_rank(self, key: str) -> tuple[bool, float]:
+		"""Eviction order: not-yet-exhausted keys first, stalest among equals."""
+		attempts = self._attempts[key]
+		return len(attempts) >= self._limit, attempts[-1]
+
 	def _evict(self, now: float) -> None:
 		"""Drop expired keys; if still over the cap — the oldest ones."""
 		for key in [k for k, dq in self._attempts.items() if not dq or now - dq[-1] > self._window]:
 			del self._attempts[key]
 		while len(self._attempts) > self.MAX_KEYS:
-			# dict хранит порядок вставки: первый ключ — самый старый.
-			del self._attempts[next(iter(self._attempts))]
+			# Первыми уходят ключи, не исчерпавшие лимит, и среди них самый
+			# затхлый. По порядку вставки вытеснялся бы ключ того, чей пароль
+			# в это время подбирают: его счётчик появился раньше мусорных, —
+			# то есть защита сбрасывалась бы именно там, где работает.
+			del self._attempts[min(self._attempts, key=self._eviction_rank)]

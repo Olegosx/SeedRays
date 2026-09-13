@@ -330,3 +330,32 @@ def test_concurrent_address_issue_gets_distinct_addresses(tmp_path: Path) -> Non
 			assert len(set(per_user)) == len(per_user)
 
 	asyncio.run(scenario())
+
+
+def test_the_api_schema_is_not_published_by_default(tmp_path: Path) -> None:
+	"""No anonymous visitor gets the route map of all three groups.
+
+	Схема перечисляет маршруты всех трёх групп, включая операторские, вместе
+	с формой тел запросов. Доступа это не даёт, но избавляет постороннего от
+	необходимости что-либо угадывать.
+	"""
+
+	async def scenario() -> tuple[int, int, int]:
+		await seed_gateway(tmp_path, NETWORKS)
+		closed = create_app(tmp_path)
+		async with httpx.AsyncClient(
+			transport=httpx.ASGITransport(app=closed), base_url="http://gw"
+		) as client:
+			schema = await client.get("/openapi.json")
+			docs = await client.get("/docs")
+		opened = create_app(tmp_path, expose_schema=True)
+		async with httpx.AsyncClient(
+			transport=httpx.ASGITransport(app=opened), base_url="http://gw"
+		) as client:
+			on_request = await client.get("/openapi.json")
+		return schema.status_code, docs.status_code, on_request.status_code
+
+	schema, docs, on_request = asyncio.run(scenario())
+	assert schema == 404, "схема отдаётся анонимно"
+	assert docs == 404, "интерактивная документация отдаётся анонимно"
+	assert on_request == 200, "по явному запросу схема должна открываться"

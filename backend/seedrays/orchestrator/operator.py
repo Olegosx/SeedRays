@@ -19,13 +19,13 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncEngine
 
 from seedrays import chains
 from seedrays.orchestrator import billing
+from seedrays.orchestrator.auth import hash_password, verify_password
 from seedrays.orchestrator.operations import OperationError
 from seedrays.orchestrator.seclog import ACTOR_OPERATOR, OUTCOME_SUCCESS, SecurityLog
 from seedrays.storage import registry as registry_ops
@@ -39,8 +39,6 @@ from seedrays.storage.engine import (
 )
 
 logger = logging.getLogger(__name__)
-
-_hasher = PasswordHasher()
 
 _LOGIN_RE = re.compile(r"^\S{3,64}$")
 _MIN_PASSWORD_LEN = 8
@@ -149,7 +147,9 @@ async def create_operator(registry: AsyncEngine, *, login: str, password: str) -
 			"weak_password", f"password must be at least {_MIN_PASSWORD_LEN} characters"
 		)
 	try:
-		return await registry_ops.create_operator(registry, login, _hasher.hash(password))
+		return await registry_ops.create_operator(
+			registry, login, await hash_password(password)
+		)
 	except ValueError as exc:
 		raise OperationError("username_taken", "this operator login is already taken") from exc
 
@@ -212,7 +212,7 @@ async def sign_in(
 		await _journal("operator_blocked", operator.id)
 		raise OperationError("invalid_credentials", "wrong login or password")
 	try:
-		_hasher.verify(operator.password_hash, password)
+		await verify_password(operator.password_hash, password)
 	except (VerifyMismatchError, InvalidHashError) as exc:
 		await _journal("wrong_password", operator.id)
 		raise OperationError("invalid_credentials", "wrong login or password") from exc
@@ -280,11 +280,11 @@ async def change_password(
 	if operator is None:
 		raise OperationError("invalid_credentials", "wrong current password")
 	try:
-		_hasher.verify(operator.password_hash, current_password)
+		await verify_password(operator.password_hash, current_password)
 	except (VerifyMismatchError, InvalidHashError) as exc:
 		raise OperationError("invalid_credentials", "wrong current password") from exc
 	await registry_ops.set_operator_password(
-		registry, operator_id, _hasher.hash(new_password)
+		registry, operator_id, await hash_password(new_password)
 	)
 	await registry_ops.delete_operator_sessions(
 		registry, operator_id, keep_token_hash=_sha256(session_token)
@@ -370,7 +370,7 @@ async def reset_user_password(registry: AsyncEngine, *, user_id: int) -> str:
 	if await registry_ops.get_user_by_id(registry, user_id) is None:
 		raise OperationError("unknown_user", f"user {user_id} does not exist")
 	password = secrets.token_urlsafe(9)  # 12 знаков — временный, под смену
-	await registry_ops.set_user_password(registry, user_id, _hasher.hash(password))
+	await registry_ops.set_user_password(registry, user_id, await hash_password(password))
 	await registry_ops.delete_user_sessions(registry, user_id)
 	return password
 

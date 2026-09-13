@@ -8,6 +8,7 @@ with a CSRF token.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -27,6 +28,26 @@ from seedrays.storage import registry as registry_ops
 from seedrays.storage.engine import now_utc
 
 logger = logging.getLogger(__name__)
+
+
+async def hash_password(password: str) -> str:
+	"""Hash a password off the event loop.
+
+	Argon2 занимает порядка 50 мс, и всё это время цикл событий стоит.
+	Процесс у шлюза один (ADR-0003): вместе с API в нём живут watcher и
+	биллинг, поэтому поток входов останавливал бы наблюдение за деньгами.
+	"""
+	return await asyncio.to_thread(_hasher.hash, password)
+
+
+async def verify_password(digest: str, password: str) -> None:
+	"""Check a password against its hash off the event loop.
+
+	Raises:
+		VerifyMismatchError: The password does not match.
+		InvalidHashError: The stored hash itself is unusable.
+	"""
+	await asyncio.to_thread(_hasher.verify, digest, password)
 
 _hasher = PasswordHasher()
 
@@ -114,7 +135,7 @@ async def register(
 	if await registry_ops.get_email_by_address(registry, email) is not None:
 		raise OperationError("email_taken", "this email is already attached to an account")
 
-	password_hash = _hasher.hash(password)
+	password_hash = await hash_password(password)
 	try:
 		user = await registry_ops.create_user(registry, data_dir, username, password_hash)
 	except ValueError as exc:
@@ -264,7 +285,7 @@ async def sign_in(
 		await _journal("user_blocked", user.id)
 		raise OperationError("invalid_credentials", "wrong username/email or password")
 	try:
-		_hasher.verify(user.password_hash, password)
+		await verify_password(user.password_hash, password)
 	except InvalidHashError as exc:
 		# Сохранённый хеш не разбирается — введённый пароль тут ни при чём.
 		# Под исходом «неверный пароль» это выглядело бы как забывчивость
@@ -475,7 +496,9 @@ async def reset_password(registry: AsyncEngine, *, token: str, new_password: str
 	)
 	if user_id is None:
 		raise OperationError("invalid_token", "the reset link is invalid or expired")
-	await registry_ops.set_user_password(registry, user_id, _hasher.hash(new_password))
+	await registry_ops.set_user_password(
+		registry, user_id, await hash_password(new_password)
+	)
 	# Пароль сброшен из-за потери доступа — все прежние сессии гасятся.
 	await registry_ops.delete_user_sessions(registry, user_id)
 	return user_id
@@ -502,10 +525,12 @@ async def change_password(
 	if user is None:
 		raise OperationError("invalid_credentials", "wrong current password")
 	try:
-		_hasher.verify(user.password_hash, current_password)
+		await verify_password(user.password_hash, current_password)
 	except (VerifyMismatchError, InvalidHashError) as exc:
 		raise OperationError("invalid_credentials", "wrong current password") from exc
-	await registry_ops.set_user_password(registry, user_id, _hasher.hash(new_password))
+	await registry_ops.set_user_password(
+		registry, user_id, await hash_password(new_password)
+	)
 	await registry_ops.delete_user_sessions(
 		registry, user_id, keep_token_hash=_sha256(session_token)
 	)

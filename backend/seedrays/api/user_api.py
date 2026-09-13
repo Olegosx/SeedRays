@@ -200,7 +200,7 @@ def register_user_routes(
 
 		Отказ капчи — событие журнала безопасности (ADR-0023).
 		"""
-		if not captcha_guard.verify(payload):
+		if not await captcha_guard.verify(payload):
 			await journal.event(
 				registry, event, actor=ACTOR_USER, outcome="captcha_failed",
 				identifier=identifier, client=client,

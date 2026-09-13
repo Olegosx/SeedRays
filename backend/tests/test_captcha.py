@@ -25,24 +25,24 @@ def test_valid_solution_is_accepted_exactly_once() -> None:
 	"""A genuine solution passes; its replay is rejected."""
 	guard = CaptchaGuard(cost=10)
 	payload = _solve(guard.issue())
-	assert guard.verify(payload) is True
-	assert guard.verify(payload) is False  # одноразовость
+	assert asyncio.run(guard.verify(payload)) is True
+	assert asyncio.run(guard.verify(payload)) is False  # одноразовость
 
 
 def test_garbage_and_foreign_signature_are_rejected() -> None:
 	"""Broken payloads and challenges signed by another process fail."""
 	guard = CaptchaGuard(cost=10)
-	assert guard.verify("not-base64-at-all") is False
-	assert guard.verify(base64.b64encode(b'{"nope": 1}').decode()) is False
+	assert asyncio.run(guard.verify("not-base64-at-all")) is False
+	assert asyncio.run(guard.verify(base64.b64encode(b'{"nope": 1}').decode())) is False
 	# Задача, подписанная другим экземпляром (другой секрет), не принимается.
 	foreign = CaptchaGuard(cost=10)
-	assert guard.verify(_solve(foreign.issue())) is False
+	assert asyncio.run(guard.verify(_solve(foreign.issue()))) is False
 
 
 def test_expired_challenge_is_rejected() -> None:
 	"""A solution of an expired challenge fails the check."""
 	guard = CaptchaGuard(cost=10, ttl_seconds=-1)
-	assert guard.verify(_solve(guard.issue())) is False
+	assert asyncio.run(guard.verify(_solve(guard.issue()))) is False
 
 
 def test_tampered_challenge_is_rejected() -> None:
@@ -50,7 +50,7 @@ def test_tampered_challenge_is_rejected() -> None:
 	guard = CaptchaGuard(cost=10, ttl_seconds=-1)
 	challenge = guard.issue()
 	challenge["parameters"]["expiresAt"] = int(time.time()) + 3600
-	assert guard.verify(_solve(challenge)) is False
+	assert asyncio.run(guard.verify(_solve(challenge))) is False
 
 
 def test_login_routes_demand_the_captcha(tmp_path: Path) -> None:

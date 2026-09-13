@@ -179,7 +179,7 @@ def register_operator_routes(
 				identifier=body.login.strip(), client=client,
 			)
 			raise ApiError(429, "rate_limited", "too many sign-in attempts; try again later")
-		if not captcha_guard.verify(body.captcha):
+		if not await captcha_guard.verify(body.captcha):
 			await journal.event(
 				registry, "login", actor=ACTOR_OPERATOR, outcome="captcha_failed",
 				identifier=body.login.strip(), client=client,
